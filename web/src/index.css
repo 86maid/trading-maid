@@ -1,0 +1,616 @@
+.theme-light {
+  --font-main: "Space Grotesk", "Noto Sans SC", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Consolas", monospace;
+  --background-color: #ffffff;
+  --card-background-color: #ffffff;
+  --border-color: #ddd;
+  --text-color: #333;
+  --label-color: #888;
+  --value-color: #000;
+  --profit-positive-color: #F44336;
+  --profit-negative-color: #4CAF50;
+  --box-color: #e0e0e0;
+  --buy-color: #f23645;
+  --sell-color: #089981;
+  --buy-box-color: #fdf1f3;
+  --sell-box-color: #eefbf2;
+  --buy-box-text-color: #F44336;
+  --sell-box-text-color: #4CAF50;
+  --highlight-color: #666;
+  --grid-color: #f2f3f3;
+  --panel-background: linear-gradient(180deg, #f6f8fb 0%, #eef3f9 100%);
+  --panel-border-color: #d7deea;
+  --card-shadow: 0 10px 28px rgba(30, 49, 78, 0.08);
+  --card-hover-shadow: 0 14px 30px rgba(30, 49, 78, 0.14);
+}
+
+.theme-dark {
+  --font-main: "Space Grotesk", "Noto Sans SC", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Consolas", monospace;
+  --background-color: #161a25;
+  --card-background-color: #161a25;
+  --border-color: #666;
+  --text-color: #fff;
+  --label-color: #aaa;
+  --value-color: #fff;
+  --profit-positive-color: #FF5722;
+  --profit-negative-color: #A5D6A7;
+  --box-color: #555;
+  --buy-color: #ca4064;
+  --sell-color: #25a74f;
+  --buy-box-color: #F44336;
+  --sell-box-color: #4CAF50;
+  --buy-box-text-color: #fff;
+  --sell-box-text-color: #fff;
+  --highlight-color: #666;
+  --grid-color: rgb(34, 38, 49);
+  --panel-background: radial-gradient(circle at 20% 0%, #1f2a42 0%, #161a25 45%, #111522 100%);
+  --panel-border-color: #2b354d;
+  --card-shadow: 0 12px 26px rgba(0, 0, 0, 0.35);
+  --card-hover-shadow: 0 18px 34px rgba(0, 0, 0, 0.45);
+}
+
+html {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-main);
+}
+
+.ab {
+  flex: 1;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background-color: var(--background-color);
+  color: var(--text-color);
+  overflow: hidden;
+}
+
+#chart-container {
+  width: 100%;
+  height: 100%;
+  flex: 3;
+  margin: 0;
+}
+
+.history-panel {
+  flex: 1;
+  min-width: 320px;
+  max-width: 520px;
+  min-height: 0;
+  border-left: 1px solid var(--panel-border-color);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.history-panel-title {
+  font-size: 13px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--label-color);
+}
+
+.history-panel-subtitle {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.history-tabbar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--panel-border-color);
+}
+
+.history-tab {
+  border: 1px solid var(--panel-border-color);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--label-color);
+  background: color-mix(in srgb, var(--card-background-color) 75%, transparent);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.history-tab:hover {
+  color: var(--text-color);
+  border-color: var(--border-color);
+}
+
+.history-tab.active {
+  color: var(--text-color);
+  background: color-mix(in srgb, var(--box-color) 22%, transparent);
+  border-color: var(--border-color);
+}
+
+.history-panel-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.history-view {
+  display: none !important;
+  height: 100%;
+  min-height: 0;
+}
+
+.history-view.active {
+  display: flex !important;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+#history-position-container {
+  width: auto;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  padding: 14px;
+  gap: 12px;
+}
+
+#history-position-container::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+#summary-container {
+  width: auto;
+  height: auto;
+  flex: 1;
+  overflow: auto;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  padding: 14px;
+  gap: 10px;
+}
+
+#summary-container::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+#history-order-container {
+  width: auto;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  padding: 14px;
+  gap: 12px;
+}
+
+#history-order-container::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.order-card {
+  margin: 0;
+  padding: 12px;
+  background-color: var(--card-background-color);
+  border: 1px solid var(--panel-border-color);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.order-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.order-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-color);
+  font-family: var(--font-mono);
+}
+
+.order-card-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.order-card-tag {
+  border-radius: 999px;
+  border: 1px solid var(--panel-border-color);
+  color: var(--label-color);
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.order-card-tag.buy {
+  color: var(--buy-color);
+  border-color: color-mix(in srgb, var(--buy-color) 35%, var(--panel-border-color));
+}
+
+.order-card-tag.sell {
+  color: var(--sell-color);
+  border-color: color-mix(in srgb, var(--sell-color) 35%, var(--panel-border-color));
+}
+
+.order-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+
+.order-card-item {
+  min-width: 0;
+}
+
+.order-card-label {
+  font-size: 11px;
+  color: var(--label-color);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.order-card-value {
+  margin-top: 3px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--value-color);
+  word-break: break-all;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary-card {
+  border: 1px solid var(--panel-border-color);
+  border-radius: 12px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--card-background-color) 85%, transparent);
+}
+
+.summary-card-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--label-color);
+}
+
+.summary-card-value {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-color);
+}
+
+.summary-card-value.positive {
+  color: var(--profit-positive-color);
+}
+
+.summary-card-value.negative {
+  color: var(--profit-negative-color);
+}
+
+.summary-note {
+  border: 1px dashed var(--panel-border-color);
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 12px;
+  color: var(--label-color);
+}
+
+#history-position-container:empty::before {
+  content: "No history positions yet";
+  color: var(--label-color);
+  border: 1px dashed var(--panel-border-color);
+  border-radius: 12px;
+  padding: 18px 14px;
+  text-align: center;
+}
+
+.position-card {
+  transition: border-color 0.2s ease;
+  user-select: none;
+}
+
+.position-card:hover {
+  border-color: var(--border-color);
+}
+
+.position-card-title {
+  margin: 0;
+}
+
+.position-card-liquidation-tag {
+  color: var(--buy-color);
+  border-color: color-mix(in srgb, var(--buy-color) 35%, var(--panel-border-color));
+}
+
+.position-card-ico {
+  font-size: 14px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-color);
+  margin-bottom: 10px;
+}
+
+.position-card-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
+  background-color: color-mix(in srgb, var(--box-color) 70%, transparent);
+  border: 1px solid var(--panel-border-color);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.position-card-side-buy-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
+  background-color: var(--buy-box-color);
+  color: var(--buy-box-text-color);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.position-card-side-sell-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
+  background-color: var(--sell-box-color);
+  color: var(--sell-box-text-color);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.position-card-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 2px;
+}
+
+.position-card-label {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--label-color);
+}
+
+.position-card-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--value-color);
+}
+
+.position-card-value-profit-positive {
+  color: var(--profit-positive-color);
+}
+
+.position-card-value-profit-negative {
+  color: var(--profit-negative-color);
+}
+
+.position-card-info {
+  font-size: 12px;
+  color: var(--label-color);
+}
+
+.position-card-side-buy {
+  color: var(--buy-color);
+  font-size: 14px;
+}
+
+.position-card-side-sell {
+  color: var(--sell-color);
+  font-size: 14px;
+}
+
+.position-card-liquidation {
+  color: var(--buy-color);
+}
+
+.log {
+  display: none;
+  margin-top: 8px;
+  border-top: 1px solid var(--panel-border-color);
+  padding-top: 8px;
+}
+
+.log .position-card-section:hover {
+  background-color: color-mix(in srgb, var(--highlight-color) 24%, transparent);
+  border-radius: 8px;
+}
+
+.log .position-card-section {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  padding: 7px 6px;
+}
+
+.log .position-card-section div:nth-child(1) {
+  flex: 2;
+  text-align: left;
+}
+
+.log .position-card-section div:nth-child(2) {
+  flex: 1;
+  text-align: left;
+}
+
+.log .position-card-section div:nth-child(3) {
+  flex: 1;
+  text-align: left;
+}
+
+.log .position-card-section div:nth-child(4) {
+  flex: 1;
+  text-align: right;
+  font-weight: 700;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background-color: var(--card-background-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-button {
+  padding: 10px;
+  font-size: 16px;
+  min-width: 50px;
+  cursor: pointer;
+  background-color: var(--background-color);
+  color: var(--text-color);
+  transition: background-color 0.3s;
+  border: none;
+  border-radius: 4px;
+}
+
+.dropdown-button:hover {
+  background-color: var(--box-color);
+}
+
+.divider {
+  width: 1px;
+  height: 24px;
+  background-color: var(--border-color);
+}
+
+.dropdown-content {
+  min-width: 200px;
+  display: none;
+  position: absolute;
+  background-color: var(--card-background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0px 8px 16px rgba(0, 0, 0, 0.2);
+  z-index: 9999;
+}
+
+.dropdown-content button {
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 16px;
+  color: var(--text-color);
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+.dropdown-content button:hover {
+  background-color: var(--box-color);
+}
+
+.show {
+  display: block;
+}
+
+@media (max-width: 1100px) {
+  .ab {
+    flex-direction: column;
+  }
+
+  #chart-container {
+    flex: 0;
+    height: 62vh;
+  }
+
+  .history-panel {
+    min-width: 0;
+    max-width: none;
+    border-left: none;
+    border-top: 1px solid var(--panel-border-color);
+  }
+
+  #history-position-container {
+    padding: 10px;
+  }
+
+  #summary-container {
+    padding: 10px;
+  }
+
+  #history-order-container {
+    padding: 10px;
+  }
+
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .order-card-grid {
+    grid-template-columns: 1fr;
+  }
+}

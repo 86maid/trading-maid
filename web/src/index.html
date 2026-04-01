@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <!-- <link rel="stylesheet" href="index.css" /> -->
+  <style>
+    @import "index.css";
+  </style>
+  <title>Trading Maid</title>
+</head>
+
+<body class="theme-dark">
+  <div class="toolbar">
+    <div class="dropdown">
+      <button id="symbol-button" class="dropdown-button"></button>
+      <div id="symbol-dropdown" class="dropdown-content">
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="dropdown">
+      <button id="level-button" class="dropdown-button"></button>
+      <div id="level-dropdown" class="dropdown-content"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="dropdown">
+      <button id="theme-button" class="dropdown-button"></button>
+      <div id="theme-dropdown" class="dropdown-content"></div>
+    </div>
+  </div>
+
+  <div class="ab">
+    <div id="chart-container"></div>
+    <aside class="history-panel">
+      <div class="history-tabbar" id="history-tabbar">
+        <button class="history-tab active" data-tab="summary">Summary</button>
+        <button class="history-tab" data-tab="history">History Position</button>
+        <button class="history-tab" data-tab="order">History Order</button>
+      </div>
+      <div class="history-panel-body">
+        <div id="summary-container" class="history-view active"></div>
+        <div id="history-position-container" class="history-view"></div>
+        <div id="history-order-container" class="history-view"></div>
+      </div>
+    </aside>
+  </div>
+</body>
+
+<!-- <script type="module" src="index.js"></script> -->
+<script type="module">
+  import "./index.js"
+</script>

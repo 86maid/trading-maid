@@ -1,0 +1,32 @@
+[package]
+name = "trading-maid"
+version = "1.0.0"
+edition = "2024"
+description = "A high-fidelity crypto futures backtesting and live trading framework with matching, margin, leverage and liquidation simulation."
+readme = "README.md"
+license = "Apache-2.0"
+repository = "https://github.com/86maid/trading-maid"
+homepage = "https://github.com/86maid/trading-maid"
+documentation = "https://docs.rs/trading-maid"
+keywords = ["trading", "backtest", "crypto", "exchange", "quant"]
+categories = ["finance", "simulation"]
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+bincode = "1"
+overload = "0.1.1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+csv = "1"
+chrono = "0.4.38"
+dirs = "6"
+reqwest = "0.13"
+sevenz-rust = "0.6.1"
+inherits = "0.1.2"
+indexmap = "2.5.0"
+rand = "0.10.0"
+zip = "0.6"
+serde_with = "3"
+webbrowser = "1.2.0"

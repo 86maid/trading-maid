@@ -1,0 +1,26 @@
+TRADING-MAID ARCHITECTURE (TXT)
+
+                              +----------------------+
+                              |        ENGINE        |
+                              |   schedule / drive   |
+                              +----------+-----------+
+                                         |
+                  +----------------------+----------------------+
+                  |                                             |
+        +---------v----------+                        +---------v----------+
+        |      STRATEGY      |                        |      EXCHANGE      |
+        |   signal / logic   |                        |  execution gateway |
+        +---------+----------+                        +---------+----------+
+                  |                                             |
+        +---------v----------+                        +---------+----------+
+        |     INDICATOR      |                        |                    |
+        | strategy-derived   |                  +-----v-----+        +-----v-----+
+        +--------------------+                  |   LOCAL   |        |  ONLINE   |
+                                                | backtest  |        | live trade|
+                                                +-----------+        +-----------+
+
+Flow:
+1) Engine -> Strategy
+2) Engine -> Exchange
+3) Strategy -> Indicator
+4) Exchange -> Local / Online
