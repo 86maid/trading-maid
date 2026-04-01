@@ -1063,8 +1063,7 @@ impl Exchange for LocalExchange {
             .pending_order_list
             .values()
             .filter(|v| {
-                v.symbol == symbol
-                    && v.status == Status::Submitted
+                v.status == Status::Submitted
                     && if cfg!(debug_assertions) || cfg!(test) {
                         true
                     } else {
