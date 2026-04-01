@@ -1,6 +1,6 @@
 # trading-maid
 
-[中文](../README.md) | English
+[中文](README.md) | English
 
 [![Crates.io Version](https://img.shields.io/crates/v/trading-maid?logo=rust)](https://crates.io/crates/trading-maid)
 [![docs.rs](https://img.shields.io/docsrs/trading-maid?logo=docs.rs)](https://docs.rs/trading-maid)
