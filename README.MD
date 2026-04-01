@@ -1,92 +1,92 @@
 # trading-maid
 
-中文 | [English](README.en.md)
+English | [中文](README.zh-CN.md) 
 
 [![Crates.io Version](https://img.shields.io/crates/v/trading-maid?logo=rust)](https://crates.io/crates/trading-maid)
 [![docs.rs](https://img.shields.io/docsrs/trading-maid?logo=docs.rs)](https://docs.rs/trading-maid)
 [![GitHub Repo stars](https://img.shields.io/github/stars/86maid/trading-maid?style=social)](https://github.com/86maid/trading-maid)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-2563eb.svg)](https://opensource.org/licenses/Apache-2.0)
 
-trading-maid 是一个面向加密货币合约交易的回测与实盘框架，重点是尽量贴近真实交易环境。
-框架内置撮合、滑点、杠杆、保证金与强平等关键机制，可用于策略验证、迭代和实盘接入。
+trading-maid is a backtesting and live-trading framework for crypto futures, with a strong focus on behavior close to real exchanges.
+It includes key mechanics such as matching, slippage, leverage, margin, and liquidation for strategy validation, iteration, and live integration.
 
-> ⚡ 关键词：高拟真撮合 / 双阶段触发单 / 保证金与强平机制 / 回测可视化
+> ⚡ Keywords: high-fidelity matching / two-stage trigger orders / margin and liquidation mechanics / backtest visualization
 
 ![trading-maid](a.png)
 
-## 目录
+## Contents
 
-- [✨ 核心能力](#-核心能力)
-- [🧭 交易模型与限制](#-交易模型与限制)
-- [🏗️ 架构概览](#-架构概览)
-- [🚀 快速开始](#-快速开始)
+- [✨ Core Capabilities](#-core-capabilities)
+- [🧭 Trading Model and Constraints](#-trading-model-and-constraints)
+- [🏗️ Architecture Overview](#-architecture-overview)
+- [🚀 Quick Start](#-quick-start)
 - [🧠 Context](#-context)
-- [📈 指标](#-指标)
-- [🚦 Hook 劫持](#-hook-劫持)
-- [🧪 一个完整的例子](#-一个完整的例子)
+- [📈 Indicators](#-indicators)
+- [🚦 Hook Intercept](#-hook-intercept)
+- [🧪 A Complete Example](#-a-complete-example)
 
-## ✨ 核心能力
+## ✨ Core Capabilities
 
-- 贴近实盘的回测环境：模拟交易所撮合逻辑，降低回测与实盘偏差。
-- 实盘接口抽象：支持统一的交易所接口，便于从回测迁移到实盘。
-- 指标与序列工具：提供常用技术指标与时间序列处理能力。
-- 回测结果可视化：可将 K 线、订单与持仓历史以网页形式展示。
+- Backtesting environment close to live trading: simulates exchange matching logic to reduce backtest/live deviation.
+- Live exchange abstraction: provides a unified exchange interface for smooth migration from backtest to live trading.
+- Indicator and series tools: includes common technical indicators and time-series processing utilities.
+- Backtest result visualization: render candlesticks, orders, and position history in a web page.
 
-## 🧭 交易模型与限制
+## 🧭 Trading Model and Constraints
 
-### 🧾 订单类型
+### 🧾 Order Types
 
-- 支持：触发价 + (限价 | 市价)
-- 不支持：OCO（止盈止损组合单）
+- Supported: trigger price + (limit | market)
+- Not supported: OCO (take-profit/stop-loss combo order)
 
-### 📦 仓位类型
+### 📦 Position Type
 
-- 保证金模式：逐仓
-- 持仓方向：单向持仓
-- 保证金类型：单币种保证金
-- 保证金管理：动态调整仓位保证金
+- Margin mode: isolated
+- Position direction: one-way
+- Margin asset type: single-currency margin
+- Margin management: dynamically adjusts position margin
 
-### ⚙️ 订单处理逻辑
+### ⚙️ Order Processing Logic
 
-- 保证金冻结：市价单在成交时冻结保证金，只减仓订单不冻结保证金。
-- 撮合时序：下单会在当前 K 线挂单，在下一根 K 线撮合。
-- 成交规则：市价单使用 Open 作为市价成交，限价单分为以下几种情况：
-    - 多单
-        - 委托价 >= 市价：以最坏的价格 High 成交
-        - 委托价 < 市价：以委托价格成交
-    - 空单
-        - 委托价 <= 市价：以最坏的价格 Low 成交
-        - 委托价 > 市价：以委托价格成交
-- 优先级：当挂单条件与强平条件同时满足时，挂单优先执行。
-- 手续费：市价单使用 taker_fee，限价单和强平单使用 maker_fee。
+- Margin freeze: market orders freeze margin when filled; reduce-only orders do not freeze margin.
+- Matching timing: an order is placed on the current k-line and matched on the next k-line.
+- Fill rules: market orders fill at `Open`; limit orders follow these rules:
+    - Long
+        - limit >= market: fill at worst price `High`
+        - limit < market: fill at limit price
+    - Short
+        - limit <= market: fill at worst price `Low`
+        - limit > market: fill at limit price
+- Priority: when both pending-order conditions and liquidation conditions are met, pending orders are executed first.
+- Fees: market orders use `taker_fee`; limit and liquidation orders use `maker_fee`.
 
-## 🏗️ 架构概览
+## 🏗️ Architecture Overview
 
-完整文字架构图见 [architecture.txt](architecture.txt)。
+For the full text diagram, see [architecture.txt](architecture.txt).
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 📥 安装
+### 📥 Installation
 
-使用 `cargo add`
+Using `cargo add`
 
 ```bash
 cargo add trading-maid
 ```
 
-或者 `Cargo.toml`
+Or in `Cargo.toml`
 
 ```toml
 [dependencies]
 trading-maid = "1.0.0"
 ```
 
-### 🛠️ 使用
+### 🛠️ Usage
 
 ```rust
 use trading_maid::prelude::*;
 
-// 出现长上影线时开空单
+// Open a short position when a long upper shadow appears.
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     let body = (cx.open - cx.close).abs();
     let line = (cx.high - cx.open).abs();
@@ -110,7 +110,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() {
-    // 下载最近 12 个月的 1 分钟级别数据
+    // Download the latest 12 months of 1-minute-level data.
     let path = get_or_download("BTCUSDT/1m", 12).await.unwrap();
 
     let data_source_1m = DataSource::from_file_metadata(
@@ -135,7 +135,7 @@ async fn main() {
 
     let mut engine = Engine::new(exchange.clone(), my_strategy);
 
-    // 使用 1 分钟级别数据进行回测，但在每个 1 小时级别的 K 线生成时都会调用策略函数
+    // Backtest with 1-minute data, but call the strategy whenever each 1-hour k-line is generated.
     if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
         println!("{:#?}", v);
     }
@@ -146,7 +146,7 @@ async fn main() {
 
     println!("history summary: {:#?}", summary);
 
-    // 从 1 分钟级别数据重采样得到 1 小时级别数据
+    // Resample 1-minute data into 1-hour data.
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
 
     open_in_browser(
@@ -158,35 +158,35 @@ async fn main() {
 }
 ```
 
-在这个例子中，我们设置了
+In this example, we set:
 
-* 最小下单数量 (min_size) 0.01
-* 最小名义价值 (min_notional) 0.0 = 无限制
-* 价格变化精度 (tick_size) 0.1
-* 挂单费率 (maker_fee) 0.0002
-* 吃单费率 (taker_fee) 0.0005
-* 维持保证金率 (maintenance) 0.004
-* 现金 (cash)  = 10000  
-* 杠杆 (leverage) = 10  
-* 滑点 (slippage) = 0
+* minimum order size (min_size): 0.01
+* minimum notional (min_notional): 0.0 = no restriction
+* price tick size (tick_size): 0.1
+* maker fee (maker_fee): 0.0002
+* taker fee (taker_fee): 0.0005
+* maintenance margin rate (maintenance): 0.004
+* cash: 10000
+* leverage: 10
+* slippage: 0
 
-回测为 1 分钟级别，策略为 1 小时级别，回测引擎会在 1 小时级别的 k 线收盘时（一小时的最后一分钟）调用策略，策略获取到的每一根 k 线都是 1 小时级别的。
+The backtest runs on 1-minute data while the strategy runs on 1-hour k-lines. The engine calls the strategy at each 1-hour k-line close (the last minute of each hour), and every k-line observed by the strategy is 1-hour-level.
 
-虽然可以使用其他级别，但是应始终使用 1 分钟级别的数据进行回测，这样可以获得高精度的结果。
+Although other levels can be used, you should always use 1-minute data as the backtest source to achieve high-precision results.
 
-使用 `cargo run -r` 能更快的完成回测。
+Use `cargo run -r` to run backtests faster.
 
 ## 🧠 Context
 
-在 `Context` 中，`time, open, high, low, close` 的类型为 `&Series`，这实际上是一个封装的切片。
+In `Context`, `time`, `open`, `high`, `low`, and `close` are of type `&Series`, which is essentially a wrapped slice.
 
-你可以使用 `cx.close[0]` 表示当前 k 线的收盘价，`cx.close[1]` 表示上一根 k 线的收盘价，以此类推。 
+You can use `cx.close[0]` for the current k-line close, `cx.close[1]` for the previous k-line close, and so on.
 
-你可以使用 `cx.close[2..]` 来获取一个切片。
+You can use `cx.close[2..]` to get a slice.
 
-该类型还重载了大量的运算符，在计算时候可以省略下标 `[0]`，例如 `cx.close + 100`。
+This type also overloads many operators, so you can omit index `[0]` in calculations, for example `cx.close + 100`.
 
-你可以将 `Context` 展开，以方便使用 OHLC。
+You can destructure `Context` for easier OHLC usage.
 
 ```rust
 async fn my_strategy(
@@ -205,9 +205,9 @@ async fn my_strategy(
 }
 ```
 
-## 📈 指标
+## 📈 Indicators
 
-在 `indicator` 中内置了一些常用的指标。
+Some commonly used indicators are built into `indicator`.
 
 ```rust
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
@@ -218,14 +218,14 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 }
 ```
 
-直接调用 `ema` 函数可能导致回测缓慢和计算错误，因为计算 `ema` 需要用到上一个 `ema` 的值，所以推荐使用 `EMACache` 来进行快速和精确的计算。
+Calling `ema` directly may lead to slow backtests and incorrect calculations, because EMA depends on the previous EMA value. So it is recommended to use `EMACache` for fast and accurate calculation.
 
-使用 `EMACache::with_ema` 可以创建一个带有初始值的实例。
+Use `EMACache::with_ema` to create an instance with an initial EMA value.
 
 
-## 🚦 Hook 劫持
+## 🚦 Hook Intercept
 
-使用 `hook` 可以在仓位发生强平，或者订单被拒绝（余额不足）的时候停止回测。
+You can use `hook` to stop backtesting when a position is liquidated or an order is rejected (insufficient balance).
 
 ```rust
 async fn my_hook(_: KLine, exchange: Arc<dyn Exchange + 'static>) -> anyhow::Result<()> {
@@ -254,7 +254,7 @@ if let Err(v) = engine.run("BTCUSDT", Level::Minute5).await {
 }
 ```
 
-## 🧪 一个完整的例子
+## 🧪 A Complete Example
 
 ```rust
 use std::sync::Arc;
@@ -278,7 +278,7 @@ impl MyStrategy {
 
 #[async_trait(?Send)]
 impl Strategy for MyStrategy {
-    // 如果连续 50 根 K 线收盘价都在 EMA 之下，且当前 K 线收盘价突破 EMA，则开空单
+    // If the close stays below EMA for 50 consecutive k-lines and the current close breaks above EMA, open a short.
     async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
         let ema144 = self.ema_cache144.update(cx.close);
         let ema169 = self.ema_cache169.update(cx.close);
@@ -307,7 +307,7 @@ impl Strategy for MyStrategy {
     }
 }
 
-// 仓位发生强平，或者订单被拒绝（余额不足）的时候停止回测
+// Stop backtesting when liquidation happens or an order is rejected (insufficient balance).
 async fn my_hook(_: KLine, exchange: Arc<dyn Exchange + 'static>) -> anyhow::Result<()> {
     if let Some(v) = exchange
         .get_history_order_list("BTCUSDT")
