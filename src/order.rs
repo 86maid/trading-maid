@@ -31,7 +31,7 @@ pub struct Order {
 }
 
 impl Order {
-    pub fn is_marker(&self) -> bool {
+    pub fn is_market(&self) -> bool {
         self.trigger_price == 0.0 && self.price == 0.0
     }
 
@@ -65,7 +65,7 @@ pub enum Status {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Trigger,
-    Marker,
+    Market,
     Limit,
     Liquidation,
     ADL,
@@ -73,7 +73,7 @@ pub enum Kind {
 
 impl Kind {
     pub fn is_normal(&self) -> bool {
-        matches!(self, Kind::Trigger | Kind::Marker | Kind::Limit)
+        matches!(self, Kind::Trigger | Kind::Market | Kind::Limit)
     }
 }
 

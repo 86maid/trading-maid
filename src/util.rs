@@ -421,7 +421,7 @@ impl TickSnap for f64 {
 
 /// Converts a Unix timestamp in milliseconds to a formatted date-time string
 /// in the **system local timezone**.
-/// Returns the formatted string in `%Y-%m-%d %H:%M:%S%.f` format.
+/// Returns the formatted string in `%Y/%m/%d %H:%M:%S%.f` format.
 pub fn t2s(time: impl Into<u64>) -> String {
     Local
         .timestamp_millis_opt(time.into() as i64)
@@ -432,7 +432,7 @@ pub fn t2s(time: impl Into<u64>) -> String {
 }
 
 /// Converts a formatted date-time string (in local timezone) to Unix timestamp in milliseconds.
-/// Input format: `%Y-%m-%d %H:%M:%S` or `%Y-%m-%d %H:%M:%S%.f`
+/// Input format: `%Y/%m/%d %H:%M:%S` or `%Y/%m/%d %H:%M:%S%.f`
 /// Returns timestamp in milliseconds. Returns `0` if parsing fails.
 pub fn s2t(time: impl AsRef<str>) -> u64 {
     NaiveDateTime::parse_from_str(time.as_ref(), "%Y/%m/%d %H:%M:%S%.f")
@@ -447,7 +447,7 @@ pub fn s2t(time: impl AsRef<str>) -> u64 {
 }
 
 /// Converts a formatted date-time string (in UTC timezone) to Unix timestamp in milliseconds.
-/// Input format: `%Y-%m-%d %H:%M:%S` or `%Y-%m-%d %H:%M:%S%.f`
+/// Input format: `%Y/%m/%d %H:%M:%S` or `%Y/%m/%d %H:%M:%S%.f`
 /// Returns timestamp in milliseconds. Returns `0` if parsing fails.
 pub fn s2t_utc(time: impl AsRef<str>) -> u64 {
     NaiveDateTime::parse_from_str(time.as_ref(), "%Y/%m/%d %H:%M:%S%.f")
@@ -456,7 +456,7 @@ pub fn s2t_utc(time: impl AsRef<str>) -> u64 {
 }
 
 /// Converts a Unix timestamp in milliseconds to a formatted date-time string in UTC timezone.
-/// Returns the formatted string in `%Y-%m-%d %H:%M:%S%.f` format.
+/// Returns the formatted string in `%Y/%m/%d %H:%M:%S%.f` format.
 pub fn t2s_utc(time: impl Into<u64>) -> String {
     DateTime::<Utc>::from_timestamp_millis(time.into() as i64)
         .unwrap_or_default()
@@ -479,8 +479,8 @@ pub fn t2s_utc(time: impl Into<u64>) -> String {
 ///
 /// # Example:
 /// Let’s say the `min_level` is `Level::Minute1`, and `max_level` is `Level::Hour1`.
-/// Given `time = 1678845600000` (representing `2023-03-15 10:00:00`).
-/// The function should return `1678849599000`, which represents the timestamp for `2023-03-15 10:59:00`.
+/// Given `time = 1678845600000` (representing `2023/03/15 10:00:00`).
+/// The function should return `1678849599000`, which represents the timestamp for `2023/03/15 10:59:00`.
 pub fn get_last_time(time: u64, min_level: Level, max_level: Level) -> anyhow::Result<u64> {
     if !min_level.is_valid_sampling_target(max_level) {
         bail!(
