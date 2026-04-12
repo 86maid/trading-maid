@@ -48,8 +48,24 @@ function initChart() {
   window.chart = createChart(document.getElementById('chart-container'))
   window.series = window.chart.addCandlestickSeries()
   window.series.attachPrimitive(window.vm = new ViewManager())
+  
+  // 添加成交量系列
+  window.volumeSeries = window.chart.addHistogramSeries({
+    priceFormat: {
+      type: 'volume',
+    },
+    priceScaleId: 'volume', // 使用独立的price scale
+  })
+  
+  // 设置成交量图表在底部
+  window.volumeSeries.priceScale().applyOptions({
+    scaleMargins: {
+      top: 0.8, // 成交量图表占据底部20%的空间
+      bottom: 0,
+    },
+  })
 
-  return [window.chart, window.series, window.vm]
+  return [window.chart, window.series, window.vm, window.volumeSeries]
 }
 
 function applyOptions({ theme, locale, magnet }) {
@@ -234,6 +250,29 @@ function applyOptions({ theme, locale, magnet }) {
       minMove: window.dataSource.metadata.tick_size || 0.01,
     }
   })
+
+  // 设置成交量系列样式
+  if (window.volumeSeries) {
+    // 使用主题中的成交量颜色
+    const volumeColor = style.getPropertyValue('--volume-color') || '#26a69a'
+    
+    window.volumeSeries.applyOptions({
+      color: volumeColor,
+      priceFormat: {
+        type: 'volume',
+      },
+      priceScaleId: 'volume',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      priceScale: {
+        borderColor: style.getPropertyValue("--border-color"),
+        scaleMargins: {
+          top: 0.8, // 成交量图表占据底部20%的空间
+          bottom: 0,
+        },
+      }
+    })
+  }
 
   chart.subscribeCrosshairMove(({ seriesData, point, time, logical, hoveredObjectId }) => {
     if (hoveredObjectId) {
@@ -556,6 +595,19 @@ if (dataSourceList.length != 0) {
   applyOptions({ theme, locale, magnet })
   series.setMarkers(historyPositionList.filter(v => v.symbol == window.dataSource.metadata.symbol).flatMap(v => createMaker(v)))
   series.setData(window.dataSource.data)
+  
+  // 设置成交量数据
+  if (window.volumeSeries && window.dataSource.data) {
+    const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
+    const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
+    const volumeData = window.dataSource.data.map(item => ({
+      time: item.time,
+      value: item.volume || 0,
+      color: item.close > item.open ? buyColor : sellColor
+    }))
+    window.volumeSeries.setData(volumeData)
+  }
+  
   chart.timeScale().fitContent()
 }
 
@@ -1236,7 +1288,20 @@ createDropdownList("#symbol-dropdown", symbolList, (value) => {
   const level = document.querySelector("#level-button").innerText
 
   series.setMarkers(historyPositionList.filter(v => v.symbol == value).flatMap(v => createMaker(v)))
-  series.setData(dataSourceList.find(v => levelText ? v.metadata.symbol == value && v.metadata.level == level : v.metadata.symbol == value).data)
+  const dataSource = dataSourceList.find(v => levelText ? v.metadata.symbol == value && v.metadata.level == level : v.metadata.symbol == value)
+  series.setData(dataSource.data)
+  
+  // 更新成交量数据
+  if (window.volumeSeries && dataSource && dataSource.data) {
+    const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
+    const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
+    const volumeData = dataSource.data.map(item => ({
+      time: item.time,
+      value: item.volume || 0,
+      color: item.close > item.open ? buyColor : sellColor
+    }))
+    window.volumeSeries.setData(volumeData)
+  }
 });
 
 createDropdownList("#level-dropdown", levelList, (value) => {
@@ -1259,6 +1324,18 @@ createDropdownList("#level-dropdown", levelList, (value) => {
   series.setData(nextDataSource.data)
   series.setMarkers([])
   series.setMarkers(historyPositionList.filter(v => v.symbol == symbol).flatMap(v => createMaker(v)))
+  
+  // 更新成交量数据
+  if (window.volumeSeries && nextDataSource && nextDataSource.data) {
+    const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
+    const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
+    const volumeData = nextDataSource.data.map(item => ({
+      time: item.time,
+      value: item.volume || 0,
+      color: item.close > item.open ? buyColor : sellColor
+    }))
+    window.volumeSeries.setData(volumeData)
+  }
 });
 
 createDropdownList("#theme-dropdown", themeList, (value) => {
