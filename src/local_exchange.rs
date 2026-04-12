@@ -300,7 +300,11 @@ impl LocalExchangeInner {
                     symbol: order_ref.symbol.clone(),
                     side: order_ref.side,
                     trigger_price: 0.0,
-                    price: order_ref.price,
+                    price: if order_ref.price == 0.0 {
+                        order_ref.trigger_price
+                    } else {
+                        order_ref.price
+                    },
                     quantity: order_ref.quantity,
                     reduce_only: order_ref.reduce_only,
                 },
@@ -3450,7 +3454,6 @@ mod tests {
 
     // 验证复杂路径：市价开仓 -> 调杠杆 -> 加减保证金 -> 条件单触发 -> 反向开仓 -> 限价减仓，
     // 且每次 next 后均对 cash/equity/position/pending/history 做精确小数断言。
-    // TODO: This test needs to be rewritten for the new trigger order behavior (immediate execution)
     #[tokio::test]
     async fn strict_complex_flow_asserts_all_states_on_every_next() {
         let exchange = test_exchange_with(
