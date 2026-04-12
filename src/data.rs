@@ -190,6 +190,17 @@ impl DataSource {
         Ok(Self::new(metadata, data))
     }
 
+    pub fn range(&self, start_time: u64, end_time: u64) -> Self {
+        Self::new(
+            self.metadata.clone(),
+            self.data
+                .iter()
+                .filter(|v| v.time >= start_time && v.time <= end_time)
+                .cloned()
+                .collect(),
+        )
+    }
+
     pub fn is_sorted_by_time(&self) -> bool {
         self.data
             .windows(2)

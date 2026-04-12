@@ -2,7 +2,8 @@ import { createChart } from 'lightweight-charts'
 
 export let theme = localStorage.getItem("theme") || "dark"
 export let locale = navigator.language || navigator.userLanguage
-export let magnet = true
+export let magnet = localStorage.getItem("magnet") || true
+export let showVolume = localStorage.getItem("showVolume") || true
 export let dataSourceList = []
 export let historyPositionList = []
 export let orderList = []
@@ -48,7 +49,7 @@ function initChart() {
   window.chart = createChart(document.getElementById('chart-container'))
   window.series = window.chart.addCandlestickSeries()
   window.series.attachPrimitive(window.vm = new ViewManager())
-  
+
   // 添加成交量系列
   window.volumeSeries = window.chart.addHistogramSeries({
     priceFormat: {
@@ -56,7 +57,7 @@ function initChart() {
     },
     priceScaleId: 'volume', // 使用独立的price scale
   })
-  
+
   // 设置成交量图表在底部
   window.volumeSeries.priceScale().applyOptions({
     scaleMargins: {
@@ -68,7 +69,7 @@ function initChart() {
   return [window.chart, window.series, window.vm, window.volumeSeries]
 }
 
-function applyOptions({ theme, locale, magnet }) {
+function applyOptions({ theme, locale, magnet, showVolume }) {
   if (theme == undefined) {
     theme = window.theme
   }
@@ -81,9 +82,14 @@ function applyOptions({ theme, locale, magnet }) {
     magnet = window.magnet
   }
 
+  if (showVolume == undefined) {
+    showVolume = window.showVolume
+  }
+
   window.theme = theme
   window.locale = locale
   window.magnet = magnet
+  window.showVolume = showVolume
 
   if (theme != undefined) {
     localStorage.setItem("theme", theme)
@@ -251,11 +257,9 @@ function applyOptions({ theme, locale, magnet }) {
     }
   })
 
-  // 设置成交量系列样式
   if (window.volumeSeries) {
-    // 使用主题中的成交量颜色
     const volumeColor = style.getPropertyValue('--volume-color') || '#26a69a'
-    
+
     window.volumeSeries.applyOptions({
       color: volumeColor,
       priceFormat: {
@@ -267,11 +271,17 @@ function applyOptions({ theme, locale, magnet }) {
       priceScale: {
         borderColor: style.getPropertyValue("--border-color"),
         scaleMargins: {
-          top: 0.8, // 成交量图表占据底部20%的空间
+          top: 0.8,
           bottom: 0,
         },
       }
     })
+
+    if (window.showVolume) {
+      window.volumeSeries.applyOptions({ visible: true })
+    } else {
+      window.volumeSeries.applyOptions({ visible: false })
+    }
   }
 
   chart.subscribeCrosshairMove(({ seriesData, point, time, logical, hoveredObjectId }) => {
@@ -592,12 +602,12 @@ const [chart, series] = initChart()
 
 if (dataSourceList.length != 0) {
   window.dataSource = dataSourceList[0]
-  applyOptions({ theme, locale, magnet })
+  applyOptions({ theme, locale, magnet, showVolume })
   series.setMarkers(historyPositionList.filter(v => v.symbol == window.dataSource.metadata.symbol).flatMap(v => createMaker(v)))
   series.setData(window.dataSource.data)
-  
+
   // 设置成交量数据
-  if (window.volumeSeries && window.dataSource.data) {
+  if (window.volumeSeries && window.dataSource.data && window.showVolume) {
     const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
     const volumeData = window.dataSource.data.map(item => ({
@@ -607,7 +617,7 @@ if (dataSourceList.length != 0) {
     }))
     window.volumeSeries.setData(volumeData)
   }
-  
+
   chart.timeScale().fitContent()
 }
 
@@ -1257,6 +1267,78 @@ renderOrderList(symbolList[0])
 
 document.querySelector("#theme-button").innerText = theme == "dark" ? themeList[0] : themeList[1]
 
+// 初始化开关按钮
+function initSwitches() {
+  const magnetSwitch = document.querySelector("#magnet-switch")
+  const volumeSwitch = document.querySelector("#volume-switch")
+
+  // 设置初始状态
+  if (magnetSwitch) {
+    if (window.magnet) {
+      magnetSwitch.classList.add("active")
+    } else {
+      magnetSwitch.classList.remove("active")
+    }
+  }
+
+  if (volumeSwitch) {
+    if (window.showVolume) {
+      volumeSwitch.classList.add("active")
+    } else {
+      volumeSwitch.classList.remove("active")
+    }
+
+  }
+
+  if (magnetSwitch) {
+    magnetSwitch.addEventListener("click", () => {
+      window.magnet = !window.magnet
+      localStorage.setItem("magnet", window.magnet)
+
+      if (window.magnet) {
+        magnetSwitch.classList.add("active")
+      } else {
+        magnetSwitch.classList.remove("active")
+      }
+
+      applyOptions({ magnet: window.magnet })
+    })
+  }
+
+  if (volumeSwitch) {
+    volumeSwitch.addEventListener("click", () => {
+      window.showVolume = !window.showVolume
+      localStorage.setItem("showVolume", window.showVolume)
+
+      if (window.showVolume) {
+        volumeSwitch.classList.add("active")
+      } else {
+        volumeSwitch.classList.remove("active")
+      }
+
+      // 更新volume显示状态
+      applyOptions({ showVolume: window.showVolume })
+
+      // 如果显示成交量，更新数据
+      if (window.showVolume && window.dataSource && window.dataSource.data) {
+        const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
+        const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
+        const volumeData = window.dataSource.data.map(item => ({
+          time: item.time,
+          value: item.volume || 0,
+          color: item.close > item.open ? buyColor : sellColor
+        }))
+        if (window.volumeSeries) {
+          window.volumeSeries.setData(volumeData)
+        }
+      }
+    })
+  }
+}
+
+// 初始化开关
+initSwitches()
+
 function createDropdownList(id, list, callback) {
   const dropdown = document.querySelector(id);
 
@@ -1290,9 +1372,9 @@ createDropdownList("#symbol-dropdown", symbolList, (value) => {
   series.setMarkers(historyPositionList.filter(v => v.symbol == value).flatMap(v => createMaker(v)))
   const dataSource = dataSourceList.find(v => levelText ? v.metadata.symbol == value && v.metadata.level == level : v.metadata.symbol == value)
   series.setData(dataSource.data)
-  
+
   // 更新成交量数据
-  if (window.volumeSeries && dataSource && dataSource.data) {
+  if (window.volumeSeries && dataSource && dataSource.data && window.showVolume) {
     const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
     const volumeData = dataSource.data.map(item => ({
@@ -1324,9 +1406,9 @@ createDropdownList("#level-dropdown", levelList, (value) => {
   series.setData(nextDataSource.data)
   series.setMarkers([])
   series.setMarkers(historyPositionList.filter(v => v.symbol == symbol).flatMap(v => createMaker(v)))
-  
+
   // 更新成交量数据
-  if (window.volumeSeries && nextDataSource && nextDataSource.data) {
+  if (window.volumeSeries && nextDataSource && nextDataSource.data && window.showVolume) {
     const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
     const volumeData = nextDataSource.data.map(item => ({

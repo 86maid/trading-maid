@@ -529,7 +529,7 @@ body {
 .dropdown-button {
   padding: 10px;
   font-size: 16px;
-  min-width: 50px;
+  /* min-width: 50px; */
   cursor: pointer;
   background-color: var(--background-color);
   color: var(--text-color);
@@ -549,7 +549,7 @@ body {
 }
 
 .dropdown-content {
-  min-width: 200px;
+  min-width: 100px;
   display: none;
   position: absolute;
   background-color: var(--card-background-color);
@@ -566,7 +566,6 @@ body {
   color: var(--text-color);
   background: none;
   border: none;
-  text-align: left;
   cursor: pointer;
   transition: background-color 0.3s;
 }
@@ -577,6 +576,14 @@ body {
 
 .show {
   display: block;
+}
+
+.switch.active {
+  opacity: 1;
+}
+
+.switch:not(.active) {
+  opacity: 0.4;
 }
 
 @media (max-width: 1100px) {
