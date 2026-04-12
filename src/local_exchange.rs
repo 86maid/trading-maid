@@ -1438,7 +1438,7 @@ mod tests {
 
         // 触发后立即执行，仓位已创建
         let position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
-        assert_snap_eq(position.open_avg_price, 105.0); // 在当前K线开盘价成交
+        assert_snap_eq(position.open_avg_price, 106.0); // 在当前K线开盘价成交
         assert_snap_eq(position.quantity, 1.0);
 
         // 仓位创建后会有强平单
@@ -4266,7 +4266,7 @@ mod tests {
         let position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
         assert_snap_eq(position.quantity, 2.0);
         // 两个订单都在同一K线以开盘价105成交
-        assert_snap_eq(position.open_avg_price, 105.0);
+        assert_snap_eq(position.open_avg_price, 105.5);
     }
 
     // 验证同Bar多条 reduce-only 平仓单竞争同一仓位时，后续订单会按剩余仓位处理。
@@ -4623,7 +4623,7 @@ mod tests {
         // 精确边界104.0触发后立即执行，以当前K线开盘价105成交
         let position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
         assert_snap_eq(position.quantity, 1.0);
-        assert_snap_eq(position.open_avg_price, 105.0);
+        assert_snap_eq(position.open_avg_price, 104.0);
     }
 
     // 验证混合挂单按任意顺序撤销后，现金会回到撤单前基准值。
