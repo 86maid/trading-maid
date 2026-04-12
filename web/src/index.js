@@ -1,14 +1,9 @@
 import { createChart } from 'lightweight-charts'
 
-export let theme = localStorage.getItem("theme") || "dark"
-export let locale = navigator.language || navigator.userLanguage
-export let magnet = localStorage.getItem("magnet") || true
-export let showVolume = localStorage.getItem("showVolume") || true
-export let dataSourceList = []
-export let historyPositionList = []
-export let orderList = []
-
-eval(`${console.log("loading...")};{{ code }}`)
+window.theme = localStorage.getItem("theme") ?? "dark"
+window.locale = navigator.language ?? navigator.userLanguage
+window.magnet = localStorage.getItem("magnet") ?? true
+window.showVolume = localStorage.getItem("showVolume") ?? true
 
 function initChart() {
   class ViewManager {
@@ -49,19 +44,18 @@ function initChart() {
   window.chart = createChart(document.getElementById('chart-container'))
   window.series = window.chart.addCandlestickSeries()
   window.series.attachPrimitive(window.vm = new ViewManager())
-
-  // 添加成交量系列
   window.volumeSeries = window.chart.addHistogramSeries({
+    lastValueVisible: false,
+    priceLineVisible: false,
     priceFormat: {
       type: 'volume',
     },
-    priceScaleId: 'volume', // 使用独立的price scale
+    priceScaleId: 'volume',
   })
 
-  // 设置成交量图表在底部
   window.volumeSeries.priceScale().applyOptions({
     scaleMargins: {
-      top: 0.8, // 成交量图表占据底部20%的空间
+      top: 0.8,
       bottom: 0,
     },
   })
@@ -69,32 +63,7 @@ function initChart() {
   return [window.chart, window.series, window.vm, window.volumeSeries]
 }
 
-function applyOptions({ theme, locale, magnet, showVolume }) {
-  if (theme == undefined) {
-    theme = window.theme
-  }
-
-  if (locale == undefined) {
-    locale = window.locale
-  }
-
-  if (magnet == undefined) {
-    magnet = window.magnet
-  }
-
-  if (showVolume == undefined) {
-    showVolume = window.showVolume
-  }
-
-  window.theme = theme
-  window.locale = locale
-  window.magnet = magnet
-  window.showVolume = showVolume
-
-  if (theme != undefined) {
-    localStorage.setItem("theme", theme)
-  }
-
+function applyOptions() {
   const body = document.querySelector("body")
 
   body.classList.forEach(className => {
@@ -103,7 +72,7 @@ function applyOptions({ theme, locale, magnet, showVolume }) {
     }
   })
 
-  body.classList.add(`theme-${theme}`)
+  body.classList.add(`theme-${window.theme}`)
 
   const style = getComputedStyle(body)
   const buyColor = style.getPropertyValue('--buy-color').trim()
@@ -257,33 +226,6 @@ function applyOptions({ theme, locale, magnet, showVolume }) {
     }
   })
 
-  if (window.volumeSeries) {
-    const volumeColor = style.getPropertyValue('--volume-color') || '#26a69a'
-
-    window.volumeSeries.applyOptions({
-      color: volumeColor,
-      priceFormat: {
-        type: 'volume',
-      },
-      priceScaleId: 'volume',
-      lastValueVisible: false,
-      priceLineVisible: false,
-      priceScale: {
-        borderColor: style.getPropertyValue("--border-color"),
-        scaleMargins: {
-          top: 0.8,
-          bottom: 0,
-        },
-      }
-    })
-
-    if (window.showVolume) {
-      window.volumeSeries.applyOptions({ visible: true })
-    } else {
-      window.volumeSeries.applyOptions({ visible: false })
-    }
-  }
-
   chart.subscribeCrosshairMove(({ seriesData, point, time, logical, hoveredObjectId }) => {
     if (hoveredObjectId) {
       document.body.style.cursor = 'pointer'
@@ -310,7 +252,7 @@ function applyOptions({ theme, locale, magnet, showVolume }) {
 
     const result = list.reduce((a, b) => (b.distance < a.distance ? b : a))
 
-    if (magnet && result.distance <= 20) {
+    if (window.magnet && result.distance <= 20) {
       chart.setCrosshairPosition(result.price, time, series)
     }
 
@@ -602,7 +544,7 @@ const [chart, series] = initChart()
 
 if (dataSourceList.length != 0) {
   window.dataSource = dataSourceList[0]
-  applyOptions({ theme, locale, magnet, showVolume })
+  applyOptions()
   series.setMarkers(historyPositionList.filter(v => v.symbol == window.dataSource.metadata.symbol).flatMap(v => createMaker(v)))
   series.setData(window.dataSource.data)
 
@@ -1267,12 +1209,10 @@ renderOrderList(symbolList[0])
 
 document.querySelector("#theme-button").innerText = theme == "dark" ? themeList[0] : themeList[1]
 
-// 初始化开关按钮
 function initSwitches() {
   const magnetSwitch = document.querySelector("#magnet-switch")
   const volumeSwitch = document.querySelector("#volume-switch")
 
-  // 设置初始状态
   if (magnetSwitch) {
     if (window.magnet) {
       magnetSwitch.classList.add("active")
@@ -1300,8 +1240,6 @@ function initSwitches() {
       } else {
         magnetSwitch.classList.remove("active")
       }
-
-      applyOptions({ magnet: window.magnet })
     })
   }
 
@@ -1316,11 +1254,7 @@ function initSwitches() {
         volumeSwitch.classList.remove("active")
       }
 
-      // 更新volume显示状态
-      applyOptions({ showVolume: window.showVolume })
-
-      // 如果显示成交量，更新数据
-      if (window.showVolume && window.dataSource && window.dataSource.data) {
+      if (window.showVolume) {
         const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
         const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
         const volumeData = window.dataSource.data.map(item => ({
@@ -1328,15 +1262,17 @@ function initSwitches() {
           value: item.volume || 0,
           color: item.close > item.open ? buyColor : sellColor
         }))
-        if (window.volumeSeries) {
-          window.volumeSeries.setData(volumeData)
-        }
+
+
+        window.volumeSeries.setData(volumeData)
+        window.volumeSeries.applyOptions({ visible: true })
+      } else {
+        window.volumeSeries.applyOptions({ visible: false })
       }
     })
   }
 }
 
-// 初始化开关
 initSwitches()
 
 function createDropdownList(id, list, callback) {
@@ -1373,8 +1309,7 @@ createDropdownList("#symbol-dropdown", symbolList, (value) => {
   const dataSource = dataSourceList.find(v => levelText ? v.metadata.symbol == value && v.metadata.level == level : v.metadata.symbol == value)
   series.setData(dataSource.data)
 
-  // 更新成交量数据
-  if (window.volumeSeries && dataSource && dataSource.data && window.showVolume) {
+  if (window.showVolume) {
     const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
     const volumeData = dataSource.data.map(item => ({
@@ -1382,7 +1317,11 @@ createDropdownList("#symbol-dropdown", symbolList, (value) => {
       value: item.volume || 0,
       color: item.close > item.open ? buyColor : sellColor
     }))
+
     window.volumeSeries.setData(volumeData)
+    window.volumeSeries.applyOptions({ visible: true })
+  } else {
+    window.volumeSeries.applyOptions({ visible: false })
   }
 });
 
@@ -1407,24 +1346,44 @@ createDropdownList("#level-dropdown", levelList, (value) => {
   series.setMarkers([])
   series.setMarkers(historyPositionList.filter(v => v.symbol == symbol).flatMap(v => createMaker(v)))
 
-  // 更新成交量数据
-  if (window.volumeSeries && nextDataSource && nextDataSource.data && window.showVolume) {
+  if (window.showVolume) {
     const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
-    const volumeData = nextDataSource.data.map(item => ({
+    const volumeData = dataSource.data.map(item => ({
       time: item.time,
       value: item.volume || 0,
       color: item.close > item.open ? buyColor : sellColor
     }))
+
     window.volumeSeries.setData(volumeData)
+    window.volumeSeries.applyOptions({ visible: true })
+  } else {
+    window.volumeSeries.applyOptions({ visible: false })
   }
 });
 
 createDropdownList("#theme-dropdown", themeList, (value) => {
   document.querySelector("#theme-button").innerText = value
   document.querySelector("#theme-dropdown").classList.remove("show")
+  window.theme = value == themeList[0] ? "dark" : "light"
+  localStorage.setItem("theme", window.theme)
 
-  applyOptions({ theme: value == themeList[0] ? "dark" : "light" })
+  applyOptions()
+
+  if (window.showVolume) {
+    const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
+    const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
+    const volumeData = dataSource.data.map(item => ({
+      time: item.time,
+      value: item.volume || 0,
+      color: item.close > item.open ? buyColor : sellColor
+    }))
+
+    window.volumeSeries.setData(volumeData)
+    window.volumeSeries.applyOptions({ visible: true })
+  } else {
+    window.volumeSeries.applyOptions({ visible: false })
+  }
 });
 
 function toggleDropdown(id) {

@@ -879,13 +879,13 @@ pub fn to_html(
     history_order: impl AsRef<[OrderMessage]>,
 ) -> String {
     let text = format!(
-        "dataSourceList={};historyPositionList={};orderList={}",
+        "<script>window.dataSourceList={};window.historyPositionList={};window.orderList={}</script>",
         &serde_json::to_string(data_source.as_ref()).unwrap(),
         &serde_json::to_string(history_position.as_ref()).unwrap(),
         &serde_json::to_string(history_order.as_ref()).unwrap(),
     );
 
-    include_str!("../web/dist/index.html").replace("{{ code }}", &text)
+    include_str!("../web/dist/index.html").replace("<!-- template -->", &text)
 }
 
 /// Summarizes history positions into the same metrics used by the web summary panel.
