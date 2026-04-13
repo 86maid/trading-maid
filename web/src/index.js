@@ -1069,13 +1069,13 @@ function renderOrderList(symbol) {
     }[key] || key
   }
 
-  const statusText = (value) => {
+  const statusText = (value, kind) => {
     const key = enumText(value)
 
     return {
       Submitted: s("已提交", "Submitted"),
       PartiallyFilled: s("部分成交", "Partially Filled"),
-      Filled: s("已成交", "Filled"),
+      Filled: kind == "Trigger" ? s("已触发", "Triggered") : s("已成交", "Filled"),
       Canceled: s("已取消", "Canceled"),
       Rejected: s("已拒绝", "Rejected"),
     }[key] || key
@@ -1094,7 +1094,7 @@ function renderOrderList(symbol) {
         <div class="order-card-title">${enumText(order.id)}</div>
         <div class="order-card-tags">
           ${order.reduce_only ? `<span class="order-card-tag ${isBuy ? "buy" : "sell"}">${s("只减仓", "Reduce Only")}</span>` : ""}
-          <span class="order-card-tag ${isBuy ? "buy" : "sell"}">${statusText(order.status)}</span>
+          <span class="order-card-tag ${isBuy ? "buy" : "sell"}">${statusText(order.status, order.kind)}</span>
           <span class="order-card-tag ${isBuy ? "buy" : "sell"}">${kindText(order.kind)}</span>
           <span class="order-card-tag ${isBuy ? "buy" : "sell"}">${side == "Buy" ? s("买", "Buy") : side == "Sell" ? s("卖", "Sell") : side}</span>
         </div>
