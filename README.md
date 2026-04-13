@@ -49,7 +49,7 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 ### ⚙️ Order Processing Logic
 
 - Margin freeze: market orders freeze margin when filled; reduce-only orders do not freeze margin.
-- Matching timing: an order is placed on the current k-line and matched on the next k-line.
+- Matching timing: an order is placed on the current k-line and matched on the next k-line. a trigger order will be matched immediately on the current k-line once.
 - Fill rules: market orders fill at `Open`; limit orders follow these rules:
     - Long
         - limit >= market: fill at worst price `High`
@@ -78,7 +78,7 @@ Or in `Cargo.toml`
 
 ```toml
 [dependencies]
-trading-maid = "1.0.0"
+trading-maid = "1.0.1"
 ```
 
 ### 🛠️ Usage

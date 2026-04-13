@@ -1,6 +1,6 @@
 [package]
 name = "trading-maid"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "A high-fidelity crypto futures backtesting and live trading framework with matching, margin, leverage and liquidation simulation."
 readme = "README.md"
