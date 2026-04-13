@@ -30,6 +30,10 @@ use overload::overload;
 /// assert!(series[2..=7][..] == [2.0, 3.0, 4.0, 5.0, 6.0, 7.0][..]);
 /// assert!(series[..=7][..] == [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0][..]);
 /// assert!(series[5..][..] == [1.0, 2.0, 3.0, 4.0][..]);
+///
+/// let collected: Vec<f64> = series.iter().copied().collect();
+///
+/// assert_eq!(collected, [9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]);
 /// ```
 #[derive(Debug)]
 pub struct Series {
@@ -46,6 +50,21 @@ impl Series {
         T: SliceIndex<[f64], Output = [f64]>,
     {
         unsafe { transmute(transmute::<_, &[f64]>(self).get(index).unwrap_or(&[])) }
+    }
+}
+
+impl<'a> IntoIterator for &'a Series {
+    type Item = &'a f64;
+    type IntoIter = std::iter::Rev<std::slice::Iter<'a, f64>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter().rev()
+    }
+}
+
+impl Series {
+    pub fn iter(&self) -> std::iter::Rev<std::slice::Iter<'_, f64>> {
+        self.inner.iter().rev()
     }
 }
 
@@ -271,6 +290,10 @@ overload!((a: &Series) % (b: &Series) -> f64 { a[0] % b[0] });
 /// assert!(series[2..=7][..] == [2, 3, 4, 5, 6, 7][..]);
 /// assert!(series[..=7][..] == [2, 3, 4, 5, 6, 7, 8, 9][..]);
 /// assert!(series[5..][..] == [1, 2, 3, 4][..]);
+///
+/// let collected: Vec<u64> = series.iter().copied().collect();
+///
+/// assert_eq!(collected, [9, 8, 7, 6, 5, 4, 3, 2, 1]);
 /// ```
 #[derive(Debug)]
 pub struct TimeSeries {
@@ -287,6 +310,21 @@ impl TimeSeries {
         T: SliceIndex<[u64], Output = [u64]>,
     {
         unsafe { transmute(transmute::<_, &[u64]>(self).get(index).unwrap_or(&[])) }
+    }
+}
+
+impl<'a> IntoIterator for &'a TimeSeries {
+    type Item = &'a u64;
+    type IntoIter = std::iter::Rev<std::slice::Iter<'a, u64>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter().rev()
+    }
+}
+
+impl TimeSeries {
+    pub fn iter(&self) -> std::iter::Rev<std::slice::Iter<'_, u64>> {
+        self.inner.iter().rev()
     }
 }
 

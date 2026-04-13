@@ -879,7 +879,7 @@ pub fn to_html(
     history_order: impl AsRef<[OrderMessage]>,
 ) -> String {
     let text = format!(
-        "<script>window.dataSourceList={};window.historyPositionList={};window.orderList={}</script>",
+        "<script>window.dataSourceList={};window.historyPositionList={};window.historyOrderList={}</script>",
         &serde_json::to_string(data_source.as_ref()).unwrap(),
         &serde_json::to_string(history_position.as_ref()).unwrap(),
         &serde_json::to_string(history_order.as_ref()).unwrap(),

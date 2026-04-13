@@ -365,7 +365,8 @@ function applyOptions() {
 
   if (window.dataSource && window.series) {
     const markerSymbol = window.dataSource.metadata.symbol
-    series.setMarkers(historyPositionList.filter(v => v.symbol == markerSymbol).flatMap(v => createMaker(v)))
+    window.series.setMarkers([])
+    window.series.setMarkers(window.historyPositionList.filter(v => v.symbol == markerSymbol).flatMap(v => createMaker(v)))
   }
 }
 
@@ -545,7 +546,6 @@ const [chart, series] = initChart()
 if (dataSourceList.length != 0) {
   window.dataSource = dataSourceList[0]
   applyOptions()
-  series.setMarkers(historyPositionList.filter(v => v.symbol == window.dataSource.metadata.symbol).flatMap(v => createMaker(v)))
   series.setData(window.dataSource.data)
 
   // 设置成交量数据
@@ -761,8 +761,8 @@ function renderSummary(symbol) {
   }
 
   const list = symbol
-    ? historyPositionList.filter(v => v.symbol == symbol)
-    : historyPositionList
+    ? window.historyPositionList.filter(v => v.symbol == symbol)
+    : window.historyPositionList
 
   if (list.length == 0) {
     container.innerHTML = `<div class="summary-note">${s("暂无可统计的历史仓位", "No historical positions to summarize")}</div>`
@@ -855,7 +855,7 @@ function renderSummary(symbol) {
   `
 }
 
-function renderHistoryPositionList(historyPositionList) {
+function renderHistoryPositionList() {
   const container = document.querySelector("#history-position-container")
 
   if (!container) {
@@ -864,13 +864,13 @@ function renderHistoryPositionList(historyPositionList) {
 
   container.innerHTML = ""
 
-  for (const position of historyPositionList) {
+  for (const position of window.historyPositionList) {
     addPositionCard(container, position, (index, position) => {
       scrollChartToTime(position.log[index].time)
     })
   }
 
-  if (historyPositionList.length == 0) {
+  if (window.historyPositionList.length == 0) {
     container.innerHTML = `<div class="summary-note">${s("暂无历史仓位", "No history positions to display")}</div>`
   }
 }
@@ -1019,8 +1019,8 @@ function renderOrderList(symbol) {
   }
 
   const list = symbol
-    ? orderList.filter(v => v.symbol == symbol)
-    : orderList
+    ? window.historyOrderList.filter(v => v.symbol == symbol)
+    : window.historyOrderList
 
   container.innerHTML = ""
 
@@ -1147,13 +1147,8 @@ function renderOrderList(symbol) {
   }
 }
 
-export function updateHistoryPosition(newHistoryPositionList = historyPositionList) {
-  if (!Array.isArray(newHistoryPositionList)) {
-    throw new Error("updateHistoryPosition expects an array")
-  }
-
-  historyPositionList = newHistoryPositionList
-  renderHistoryPositionList(historyPositionList)
+export function updateHistoryPosition() {
+  renderHistoryPositionList(window.historyPositionList)
 
   const selectedSymbol = document.querySelector("#symbol-button")?.innerText
   const summarySymbol = selectedSymbol || symbolList[0]
@@ -1164,32 +1159,22 @@ export function updateHistoryPosition(newHistoryPositionList = historyPositionLi
 
   if (window.dataSource && window.series) {
     const markerSymbol = window.dataSource.metadata.symbol
-    series.setMarkers(historyPositionList.filter(v => v.symbol == markerSymbol).flatMap(v => createMaker(v)))
+    window.series.setMarkers(window.historyPositionList.filter(v => v.symbol == markerSymbol).flatMap(v => createMaker(v)))
   }
 
-  return historyPositionList
+  return window.historyPositionList
 }
 
-export function updateOrderList(newOrderList = orderList) {
-  if (!Array.isArray(newOrderList)) {
-    throw new Error("updateOrderList expects an array")
-  }
-
-  orderList = newOrderList
-
+export function updateOrderList() {
   const selectedSymbol = document.querySelector("#symbol-button")?.innerText
   const orderSymbol = selectedSymbol || symbolList[0]
 
   renderOrderList(orderSymbol)
-
-  return orderList
 }
 
-window.updateHistoryPosition = updateHistoryPosition
-window.updateOrderList = updateOrderList
 
 initHistoryTabs()
-renderHistoryPositionList(historyPositionList)
+renderHistoryPositionList(window.historyPositionList)
 
 //-----------------------------------------------------------------------
 //-----------------------------------------------------------------------
@@ -1299,20 +1284,21 @@ createDropdownList("#symbol-dropdown", symbolList, (value) => {
   renderSummary(value)
   renderOrderList(value)
 
-  if (dataSourceList.length == 0) {
+  if (window.dataSourceList.length == 0) {
     return
   }
 
   const level = document.querySelector("#level-button").innerText
 
-  series.setMarkers(historyPositionList.filter(v => v.symbol == value).flatMap(v => createMaker(v)))
-  const dataSource = dataSourceList.find(v => levelText ? v.metadata.symbol == value && v.metadata.level == level : v.metadata.symbol == value)
-  series.setData(dataSource.data)
+  window.dataSource = dataSourceList.find(v => levelText ? v.metadata.symbol == value && v.metadata.level == level : v.metadata.symbol == value)
+  window.series.setMarkers([])
+  window.series.setMarkers(window.historyPositionList.filter(v => v.symbol == value).flatMap(v => createMaker(v)))
+  window.series.setData(window.dataSource.data)
 
   if (window.showVolume) {
     const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
-    const volumeData = dataSource.data.map(item => ({
+    const volumeData = window.dataSource.data.map(item => ({
       time: item.time,
       value: item.volume || 0,
       color: item.close > item.open ? buyColor : sellColor
@@ -1344,12 +1330,12 @@ createDropdownList("#level-dropdown", levelList, (value) => {
   window.dataSource = nextDataSource
   series.setData(nextDataSource.data)
   series.setMarkers([])
-  series.setMarkers(historyPositionList.filter(v => v.symbol == symbol).flatMap(v => createMaker(v)))
+  series.setMarkers(window.historyPositionList.filter(v => v.symbol == symbol).flatMap(v => createMaker(v)))
 
   if (window.showVolume) {
     const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
-    const volumeData = dataSource.data.map(item => ({
+    const volumeData = window.dataSource.data.map(item => ({
       time: item.time,
       value: item.volume || 0,
       color: item.close > item.open ? buyColor : sellColor
