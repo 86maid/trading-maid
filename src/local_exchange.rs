@@ -284,7 +284,7 @@ impl LocalExchangeInner {
             return;
         }
 
-        if order.is_trigger() {
+        if order.kind == Kind::Trigger {
             // 条件单触发判断
             if !(order.trigger_price >= self.kline.low && order.trigger_price <= self.kline.high) {
                 return;
@@ -315,8 +315,8 @@ impl LocalExchangeInner {
                 },
             );
 
-            order_ref.status = if let Ok(new_id) = result {
-                order_queue.push_back(new_id);
+            order_ref.status = if let Ok(v) = result {
+                order_queue.push_back(v);
                 Status::Filled
             } else {
                 Status::Rejected
@@ -324,7 +324,7 @@ impl LocalExchangeInner {
 
             self.history_order_list
                 .insert(order_ref.id.clone(), order_ref);
-        } else if order.is_limit() {
+        } else if order.kind == Kind::Limit || order.kind == Kind::Liquidation {
             // 限价单逻辑（包含强平单的处理）
             let order_ref = if order.kind == Kind::Liquidation {
                 if !(order.price >= self.kline.low && order.price <= self.kline.high) {
@@ -381,7 +381,11 @@ impl LocalExchangeInner {
                 None => return,
             };
 
-            order_ref.price = self.calc_market_fill_price(order_ref.side);
+            // 条件市价单的市价等于触发价
+            if order_ref.price == 0.0 {
+                order_ref.price = self.calc_market_fill_price(order_ref.side);
+            }
+
             order_ref.avg_price = order_ref.price;
             self.execute_order(order_id, order_ref, self.data_source.metadata.taker_fee);
         }
@@ -857,13 +861,6 @@ impl Exchange for LocalExchange {
             );
         }
 
-        if order.quantity <= 0.0 {
-            bail!(
-                "place_order: quantity must be greater than 0: {}",
-                metadata.symbol
-            );
-        }
-
         if order.is_limit() && order.price <= 0.0 {
             bail!(
                 "place_order: limit price must be greater than 0: {}",
@@ -911,23 +908,32 @@ impl Exchange for LocalExchange {
             }
         }
 
-        if order.quantity < metadata.min_size {
+        if order.quantity <= 0.0 {
             bail!(
-                "place_order: quantity must be greater than {} (metadata.min_size): {}",
-                metadata.min_size,
+                "place_order: quantity must be greater than 0: {}",
                 metadata.symbol
             );
         }
 
-        if metadata.min_notional != 0.0
-            && order.is_limit()
-            && (order.price * order.quantity).snap_lt(metadata.min_notional, metadata.tick_size)
-        {
-            bail!(
-                "place_order: notional must be greater than {} (metadata.min_notional): {}",
-                metadata.min_notional,
-                metadata.symbol,
-            );
+        if !(order.reduce_only && order.quantity == f64::MAX) {
+            if !is_tick_aligned(order.quantity, metadata.min_size) {
+                bail!(
+                    "place_order: quantity must be a multiple of min_size {}: {}",
+                    metadata.min_size,
+                    metadata.symbol
+                );
+            }
+
+            if metadata.min_notional != 0.0
+                && order.is_limit()
+                && (order.price * order.quantity).snap_lt(metadata.min_notional, metadata.tick_size)
+            {
+                bail!(
+                    "place_order: notional must be greater than {} (metadata.min_notional): {}",
+                    metadata.min_notional,
+                    metadata.symbol,
+                );
+            }
         }
 
         let kind = if order.is_trigger() {
@@ -3705,9 +3711,292 @@ mod tests {
         assert_snap_eq(history_after_limit[1].profit, close_profit_short);
     }
 
-    // 验证“复杂到令人发指”的状态机：
-    // 市价+限价混合开仓 -> 调杠杆/加减保证金 -> 条件市价触发并反向 -> 条件限价触发并成交 ->
-    // 调杠杆失败与恢复 -> 再次调杠杆与保证金调整 -> 市价全平，且每个 next 后精确断言全状态。
+    // // 验证“复杂到令人发指”的状态机：
+    // // 市价+限价混合开仓 -> 调杠杆/加减保证金 -> 条件市价触发并反向 -> 条件限价触发并成交 ->
+    // // 调杠杆失败与恢复 -> 再次调杠杆与保证金调整 -> 市价全平，且每个 next 后精确断言全状态。
+    // #[tokio::test]
+    // async fn insane_state_machine_asserts_everything_each_next() {
+    //     let exchange = test_exchange_with(
+    //         default_metadata(),
+    //         vec![
+    //             gen_kline(1, 100.17, 101.23, 99.41, 100.58),
+    //             gen_kline(2, 105.37, 106.48, 104.26, 105.91),
+    //             gen_kline(3, 110.29, 111.44, 109.35, 110.83),
+    //             gen_kline(4, 108.42, 109.10, 107.80, 108.00),
+    //             gen_kline(5, 103.77, 104.20, 102.90, 103.10),
+    //             gen_kline(6, 99.33, 100.50, 98.60, 99.80),
+    //             gen_kline(7, 112.66, 113.20, 111.90, 112.20),
+    //         ],
+    //     )
+    //     .cash(30000.0);
+
+    //     let md = default_metadata();
+
+    //     let q_market_open = 1.2345;
+    //     let q_limit_open = 0.5;
+    //     let q_long = q_market_open + q_limit_open;
+    //     let q_reverse_order = 3.0;
+    //     let q_short = q_reverse_order - q_long;
+    //     let q_trigger_limit_close = 0.6;
+    //     let q_short_left = q_short - q_trigger_limit_close;
+
+    //     let p_market_open = 105.37;
+    //     let p_limit_open = 104.70;
+    //     let p_reverse_open = 108.42;
+    //     let p_trigger_limit_close = 100.50;
+    //     let p_final_close = 112.66;
+
+    //     // Step 1: 初始化 next。
+    //     exchange.next(SYMBOL, Level::Minute1).await.unwrap();
+    //     assert_snap_eq(exchange.get_cash().await.unwrap(), 30000.0);
+    //     assert_snap_eq(exchange.get_equity().await.unwrap(), 30000.0);
+    //     assert!(exchange.get_position(SYMBOL).await.unwrap().is_none());
+    //     assert!(
+    //         exchange
+    //             .get_pending_order_list(SYMBOL)
+    //             .await
+    //             .unwrap()
+    //             .is_empty()
+    //     );
+
+    //     // 提交市价开多 + 限价开多 + 条件市价反向单（trigger=110.5）。
+    //     let id_market_open = exchange.buy(SYMBOL, q_market_open).await.unwrap();
+    //     let id_limit_open = exchange
+    //         .buy_limit(SYMBOL, p_limit_open, q_limit_open)
+    //         .await
+    //         .unwrap();
+    //     let id_trigger_reverse = exchange
+    //         .sell_trigger_market(SYMBOL, 110.5, q_reverse_order)
+    //         .await
+    //         .unwrap();
+
+    //     // Step 2: 市价与限价开仓成交，trigger 仍未触发。
+    //     exchange.next(SYMBOL, Level::Minute1).await.unwrap();
+
+    //     let order_market_open = exchange.get_order(&id_market_open).await.unwrap().unwrap();
+    //     let order_limit_open = exchange.get_order(&id_limit_open).await.unwrap().unwrap();
+    //     let trigger_reverse = exchange
+    //         .get_order(&id_trigger_reverse)
+    //         .await
+    //         .unwrap()
+    //         .unwrap();
+    //     let mut position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
+    //     let pending_s2 = exchange.get_pending_order_list(SYMBOL).await.unwrap();
+
+    //     let avg_long = (q_market_open * p_market_open + q_limit_open * p_limit_open) / q_long;
+    //     let margin_s2 = q_market_open * p_market_open / 10.0 + q_limit_open * p_limit_open / 10.0;
+    //     let fee_open_market = q_market_open * p_market_open * md.taker_fee;
+    //     let fee_open_limit = q_limit_open * p_limit_open * md.maker_fee;
+    //     let cash_s2 = 30000.0 - margin_s2 - fee_open_market - fee_open_limit;
+    //     let upnl_s2 = (105.91 - avg_long) * q_long;
+    //     let equity_s2 = cash_s2 + margin_s2 + upnl_s2;
+
+    //     assert_eq!(order_market_open.status, Status::Filled);
+    //     assert_eq!(order_limit_open.status, Status::Filled);
+    //     assert_eq!(trigger_reverse.status, Status::Submitted);
+    //     assert_eq!(position.side, Side::Buy);
+    //     assert_eq!(position.leverage, 10);
+    //     assert_snap_eq(position.open_avg_price, avg_long);
+    //     assert_snap_eq(position.quantity, q_long);
+    //     assert_snap_eq(position.margin, margin_s2);
+    //     assert_snap_eq(position.profit, upnl_s2);
+    //     assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s2);
+    //     assert_snap_eq(exchange.get_equity().await.unwrap(), equity_s2);
+    //     assert_eq!(pending_s2.len(), 2);
+    //     assert!(pending_s2.iter().any(|o| o.kind == Kind::Liquidation));
+    //     assert!(pending_s2.iter().any(|o| o.kind == Kind::Trigger));
+
+    //     // 有普通挂单（Trigger）时调杠杆应失败。
+    //     let lev_err_with_trigger = exchange.set_leverage(SYMBOL, 8).await.unwrap_err();
+    //     assert!(lev_err_with_trigger.to_string().contains("pending orders"));
+
+    //     // 新增条件限价平空单（将在后面触发并成交）。
+    //     let id_trigger_limit = exchange
+    //         .buy_trigger_limit(SYMBOL, 103.0, 103.2, q_trigger_limit_close)
+    //         .await
+    //         .unwrap();
+
+    //     // Step 3: 条件市价单触发（转 Market），仓位仍是多。
+    //     exchange.next(SYMBOL, Level::Minute1).await.unwrap();
+
+    //     let trigger_reverse_s3 = exchange
+    //         .get_order(&id_trigger_reverse)
+    //         .await
+    //         .unwrap()
+    //         .unwrap();
+    //     let trigger_limit_s3 = exchange
+    //         .get_order(&id_trigger_limit)
+    //         .await
+    //         .unwrap()
+    //         .unwrap();
+    //     let pending_s3 = exchange.get_pending_order_list(SYMBOL).await.unwrap();
+    //     position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
+
+    //     let upnl_s3 = (110.83 - avg_long) * q_long;
+    //     let equity_s3 = cash_s2 + margin_s2 + upnl_s3;
+
+    //     // 条件单触发后立即撮合，平多开空（现在在 Step 3 完成）
+    //     assert_eq!(trigger_reverse_s3.status, Status::Filled);
+    //     assert_eq!(trigger_limit_s3.status, Status::Submitted);
+    //     assert_eq!(position.side, Side::Sell);
+    //     assert_eq!(position.leverage, 10);
+    //     assert_snap_eq(position.quantity, q_short);
+    //     assert_snap_eq(position.margin, margin_s2);
+    //     assert_snap_eq(position.profit, upnl_s3);
+    //     assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s2);
+    //     assert_snap_eq(exchange.get_equity().await.unwrap(), equity_s3);
+    //     assert_eq!(pending_s3.len(), 3);
+    //     assert!(pending_s3.iter().any(|o| o.kind == Kind::Liquidation));
+    //     assert!(pending_s3.iter().any(|o| o.kind == Kind::Market));
+    //     assert!(pending_s3.iter().any(|o| o.kind == Kind::Trigger));
+
+    //     // Step 4: Market 成交，先平多再反向开空。
+    //     exchange.next(SYMBOL, Level::Minute1).await.unwrap();
+
+    //     let fee_reverse_full = p_reverse_open * q_reverse_order * md.taker_fee;
+    //     let close_profit_long = (p_reverse_open - avg_long) * q_long;
+    //     let margin_short_s4 = p_reverse_open * q_short / 10.0;
+    //     let cash_s4 = cash_s2 - fee_reverse_full + margin_s2 + close_profit_long - margin_short_s4;
+    //     let upnl_s4 = (p_reverse_open - 108.0) * q_short;
+    //     let equity_s4 = cash_s4 + margin_short_s4 + upnl_s4;
+
+    //     let pending_s4 = exchange.get_pending_order_list(SYMBOL).await.unwrap();
+    //     let history_s4 = exchange.get_history_position_list(SYMBOL).await.unwrap();
+    //     position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
+
+    //     assert_eq!(position.side, Side::Sell);
+    //     assert_eq!(position.leverage, 10);
+    //     assert_snap_eq(position.open_avg_price, p_reverse_open);
+    //     assert_snap_eq(position.quantity, q_short);
+    //     assert_snap_eq(position.margin, margin_short_s4);
+    //     assert_snap_eq(position.profit, upnl_s4);
+    //     assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s4);
+    //     assert_snap_eq(exchange.get_equity().await.unwrap(), equity_s4);
+    //     assert_eq!(history_s4.len(), 1);
+    //     assert_eq!(history_s4[0].side, Side::Buy);
+    //     assert_eq!(pending_s4.len(), 2);
+    //     assert!(pending_s4.iter().any(|o| o.kind == Kind::Liquidation));
+    //     assert!(pending_s4.iter().any(|o| o.kind == Kind::Trigger));
+
+    //     // Step 5: 条件限价触发（转 Limit），空仓仍未变化。
+    //     exchange.next(SYMBOL, Level::Minute1).await.unwrap();
+
+    //     let trigger_limit_s5 = exchange
+    //         .get_order(&id_trigger_limit)
+    //         .await
+    //         .unwrap()
+    //         .unwrap();
+    //     let pending_s5 = exchange.get_pending_order_list(SYMBOL).await.unwrap();
+    //     position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
+
+    //     let upnl_s5 = (p_reverse_open - 103.10) * q_short;
+    //     let freeze_trigger_limit = 103.2 * q_trigger_limit_close / 10.0;
+    //     let cash_s5 = cash_s4 - freeze_trigger_limit;
+    //     let equity_s5 = cash_s5 + margin_short_s4 + upnl_s5 + freeze_trigger_limit;
+
+    //     assert_eq!(trigger_limit_s5.status, Status::Filled);
+    //     assert_eq!(position.side, Side::Sell);
+    //     assert_snap_eq(position.quantity, q_short);
+    //     assert_snap_eq(position.margin, margin_short_s4);
+    //     assert_snap_eq(position.profit, upnl_s5);
+    //     assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s5);
+    //     assert_snap_eq(exchange.get_equity().await.unwrap(), equity_s5);
+    //     assert_eq!(pending_s5.len(), 2);
+    //     assert!(pending_s5.iter().any(|o| o.kind == Kind::Liquidation));
+    //     assert!(pending_s5.iter().any(|o| o.kind == Kind::Limit));
+
+    //     // Step 6: 触发后的限价单成交，部分平空。
+    //     exchange.next(SYMBOL, Level::Minute1).await.unwrap();
+
+    //     let converted_limit = exchange
+    //         .get_history_order_list(SYMBOL)
+    //         .await
+    //         .unwrap()
+    //         .into_iter()
+    //         .find(|o| {
+    //             o.kind == Kind::Limit
+    //                 && o.status == Status::Filled
+    //                 && o.side == Side::Buy
+    //                 && o.quantity.snap_eq(q_trigger_limit_close, SNAP_TICK)
+    //         })
+    //         .unwrap();
+
+    //     let close_margin_s6 = margin_short_s4 * (q_trigger_limit_close / q_short);
+    //     let close_profit_s6 = (p_reverse_open - p_trigger_limit_close) * q_trigger_limit_close;
+    //     let close_fee_s6 = p_trigger_limit_close * q_trigger_limit_close * md.maker_fee;
+    //     let cash_s6 = cash_s4 - close_fee_s6 + close_margin_s6 + close_profit_s6;
+    //     let margin_s6 = margin_short_s4 - close_margin_s6;
+    //     let upnl_s6 = (p_reverse_open - 99.80) * q_short_left;
+    //     let equity_s6 = cash_s6 + margin_s6 + upnl_s6;
+
+    //     let pending_s6 = exchange.get_pending_order_list(SYMBOL).await.unwrap();
+    //     position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
+
+    //     assert_eq!(converted_limit.side, Side::Buy);
+    //     assert_snap_eq(converted_limit.avg_price, p_trigger_limit_close);
+    //     assert_eq!(position.side, Side::Sell);
+    //     assert_eq!(position.leverage, 10);
+    //     assert_snap_eq(position.quantity, q_short_left);
+    //     assert_snap_eq(position.margin, margin_s6);
+    //     assert_snap_eq(position.profit, upnl_s6);
+    //     assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s6);
+    //     assert_snap_eq(exchange.get_equity().await.unwrap(), equity_s6);
+    //     assert_eq!(pending_s6.len(), 1);
+    //     assert_eq!(pending_s6[0].kind, Kind::Liquidation);
+
+    //     // 带普通挂单时调杠杆应失败。
+    //     let id_block_lev = exchange
+    //         .sell_limit_reduce_only(SYMBOL, 130.0, 0.1)
+    //         .await
+    //         .unwrap();
+    //     let lev_err = exchange.set_leverage(SYMBOL, 5).await.unwrap_err();
+    //     assert!(lev_err.to_string().contains("pending orders"));
+
+    //     // 撤掉普通挂单后允许调杠杆，并再做保证金调整。
+    //     exchange.cancel_order(SYMBOL, &id_block_lev).await.unwrap();
+    //     exchange.set_leverage(SYMBOL, 5).await.unwrap();
+    //     exchange
+    //         .append_position_margin(SYMBOL, 0.333)
+    //         .await
+    //         .unwrap();
+    //     exchange.append_position_margin(SYMBOL, -0.2).await.unwrap();
+
+    //     let margin_lev5 = p_reverse_open * q_short_left / 5.0;
+    //     let cash_lev5 = cash_s6 - (margin_lev5 - margin_s6);
+    //     let margin_lev5_adj = margin_lev5 + 0.333 - 0.2;
+    //     let cash_lev5_adj = cash_lev5 - 0.333 + 0.2;
+
+    //     let position_after_adj = exchange.get_position(SYMBOL).await.unwrap().unwrap();
+    //     assert_eq!(position_after_adj.leverage, 5);
+    //     assert_snap_eq(position_after_adj.margin, margin_lev5_adj);
+    //     assert_snap_eq(exchange.get_cash().await.unwrap(), cash_lev5_adj);
+
+    //     // close_all 下市价平仓单，Step7 全平并校验最终资金与历史。
+    //     exchange.close_all_position(SYMBOL).await.unwrap();
+
+    //     exchange.next(SYMBOL, Level::Minute1).await.unwrap();
+
+    //     let fee_final = p_final_close * q_short_left * md.taker_fee;
+    //     let profit_final = (p_reverse_open - p_final_close) * q_short_left;
+    //     let cash_final = cash_lev5_adj - fee_final + margin_lev5_adj + profit_final;
+
+    //     let history_final = exchange.get_history_position_list(SYMBOL).await.unwrap();
+    //     let pending_final = exchange.get_pending_order_list(SYMBOL).await.unwrap();
+
+    //     assert!(exchange.get_position(SYMBOL).await.unwrap().is_none());
+    //     assert!(pending_final.is_empty());
+    //     assert_snap_eq(exchange.get_cash().await.unwrap(), cash_final);
+    //     assert_snap_eq(exchange.get_equity().await.unwrap(), cash_final);
+
+    //     assert_eq!(history_final.len(), 2);
+    //     assert_eq!(history_final[0].side, Side::Buy);
+    //     assert_eq!(history_final[1].side, Side::Sell);
+    //     assert_snap_eq(history_final[1].open_avg_price, p_reverse_open);
+    //     assert_snap_eq(history_final[1].close_avg_price, p_final_close);
+    //     assert_snap_eq(history_final[1].close_quantity, q_short);
+    //     assert_snap_eq(history_final[1].max_quantity, q_short);
+    // }
+
     #[tokio::test]
     async fn insane_state_machine_asserts_everything_each_next() {
         let exchange = test_exchange_with(
@@ -3728,19 +4017,19 @@ mod tests {
 
         let q_market_open = 1.2345;
         let q_limit_open = 0.5;
-        let q_long = q_market_open + q_limit_open;
+        let q_long = q_market_open + q_limit_open; // 1.7345
         let q_reverse_order = 3.0;
-        let q_short = q_reverse_order - q_long;
+        let q_short = q_reverse_order - q_long; // 1.2655
         let q_trigger_limit_close = 0.6;
-        let q_short_left = q_short - q_trigger_limit_close;
+        let q_short_left = q_short - q_trigger_limit_close; // 0.6655
 
         let p_market_open = 105.37;
         let p_limit_open = 104.70;
-        let p_reverse_open = 108.42;
-        let p_trigger_limit_close = 100.50;
+        let p_trigger_reverse = 110.5; // 条件市价单触发价
+        let p_trigger_limit = 103.2; // 条件限价单成交价
         let p_final_close = 112.66;
 
-        // Step 1: 初始化 next。
+        // ---------- Step 1: 初始状态 ----------
         exchange.next(SYMBOL, Level::Minute1).await.unwrap();
         assert_snap_eq(exchange.get_cash().await.unwrap(), 30000.0);
         assert_snap_eq(exchange.get_equity().await.unwrap(), 30000.0);
@@ -3753,18 +4042,18 @@ mod tests {
                 .is_empty()
         );
 
-        // 提交市价开多 + 限价开多 + 条件市价反向单（trigger=110.5）。
+        // 提交市价开多 + 限价开多 + 条件市价反向单（trigger=110.5）
         let id_market_open = exchange.buy(SYMBOL, q_market_open).await.unwrap();
         let id_limit_open = exchange
             .buy_limit(SYMBOL, p_limit_open, q_limit_open)
             .await
             .unwrap();
         let id_trigger_reverse = exchange
-            .sell_trigger_market(SYMBOL, 110.5, q_reverse_order)
+            .sell_trigger_market(SYMBOL, p_trigger_reverse, q_reverse_order)
             .await
             .unwrap();
 
-        // Step 2: 市价与限价开仓成交，trigger 仍未触发。
+        // ---------- Step 2: 市价与限价开仓成交，trigger 未触发 ----------
         exchange.next(SYMBOL, Level::Minute1).await.unwrap();
 
         let order_market_open = exchange.get_order(&id_market_open).await.unwrap().unwrap();
@@ -3778,12 +4067,12 @@ mod tests {
         let pending_s2 = exchange.get_pending_order_list(SYMBOL).await.unwrap();
 
         let avg_long = (q_market_open * p_market_open + q_limit_open * p_limit_open) / q_long;
-        let margin_s2 = q_market_open * p_market_open / 10.0 + q_limit_open * p_limit_open / 10.0;
+        let margin_long = q_market_open * p_market_open / 10.0 + q_limit_open * p_limit_open / 10.0;
         let fee_open_market = q_market_open * p_market_open * md.taker_fee;
         let fee_open_limit = q_limit_open * p_limit_open * md.maker_fee;
-        let cash_s2 = 30000.0 - margin_s2 - fee_open_market - fee_open_limit;
+        let cash_s2 = 30000.0 - margin_long - fee_open_market - fee_open_limit;
         let upnl_s2 = (105.91 - avg_long) * q_long;
-        let equity_s2 = cash_s2 + margin_s2 + upnl_s2;
+        let equity_s2 = cash_s2 + margin_long + upnl_s2;
 
         assert_eq!(order_market_open.status, Status::Filled);
         assert_eq!(order_limit_open.status, Status::Filled);
@@ -3792,7 +4081,7 @@ mod tests {
         assert_eq!(position.leverage, 10);
         assert_snap_eq(position.open_avg_price, avg_long);
         assert_snap_eq(position.quantity, q_long);
-        assert_snap_eq(position.margin, margin_s2);
+        assert_snap_eq(position.margin, margin_long);
         assert_snap_eq(position.profit, upnl_s2);
         assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s2);
         assert_snap_eq(exchange.get_equity().await.unwrap(), equity_s2);
@@ -3800,17 +4089,17 @@ mod tests {
         assert!(pending_s2.iter().any(|o| o.kind == Kind::Liquidation));
         assert!(pending_s2.iter().any(|o| o.kind == Kind::Trigger));
 
-        // 有普通挂单（Trigger）时调杠杆应失败。
+        // 有普通挂单（Trigger）时调杠杆应失败
         let lev_err_with_trigger = exchange.set_leverage(SYMBOL, 8).await.unwrap_err();
         assert!(lev_err_with_trigger.to_string().contains("pending orders"));
 
-        // 新增条件限价平空单（将在后面触发并成交）。
+        // 新增条件限价平空单（将在后面触发并成交）
         let id_trigger_limit = exchange
-            .buy_trigger_limit(SYMBOL, 103.0, 103.2, q_trigger_limit_close)
+            .buy_trigger_limit(SYMBOL, 103.0, p_trigger_limit, q_trigger_limit_close)
             .await
             .unwrap();
 
-        // Step 3: 条件市价单触发（转 Market），仓位仍是多。
+        // ---------- Step 3: 条件市价单触发并立即成交（平多开空） ----------
         exchange.next(SYMBOL, Level::Minute1).await.unwrap();
 
         let trigger_reverse_s3 = exchange
@@ -3826,45 +4115,57 @@ mod tests {
         let pending_s3 = exchange.get_pending_order_list(SYMBOL).await.unwrap();
         position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
 
-        let upnl_s3 = (110.83 - avg_long) * q_long;
-        let equity_s3 = cash_s2 + margin_s2 + upnl_s3;
+        // 计算平多开空后的现金与保证金
+        let close_long_value = q_long * p_trigger_reverse;
+        let close_long_profit = close_long_value - (q_long * avg_long);
+        let fee_reverse = q_reverse_order * p_trigger_reverse * md.taker_fee;
+        let margin_short = q_short * p_trigger_reverse / 10.0;
 
-        // 条件单触发后立即撮合，平多开空（现在在 Step 3 完成）
+        let cash_s3 = cash_s2 + margin_long + close_long_profit - margin_short - fee_reverse;
+        let upnl_s3 = (p_trigger_reverse - 110.83) * q_short; // 当前K线收盘110.83
+        let equity_s3 = cash_s3 + margin_short + upnl_s3;
+
         assert_eq!(trigger_reverse_s3.status, Status::Filled);
         assert_eq!(trigger_limit_s3.status, Status::Submitted);
-        assert_eq!(position.side, Side::Buy);
+        assert_eq!(position.side, Side::Sell);
         assert_eq!(position.leverage, 10);
-        assert_snap_eq(position.quantity, q_long);
-        assert_snap_eq(position.margin, margin_s2);
+        assert_snap_eq(position.open_avg_price, p_trigger_reverse);
+        assert_snap_eq(position.quantity, q_short);
+        assert_snap_eq(position.margin, margin_short);
         assert_snap_eq(position.profit, upnl_s3);
-        assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s2);
+        assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s3);
         assert_snap_eq(exchange.get_equity().await.unwrap(), equity_s3);
-        assert_eq!(pending_s3.len(), 3);
+        assert_eq!(pending_s3.len(), 2);
         assert!(pending_s3.iter().any(|o| o.kind == Kind::Liquidation));
-        assert!(pending_s3.iter().any(|o| o.kind == Kind::Market));
+        assert!(pending_s3.iter().any(|o| o.kind != Kind::Market));
         assert!(pending_s3.iter().any(|o| o.kind == Kind::Trigger));
 
-        // Step 4: Market 成交，先平多再反向开空。
+        // ---------- Step 4: 下一根K线，更新未实现盈亏，条件限价单尚未触发 ----------
         exchange.next(SYMBOL, Level::Minute1).await.unwrap();
 
-        let fee_reverse_full = p_reverse_open * q_reverse_order * md.taker_fee;
-        let close_profit_long = (p_reverse_open - avg_long) * q_long;
-        let margin_short_s4 = p_reverse_open * q_short / 10.0;
-        let cash_s4 = cash_s2 - fee_reverse_full + margin_s2 + close_profit_long - margin_short_s4;
-        let upnl_s4 = (p_reverse_open - 108.0) * q_short;
-        let equity_s4 = cash_s4 + margin_short_s4 + upnl_s4;
-
+        let trigger_limit_s4 = exchange
+            .get_order(&id_trigger_limit)
+            .await
+            .unwrap()
+            .unwrap();
         let pending_s4 = exchange.get_pending_order_list(SYMBOL).await.unwrap();
         let history_s4 = exchange.get_history_position_list(SYMBOL).await.unwrap();
         position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
 
+        let current_price_s4 = 108.00; // K线4收盘价
+        let upnl_s4 = (p_trigger_reverse - current_price_s4) * q_short;
+        let equity_s4 = cash_s3 + margin_short + upnl_s4;
+
+        println!("position.quantity: {}", position.quantity);
+
+        assert_eq!(trigger_limit_s4.status, Status::Submitted); // 尚未触发
         assert_eq!(position.side, Side::Sell);
         assert_eq!(position.leverage, 10);
-        assert_snap_eq(position.open_avg_price, p_reverse_open);
+        assert_snap_eq(position.open_avg_price, p_trigger_reverse);
         assert_snap_eq(position.quantity, q_short);
-        assert_snap_eq(position.margin, margin_short_s4);
+        assert_snap_eq(position.margin, margin_short);
         assert_snap_eq(position.profit, upnl_s4);
-        assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s4);
+        assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s3);
         assert_snap_eq(exchange.get_equity().await.unwrap(), equity_s4);
         assert_eq!(history_s4.len(), 1);
         assert_eq!(history_s4[0].side, Side::Buy);
@@ -3872,7 +4173,7 @@ mod tests {
         assert!(pending_s4.iter().any(|o| o.kind == Kind::Liquidation));
         assert!(pending_s4.iter().any(|o| o.kind == Kind::Trigger));
 
-        // Step 5: 条件限价触发（转 Limit），空仓仍未变化。
+        // ---------- Step 5: 条件限价单触发，转为限价单并冻结保证金 ----------
         exchange.next(SYMBOL, Level::Minute1).await.unwrap();
 
         let trigger_limit_s5 = exchange
@@ -3883,15 +4184,22 @@ mod tests {
         let pending_s5 = exchange.get_pending_order_list(SYMBOL).await.unwrap();
         position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
 
-        let upnl_s5 = (p_reverse_open - 103.10) * q_short;
-        let freeze_trigger_limit = 103.2 * q_trigger_limit_close / 10.0;
-        let cash_s5 = cash_s4 - freeze_trigger_limit;
-        let equity_s5 = cash_s5 + margin_short_s4 + upnl_s5 + freeze_trigger_limit;
+        let freeze_margin = p_trigger_limit * q_trigger_limit_close / 10.0;
+        let cash_s5 = cash_s3 - freeze_margin;
+        let upnl_s5 = (p_trigger_reverse - 103.10) * q_short;
+        let equity_s5 = cash_s5 + margin_short + upnl_s5 + freeze_margin;
+        let margin_short = p_trigger_limit * (q_short - q_trigger_limit_close) / 10.0;
 
-        assert_eq!(trigger_limit_s5.status, Status::Filled);
+        println!("position.quantity: {}", position.quantity);
+        println!(
+            "q_short - q_trigger_limit_close: {}",
+            q_short - q_trigger_limit_close
+        );
+
+        assert_eq!(trigger_limit_s5.status, Status::Filled); // 触发单转为限价单
         assert_eq!(position.side, Side::Sell);
-        assert_snap_eq(position.quantity, q_short);
-        assert_snap_eq(position.margin, margin_short_s4);
+        assert_snap_eq(position.quantity, q_short - q_trigger_limit_close);
+        assert_snap_eq(position.margin, margin_short);
         assert_snap_eq(position.profit, upnl_s5);
         assert_snap_eq(exchange.get_cash().await.unwrap(), cash_s5);
         assert_snap_eq(exchange.get_equity().await.unwrap(), equity_s5);
@@ -3899,7 +4207,7 @@ mod tests {
         assert!(pending_s5.iter().any(|o| o.kind == Kind::Liquidation));
         assert!(pending_s5.iter().any(|o| o.kind == Kind::Limit));
 
-        // Step 6: 触发后的限价单成交，部分平空。
+        // ---------- Step 6: 限价单成交，部分平空 ----------
         exchange.next(SYMBOL, Level::Minute1).await.unwrap();
 
         let converted_limit = exchange
@@ -3915,19 +4223,19 @@ mod tests {
             })
             .unwrap();
 
-        let close_margin_s6 = margin_short_s4 * (q_trigger_limit_close / q_short);
-        let close_profit_s6 = (p_reverse_open - p_trigger_limit_close) * q_trigger_limit_close;
-        let close_fee_s6 = p_trigger_limit_close * q_trigger_limit_close * md.maker_fee;
-        let cash_s6 = cash_s4 - close_fee_s6 + close_margin_s6 + close_profit_s6;
-        let margin_s6 = margin_short_s4 - close_margin_s6;
-        let upnl_s6 = (p_reverse_open - 99.80) * q_short_left;
+        let close_margin = margin_short * (q_trigger_limit_close / q_short);
+        let close_profit = (p_trigger_reverse - p_trigger_limit) * q_trigger_limit_close;
+        let close_fee = p_trigger_limit * q_trigger_limit_close * md.maker_fee;
+        let cash_s6 = cash_s5 - close_fee + close_margin + close_profit;
+        let margin_s6 = margin_short - close_margin;
+        let upnl_s6 = (p_trigger_reverse - 99.80) * q_short_left; // K线6收盘99.80
         let equity_s6 = cash_s6 + margin_s6 + upnl_s6;
 
         let pending_s6 = exchange.get_pending_order_list(SYMBOL).await.unwrap();
         position = exchange.get_position(SYMBOL).await.unwrap().unwrap();
 
         assert_eq!(converted_limit.side, Side::Buy);
-        assert_snap_eq(converted_limit.avg_price, p_trigger_limit_close);
+        assert_snap_eq(converted_limit.avg_price, p_trigger_limit);
         assert_eq!(position.side, Side::Sell);
         assert_eq!(position.leverage, 10);
         assert_snap_eq(position.quantity, q_short_left);
@@ -3938,7 +4246,8 @@ mod tests {
         assert_eq!(pending_s6.len(), 1);
         assert_eq!(pending_s6[0].kind, Kind::Liquidation);
 
-        // 带普通挂单时调杠杆应失败。
+        // ---------- 调整杠杆和保证金 ----------
+        // 带普通挂单时调杠杆应失败
         let id_block_lev = exchange
             .sell_limit_reduce_only(SYMBOL, 130.0, 0.1)
             .await
@@ -3946,7 +4255,7 @@ mod tests {
         let lev_err = exchange.set_leverage(SYMBOL, 5).await.unwrap_err();
         assert!(lev_err.to_string().contains("pending orders"));
 
-        // 撤掉普通挂单后允许调杠杆，并再做保证金调整。
+        // 撤掉普通挂单后允许调杠杆，并做保证金调整
         exchange.cancel_order(SYMBOL, &id_block_lev).await.unwrap();
         exchange.set_leverage(SYMBOL, 5).await.unwrap();
         exchange
@@ -3955,7 +4264,7 @@ mod tests {
             .unwrap();
         exchange.append_position_margin(SYMBOL, -0.2).await.unwrap();
 
-        let margin_lev5 = p_reverse_open * q_short_left / 5.0;
+        let margin_lev5 = p_trigger_reverse * q_short_left / 5.0;
         let cash_lev5 = cash_s6 - (margin_lev5 - margin_s6);
         let margin_lev5_adj = margin_lev5 + 0.333 - 0.2;
         let cash_lev5_adj = cash_lev5 - 0.333 + 0.2;
@@ -3965,13 +4274,12 @@ mod tests {
         assert_snap_eq(position_after_adj.margin, margin_lev5_adj);
         assert_snap_eq(exchange.get_cash().await.unwrap(), cash_lev5_adj);
 
-        // close_all 下市价平仓单，Step7 全平并校验最终资金与历史。
+        // ---------- 市价全平 ----------
         exchange.close_all_position(SYMBOL).await.unwrap();
-
         exchange.next(SYMBOL, Level::Minute1).await.unwrap();
 
         let fee_final = p_final_close * q_short_left * md.taker_fee;
-        let profit_final = (p_reverse_open - p_final_close) * q_short_left;
+        let profit_final = (p_trigger_reverse - p_final_close) * q_short_left;
         let cash_final = cash_lev5_adj - fee_final + margin_lev5_adj + profit_final;
 
         let history_final = exchange.get_history_position_list(SYMBOL).await.unwrap();
@@ -3985,7 +4293,7 @@ mod tests {
         assert_eq!(history_final.len(), 2);
         assert_eq!(history_final[0].side, Side::Buy);
         assert_eq!(history_final[1].side, Side::Sell);
-        assert_snap_eq(history_final[1].open_avg_price, p_reverse_open);
+        assert_snap_eq(history_final[1].open_avg_price, p_trigger_reverse);
         assert_snap_eq(history_final[1].close_avg_price, p_final_close);
         assert_snap_eq(history_final[1].close_quantity, q_short);
         assert_snap_eq(history_final[1].max_quantity, q_short);
