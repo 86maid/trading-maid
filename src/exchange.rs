@@ -24,7 +24,8 @@ where
 
     async fn close_all_position(&self, symbol: &str) -> anyhow::Result<()>;
 
-    async fn get_history_position_list(&self, symbol: &str) -> anyhow::Result<Vec<HistoryPosition>>;
+    async fn get_history_position_list(&self, symbol: &str)
+    -> anyhow::Result<Vec<HistoryPosition>>;
 
     async fn append_position_margin(&self, symbol: &str, margin: f64) -> anyhow::Result<()>;
 
