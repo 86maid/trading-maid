@@ -569,7 +569,7 @@ impl LocalExchangeInner {
 
                     let min_size = self.data_source.metadata.min_size;
 
-                    if remain_quantity > min_size {
+                    if remain_quantity.snap_lt(min_size, 1e-8) {
                         // 反向开仓
                         let reverse_quantity = remain_quantity.abs();
                         let reverse_margin = calc_initial_margin(
@@ -637,7 +637,7 @@ impl LocalExchangeInner {
                                 open_time: self.kline.time,
                             },
                         });
-                    } else if remain_quantity.abs() <= min_size {
+                    } else if remain_quantity.abs().snap_lt(min_size, 1e-8) {
                         // 全部平仓
                         // 对手方向普通单若未形成新仓，整单冻结应全额返还。
                         self.cash += order_ref.freeze_margin;

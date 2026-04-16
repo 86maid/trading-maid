@@ -78,7 +78,7 @@ Or in `Cargo.toml`
 
 ```toml
 [dependencies]
-trading-maid = "1.0.1"
+trading-maid = "1.0.2"
 ```
 
 ### 🛠️ Usage
