@@ -886,7 +886,13 @@ function scrollChartToTime(time) {
   }
 
   window.series.priceScale().applyOptions({ autoScale: true })
-  window.volumeSeries.priceScale().applyOptions({ autoScale: true })
+  // window.volumeSeries.priceScale().applyOptions({ autoScale: true })
+  // window.volumeSeries.priceScale().applyOptions({
+  //   scaleMargins: {
+  //     top: 0.8,
+  //     bottom: 0,
+  //   },
+  // })
 
   const visibleRange = chart.timeScale().getVisibleRange()
 
