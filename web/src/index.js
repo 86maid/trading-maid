@@ -869,6 +869,8 @@ function renderHistoryPositionList() {
     })
   }
 
+  const s = (a, b) => (locale == "zh-CN" ? a : b)
+
   if (window.historyPositionList.length == 0) {
     container.innerHTML = `<div class="summary-note">${s("暂无历史仓位", "No history positions to display")}</div>`
   }
@@ -1018,8 +1020,7 @@ function flashVerticalLineAtTime(time) {
 
 function renderOrderList(symbol) {
   const container = document.querySelector("#history-order-container")
-  const isZh = (locale || "").toLowerCase().startsWith("zh")
-  const s = (a, b) => (isZh ? a : b)
+  const s = (a, b) => (locale == "zh-CN" ? a : b)
 
   if (!container) {
     return
