@@ -8791,7 +8791,7 @@ if (dataSourceList.length != 0) {
 		const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue("--sell-color");
 		const volumeData = window.dataSource.data.map((item) => ({
 			time: item.time,
-			value: item.volume || 0,
+			value: Number(item.volume) || 0,
 			color: item.close > item.open ? buyColor : sellColor
 		}));
 		window.volumeSeries.setData(volumeData);
@@ -9246,7 +9246,7 @@ function initSwitches() {
 			const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue("--sell-color");
 			const volumeData = window.dataSource.data.map((item) => ({
 				time: item.time,
-				value: item.volume || 0,
+				value: Number(item.volume) || 0,
 				color: item.close > item.open ? buyColor : sellColor
 			}));
 			window.volumeSeries.setData(volumeData);
@@ -9283,7 +9283,7 @@ createDropdownList("#symbol-dropdown", symbolList, (value) => {
 		const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue("--sell-color");
 		const volumeData = window.dataSource.data.map((item) => ({
 			time: item.time,
-			value: item.volume || 0,
+			value: Number(item.volume) || 0,
 			color: item.close > item.open ? buyColor : sellColor
 		}));
 		window.volumeSeries.setData(volumeData);
@@ -9306,7 +9306,7 @@ createDropdownList("#level-dropdown", levelList, (value) => {
 		const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue("--sell-color");
 		const volumeData = window.dataSource.data.map((item) => ({
 			time: item.time,
-			value: item.volume || 0,
+			value: Number(item.volume) || 0,
 			color: item.close > item.open ? buyColor : sellColor
 		}));
 		window.volumeSeries.setData(volumeData);
@@ -9324,7 +9324,7 @@ createDropdownList("#theme-dropdown", themeList, (value) => {
 		const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue("--sell-color");
 		const volumeData = dataSource.data.map((item) => ({
 			time: item.time,
-			value: item.volume || 0,
+			value: Number(item.volume) || 0,
 			color: item.close > item.open ? buyColor : sellColor
 		}));
 		window.volumeSeries.setData(volumeData);
@@ -9349,7 +9349,7 @@ window.addEventListener("click", function(event) {
 });
 //#endregion
 
-//# sourceMappingURL=index-w0AnfVyN.js.map</script>
+//# sourceMappingURL=index-GlQsgMMX.js.map</script>
 </head>
 
 <body class="theme-dark">

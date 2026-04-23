@@ -552,7 +552,7 @@ if (dataSourceList.length != 0) {
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
     const volumeData = window.dataSource.data.map(item => ({
       time: item.time,
-      value: item.volume || 0,
+      value: Number(item.volume) || 0,
       color: item.close > item.open ? buyColor : sellColor
     }))
 
@@ -1167,6 +1167,7 @@ export function updateHistoryPosition() {
 
   if (window.dataSource && window.series) {
     const markerSymbol = window.dataSource.metadata.symbol
+    window.series.setMarkers([])
     window.series.setMarkers(window.historyPositionList.filter(v => v.symbol == markerSymbol).flatMap(v => createMaker(v)))
   }
 
@@ -1252,7 +1253,7 @@ function initSwitches() {
         const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
         const volumeData = window.dataSource.data.map(item => ({
           time: item.time,
-          value: item.volume || 0,
+          value: Number(item.volume) || 0,
           color: item.close > item.open ? buyColor : sellColor
         }))
 
@@ -1308,7 +1309,7 @@ createDropdownList("#symbol-dropdown", symbolList, (value) => {
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
     const volumeData = window.dataSource.data.map(item => ({
       time: item.time,
-      value: item.volume || 0,
+      value: Number(item.volume) || 0,
       color: item.close > item.open ? buyColor : sellColor
     }))
 
@@ -1345,7 +1346,7 @@ createDropdownList("#level-dropdown", levelList, (value) => {
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
     const volumeData = window.dataSource.data.map(item => ({
       time: item.time,
-      value: item.volume || 0,
+      value: Number(item.volume) || 0,
       color: item.close > item.open ? buyColor : sellColor
     }))
 
@@ -1369,7 +1370,7 @@ createDropdownList("#theme-dropdown", themeList, (value) => {
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')
     const volumeData = dataSource.data.map(item => ({
       time: item.time,
-      value: item.volume || 0,
+      value: Number(item.volume) || 0,
       color: item.close > item.open ? buyColor : sellColor
     }))
 
