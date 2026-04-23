@@ -1320,7 +1320,7 @@ impl Exchange for LocalExchange {
 //     }
 
 //     fn test_exchange() -> LocalExchange {
-//         test_exchange_with(default_metadata(), gen_kline_range())
+//         ExchangeWrapper::new(test_exchange_with(default_metadata(), gen_kline_range()))
 //     }
 
 //     // 验证市价单在下一根 K 线按开盘价成交并生成仓位。

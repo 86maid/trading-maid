@@ -155,123 +155,315 @@ impl Index<RangeToInclusive<usize>> for Series {
     }
 }
 
-impl PartialEq<i32> for &Series {
-    fn eq(&self, other: &i32) -> bool {
-        self.index(0) == other
-    }
-}
-
-impl PartialEq<u32> for &Series {
-    fn eq(&self, other: &u32) -> bool {
-        self.index(0) == other
-    }
-}
-
-impl PartialEq<i64> for &Series {
-    fn eq(&self, other: &i64) -> bool {
-        self.index(0) == other
-    }
-}
-
-impl PartialEq<u64> for &Series {
-    fn eq(&self, other: &u64) -> bool {
-        self.index(0) == other
-    }
-}
-
-impl PartialEq<Decimal> for &Series {
-    fn eq(&self, other: &Decimal) -> bool {
-        self.index(0) == other
-    }
-}
-
-impl PartialEq<[Decimal]> for Series {
-    fn eq(&self, other: &[Decimal]) -> bool {
-        &self.inner == other
-    }
-}
-
-impl PartialEq for &Series {
-    fn eq(&self, other: &Self) -> bool {
-        self.index(0) == other.index(0)
-    }
-}
-
-impl PartialOrd<i64> for &Series {
-    fn partial_cmp(&self, other: &i64) -> Option<Ordering> {
-        self.index(0).partial_cmp(other)
-    }
-}
-
-impl PartialOrd<Decimal> for &Series {
-    fn partial_cmp(&self, other: &Decimal) -> Option<Ordering> {
-        self.index(0).partial_cmp(other)
-    }
-}
-
-impl PartialOrd<[Decimal]> for Series {
-    fn partial_cmp(&self, other: &[Decimal]) -> Option<Ordering> {
-        self.inner.partial_cmp(other)
-    }
-}
-
-impl PartialOrd for &Series {
-    fn partial_cmp(&self, other: &&Series) -> Option<Ordering> {
-        self.index(0).partial_cmp(other.index(0))
-    }
-}
-
-overload!((a: &Series) + (b: i64) -> Decimal { a[0] + b });
-
-overload!((a: &Series) - (b: i64) -> Decimal { a[0] - b });
-
-overload!((a: &Series) * (b: i64) -> Decimal { a[0] * b });
-
-overload!((a: &Series) / (b: i64) -> Decimal { a[0] / b });
-
-overload!((a: &Series) % (b: i64) -> Decimal { a[0] % b });
-
-overload!((a: &Series) + (b: f64) -> Decimal { a[0] + b });
-
-overload!((a: &Series) - (b: f64) -> Decimal { a[0] - b });
-
-overload!((a: &Series) * (b: f64) -> Decimal { a[0] * b });
-
-overload!((a: &Series) / (b: f64) -> Decimal { a[0] / b });
-
-overload!((a: &Series) % (b: f64) -> Decimal { a[0] % b });
-
-overload!((a: i64) + (b: &Series) -> Decimal { a + b[0] });
-
-overload!((a: i64) - (b: &Series) -> Decimal { a - b[0] });
-
-overload!((a: i64) * (b: &Series) -> Decimal { a * b[0] });
-
-overload!((a: i64) / (b: &Series) -> Decimal { a / b[0] });
-
-overload!((a: i64) % (b: &Series) -> Decimal { a % b[0] });
-
-overload!((a: f64) + (b: &Series) -> Decimal { a + b[0] });
-
-overload!((a: f64) - (b: &Series) -> Decimal { a - b[0] });
-
-overload!((a: f64) * (b: &Series) -> Decimal { a * b[0] });
-
-overload!((a: f64) / (b: &Series) -> Decimal { a / b[0] });
-
-overload!((a: f64) % (b: &Series) -> Decimal { a % b[0] });
-
 overload!((a: &Series) + (b: &Series) -> Decimal { a[0] + b[0] });
-
 overload!((a: &Series) - (b: &Series) -> Decimal { a[0] - b[0] });
-
 overload!((a: &Series) * (b: &Series) -> Decimal { a[0] * b[0] });
-
 overload!((a: &Series) / (b: &Series) -> Decimal { a[0] / b[0] });
-
 overload!((a: &Series) % (b: &Series) -> Decimal { a[0] % b[0] });
+overload!(- (a: &Series) -> Decimal { -a[0] });
 
-overload!(- (a: &Series) -> Decimal { -a[0]  });
+macro_rules! overload_all_op_right {
+    ($a:ty, $b:ty) => {
+      overload!((a: $a) + (b: $b) -> Decimal { a[0] + Decimal::try_from(b).unwrap() });
+      overload!((a: $a) - (b: $b) -> Decimal { a[0] - Decimal::try_from(b).unwrap() });
+      overload!((a: $a) * (b: $b) -> Decimal { a[0] * Decimal::try_from(b).unwrap() });
+      overload!((a: $a) / (b: $b) -> Decimal { a[0] / Decimal::try_from(b).unwrap() });
+      overload!((a: $a) % (b: $b) -> Decimal { a[0] % Decimal::try_from(b).unwrap() });
+    };
+}
+
+macro_rules! overload_all_op_left {
+    ($a:ty, $b:ty) => {
+        overload!((a: $a) + (b: $b) -> Decimal { Decimal::try_from(a).unwrap() + b[0] });
+        overload!((a: $a) - (b: $b) -> Decimal { Decimal::try_from(a).unwrap() - b[0] });
+        overload!((a: $a) * (b: $b) -> Decimal { Decimal::try_from(a).unwrap() * b[0] });
+        overload!((a: $a) / (b: $b) -> Decimal { Decimal::try_from(a).unwrap() / b[0] });
+        overload!((a: $a) % (b: $b) -> Decimal { Decimal::try_from(a).unwrap() % b[0] });
+    };
+}
+
+overload_all_op_right!(&Series, &str);
+overload_all_op_right!(&Series, String);
+overload_all_op_right!(&Series, isize);
+overload_all_op_right!(&Series, i8);
+overload_all_op_right!(&Series, i16);
+overload_all_op_right!(&Series, i32);
+overload_all_op_right!(&Series, i64);
+overload_all_op_right!(&Series, i128);
+overload_all_op_right!(&Series, usize);
+overload_all_op_right!(&Series, u8);
+overload_all_op_right!(&Series, u16);
+overload_all_op_right!(&Series, u32);
+overload_all_op_right!(&Series, u64);
+overload_all_op_right!(&Series, u128);
+overload_all_op_right!(&Series, f32);
+overload_all_op_right!(&Series, f64);
+overload_all_op_right!(&Series, Decimal);
+
+overload!((a: &str) + (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() + b[0] });
+overload!((a: &str) - (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() - b[0] });
+overload!((a: &str) * (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() * b[0] });
+overload!((a: &str) / (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() / b[0] });
+overload!((a: &str) % (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() % b[0] });
+overload!((a: String) + (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() + b[0] });
+overload!((a: String) - (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() - b[0] });
+overload!((a: String) * (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() * b[0] });
+overload!((a: String) / (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() / b[0] });
+overload!((a: String) % (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() % b[0] });
+overload_all_op_left!(isize, &Series);
+overload_all_op_left!(i8, &Series);
+overload_all_op_left!(i16, &Series);
+overload_all_op_left!(i32, &Series);
+overload_all_op_left!(i64, &Series);
+overload_all_op_left!(i128, &Series);
+overload_all_op_left!(usize, &Series);
+overload_all_op_left!(u8, &Series);
+overload_all_op_left!(u16, &Series);
+overload_all_op_left!(u32, &Series);
+overload_all_op_left!(u64, &Series);
+overload_all_op_left!(u128, &Series);
+overload_all_op_left!(f32, &Series);
+overload_all_op_left!(f64, &Series);
+overload_all_op_left!(Decimal, &Series);
+
+macro_rules! impl_decimal_eq {
+    ($type:ty) => {
+        impl PartialEq<$type> for &Series {
+            #[track_caller]
+            fn eq(&self, other: &$type) -> bool {
+                self[0] == Decimal::try_from(*other).unwrap()
+            }
+        }
+
+        impl PartialEq<&Series> for $type {
+            #[track_caller]
+            fn eq(&self, other: &&Series) -> bool {
+                other[0] == *self
+            }
+        }
+    };
+}
+
+impl PartialEq<str> for &Series {
+    #[track_caller]
+    fn eq(&self, other: &str) -> bool {
+        self[0] == other
+    }
+}
+
+impl PartialEq<&str> for &Series {
+    #[track_caller]
+    fn eq(&self, other: &&str) -> bool {
+        self[0] == *other
+    }
+}
+
+impl PartialEq<String> for &Series {
+    #[track_caller]
+    fn eq(&self, other: &String) -> bool {
+        self[0] == other
+    }
+}
+
+impl PartialEq<&String> for &Series {
+    #[track_caller]
+    fn eq(&self, other: &&String) -> bool {
+        self[0] == *other
+    }
+}
+
+impl<const N: usize> PartialEq<[Decimal; N]> for &Series {
+    #[track_caller]
+    fn eq(&self, other: &[Decimal; N]) -> bool {
+        self.inner == *other
+    }
+}
+
+impl<const N: usize> PartialEq<&[Decimal; N]> for &Series {
+    #[track_caller]
+    fn eq(&self, other: &&[Decimal; N]) -> bool {
+        self.inner == **other
+    }
+}
+
+impl PartialEq<[Decimal]> for &Series {
+    #[track_caller]
+    fn eq(&self, other: &[Decimal]) -> bool {
+        self.inner == *other
+    }
+}
+
+impl PartialEq<&[Decimal]> for &Series {
+    #[track_caller]
+    fn eq(&self, other: &&[Decimal]) -> bool {
+        self.inner == **other
+    }
+}
+
+impl<const N: usize> PartialEq<&Series> for [Decimal; N] {
+    #[track_caller]
+    fn eq(&self, other: &&Series) -> bool {
+        other.inner == *self
+    }
+}
+
+impl<const N: usize> PartialEq<&Series> for &[Decimal; N] {
+    #[track_caller]
+    fn eq(&self, other: &&Series) -> bool {
+        other.inner == **self
+    }
+}
+
+impl PartialEq<&Series> for [Decimal] {
+    #[track_caller]
+    fn eq(&self, other: &&Series) -> bool {
+        other.inner == *self
+    }
+}
+
+impl PartialEq<&Series> for &[Decimal] {
+    #[track_caller]
+    fn eq(&self, other: &&Series) -> bool {
+        other.inner == **self
+    }
+}
+
+impl PartialEq<&Series> for str {
+    #[track_caller]
+    fn eq(&self, other: &&Series) -> bool {
+        *other == *self
+    }
+}
+
+impl PartialEq<&Series> for &str {
+    #[track_caller]
+    fn eq(&self, other: &&Series) -> bool {
+        *other == *self
+    }
+}
+
+impl PartialEq<&Series> for String {
+    #[track_caller]
+    fn eq(&self, other: &&Series) -> bool {
+        *other == *self
+    }
+}
+
+impl PartialEq<&Series> for &String {
+    #[track_caller]
+    fn eq(&self, other: &&Series) -> bool {
+        *other == *self
+    }
+}
+
+impl PartialEq<&Series> for &Series {
+    #[track_caller]
+    fn eq(&self, other: &&Series) -> bool {
+        other[0] == self[0]
+    }
+}
+
+impl_decimal_eq!(isize);
+impl_decimal_eq!(i8);
+impl_decimal_eq!(i16);
+impl_decimal_eq!(i32);
+impl_decimal_eq!(i64);
+impl_decimal_eq!(i128);
+impl_decimal_eq!(usize);
+impl_decimal_eq!(u8);
+impl_decimal_eq!(u16);
+impl_decimal_eq!(u32);
+impl_decimal_eq!(u64);
+impl_decimal_eq!(u128);
+impl_decimal_eq!(f32);
+impl_decimal_eq!(f64);
+impl_decimal_eq!(Decimal);
+
+macro_rules! impl_decimal_ord {
+    ($type:ty) => {
+        impl PartialOrd<$type> for &Series {
+            fn partial_cmp(&self, other: &$type) -> Option<Ordering> {
+                self[0].partial_cmp(&Decimal::try_from(*other).ok()?)
+            }
+        }
+
+        impl PartialOrd<&Series> for $type {
+            fn partial_cmp(&self, other: &&Series) -> Option<Ordering> {
+                Decimal::try_from(*self).ok()?.partial_cmp(&other[0])
+            }
+        }
+    };
+}
+
+impl PartialOrd<str> for &Series {
+    fn partial_cmp(&self, other: &str) -> Option<core::cmp::Ordering> {
+        self[0].partial_cmp(&Decimal::try_from(other).ok()?)
+    }
+}
+
+impl PartialOrd<&str> for &Series {
+    fn partial_cmp(&self, other: &&str) -> Option<core::cmp::Ordering> {
+        self[0].partial_cmp(&Decimal::try_from(*other).ok()?)
+    }
+}
+
+impl PartialOrd<String> for &Series {
+    fn partial_cmp(&self, other: &String) -> Option<core::cmp::Ordering> {
+        self[0].partial_cmp(&Decimal::try_from(other).ok()?)
+    }
+}
+
+impl PartialOrd<&String> for &Series {
+    fn partial_cmp(&self, other: &&String) -> Option<core::cmp::Ordering> {
+        self[0].partial_cmp(&Decimal::try_from(*other).ok()?)
+    }
+}
+
+impl PartialOrd<&Series> for str {
+    fn partial_cmp(&self, other: &&Series) -> Option<core::cmp::Ordering> {
+        other[0].partial_cmp(self)
+    }
+}
+
+impl PartialOrd<&Series> for &str {
+    fn partial_cmp(&self, other: &&Series) -> Option<core::cmp::Ordering> {
+        other[0].partial_cmp(self)
+    }
+}
+
+impl PartialOrd<&Series> for String {
+    fn partial_cmp(&self, other: &&Series) -> Option<core::cmp::Ordering> {
+        other[0].partial_cmp(self)
+    }
+}
+
+impl PartialOrd<&Series> for &String {
+    fn partial_cmp(&self, other: &&Series) -> Option<core::cmp::Ordering> {
+        other[0].partial_cmp(self)
+    }
+}
+
+impl PartialOrd<&Series> for &Series {
+    fn partial_cmp(&self, other: &&Series) -> Option<core::cmp::Ordering> {
+        other[0].partial_cmp(self)
+    }
+}
+
+impl_decimal_ord!(isize);
+impl_decimal_ord!(i8);
+impl_decimal_ord!(i16);
+impl_decimal_ord!(i32);
+impl_decimal_ord!(i64);
+impl_decimal_ord!(i128);
+impl_decimal_ord!(usize);
+impl_decimal_ord!(u8);
+impl_decimal_ord!(u16);
+impl_decimal_ord!(u32);
+impl_decimal_ord!(u64);
+impl_decimal_ord!(u128);
+impl_decimal_ord!(f32);
+impl_decimal_ord!(f64);
+impl_decimal_ord!(Decimal);
 
 /// A data series with reverse indexing.
 ///
@@ -445,9 +637,51 @@ impl PartialEq<u64> for &TimeSeries {
     }
 }
 
+impl<const N: usize> PartialEq<[u64; N]> for TimeSeries {
+    fn eq(&self, other: &[u64; N]) -> bool {
+        &self.inner == other
+    }
+}
+
+impl<const N: usize> PartialEq<&[u64; N]> for TimeSeries {
+    fn eq(&self, other: &&[u64; N]) -> bool {
+        &self.inner == *other
+    }
+}
+
 impl PartialEq<[u64]> for TimeSeries {
     fn eq(&self, other: &[u64]) -> bool {
         &self.inner == other
+    }
+}
+
+impl PartialEq<&[u64]> for TimeSeries {
+    fn eq(&self, other: &&[u64]) -> bool {
+        &self.inner == *other
+    }
+}
+
+impl<const N: usize> PartialEq<TimeSeries> for [u64; N] {
+    fn eq(&self, other: &TimeSeries) -> bool {
+        other == self
+    }
+}
+
+impl<const N: usize> PartialEq<TimeSeries> for &[u64; N] {
+    fn eq(&self, other: &TimeSeries) -> bool {
+        other == *self
+    }
+}
+
+impl PartialEq<TimeSeries> for [u64] {
+    fn eq(&self, other: &TimeSeries) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<TimeSeries> for &[u64] {
+    fn eq(&self, other: &TimeSeries) -> bool {
+        other == *self
     }
 }
 
@@ -466,12 +700,6 @@ impl PartialOrd<i64> for &TimeSeries {
 impl PartialOrd<u64> for &TimeSeries {
     fn partial_cmp(&self, other: &u64) -> Option<Ordering> {
         self.index(0).partial_cmp(other)
-    }
-}
-
-impl PartialOrd<[u64]> for TimeSeries {
-    fn partial_cmp(&self, other: &[u64]) -> Option<Ordering> {
-        self.inner.partial_cmp(other)
     }
 }
 
@@ -501,6 +729,26 @@ overload!((a: i64) / (b: &TimeSeries) -> u64 { a as u64 / b[0] });
 
 overload!((a: i64) % (b: &TimeSeries) -> u64 { a as u64 % b[0] });
 
+overload!((a: &TimeSeries) + (b: u64) -> u64 { a[0] + b as u64 });
+
+overload!((a: &TimeSeries) - (b: u64) -> u64 { a[0] - b as u64 });
+
+overload!((a: &TimeSeries) * (b: u64) -> u64 { a[0] * b as u64 });
+
+overload!((a: &TimeSeries) / (b: u64) -> u64 { a[0] / b as u64 });
+
+overload!((a: &TimeSeries) % (b: u64) -> u64 { a[0] % b as u64 });
+
+overload!((a: u64) + (b: &TimeSeries) -> u64 { a as u64 + b[0] });
+
+overload!((a: u64) - (b: &TimeSeries) -> u64 { a as u64 - b[0] });
+
+overload!((a: u64) * (b: &TimeSeries) -> u64 { a as u64 * b[0] });
+
+overload!((a: u64) / (b: &TimeSeries) -> u64 { a as u64 / b[0] });
+
+overload!((a: u64) % (b: &TimeSeries) -> u64 { a as u64 % b[0] });
+
 overload!((a: &TimeSeries) + (b: &TimeSeries) -> u64 { a[0] + b[0] });
 
 overload!((a: &TimeSeries) - (b: &TimeSeries) -> u64 { a[0] - b[0] });
@@ -510,3 +758,17 @@ overload!((a: &TimeSeries) * (b: &TimeSeries) -> u64 { a[0] * b[0] });
 overload!((a: &TimeSeries) / (b: &TimeSeries) -> u64 { a[0] / b[0] });
 
 overload!((a: &TimeSeries) % (b: &TimeSeries) -> u64 { a[0] % b[0] });
+
+#[test]
+fn ff() {
+    let a = [Decimal::from(1)];
+    let z = Series::new(&a);
+    let y = [Decimal::from(1)];
+    let d = &y;
+    let f = d.as_slice();
+
+    z == y;
+    z == d;
+    z == *f;
+    z == f;
+}

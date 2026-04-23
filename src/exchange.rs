@@ -309,6 +309,10 @@ impl ExchangeWrapper {
         Self(exchange)
     }
 
+    pub(crate) async fn next(&self, symbol: &str, level: Level) -> anyhow::Result<Option<KLine>> {
+        self.0.next(symbol, level).await
+    }
+
     pub async fn place_order(&self, order: Order) -> anyhow::Result<String> {
         self.0.place_order(order).await
     }
