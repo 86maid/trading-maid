@@ -1,6 +1,7 @@
 use crate::{
     context::Context,
     data::{KLine, KLineBuffer, Level},
+    prelude::ExchangeWrapper,
     series::{Series, TimeSeries},
     util::{get_last_time, resample},
 };
@@ -67,6 +68,7 @@ where
     pub async fn run(&mut self, symbol: impl AsRef<str>, level: Level) -> anyhow::Result<()> {
         let symbol = symbol.as_ref();
         let metadata = self.exchange.get_metadata(symbol).await?;
+        let exchange = ExchangeWrapper::new(self.exchange.clone());
 
         if metadata.level.is_valid_sampling_target(level) {
             let mut min_level_buffer = Vec::new();
@@ -82,7 +84,7 @@ where
                             min_level_buffer.clear();
 
                             let context = Context {
-                                exchange: &(*self.exchange),
+                                exchange: &exchange,
                                 time: TimeSeries::new(&max_level_buffer.time),
                                 open: Series::new(&max_level_buffer.open),
                                 high: Series::new(&max_level_buffer.high),

@@ -1,4 +1,5 @@
 use anyhow::{Context, bail};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use std::{
@@ -130,11 +131,11 @@ impl FromStr for Level {
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct KLine {
     pub time: u64,
-    pub open: f64,
-    pub high: f64,
-    pub low: f64,
-    pub close: f64,
-    pub volume: f64,
+    pub open: Decimal,
+    pub high: Decimal,
+    pub low: Decimal,
+    pub close: Decimal,
+    pub volume: Decimal,
 }
 
 #[serde_as]
@@ -143,12 +144,12 @@ pub struct Metadata {
     pub symbol: String,
     #[serde_as(as = "DisplayFromStr")]
     pub level: Level,
-    pub min_size: f64,
-    pub min_notional: f64,
-    pub tick_size: f64,
-    pub maker_fee: f64,
-    pub taker_fee: f64,
-    pub maintenance: f64,
+    pub min_size: Decimal,
+    pub min_notional: Decimal,
+    pub tick_size: Decimal,
+    pub maker_fee: Decimal,
+    pub taker_fee: Decimal,
+    pub maintenance: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -483,11 +484,11 @@ impl<'de> Deserialize<'de> for DataSource {
 #[derive(Debug, Clone)]
 pub struct KLineBuffer<const N: usize> {
     pub time: Vec<u64>,
-    pub open: Vec<f64>,
-    pub high: Vec<f64>,
-    pub low: Vec<f64>,
-    pub close: Vec<f64>,
-    pub volume: Vec<f64>,
+    pub open: Vec<Decimal>,
+    pub high: Vec<Decimal>,
+    pub low: Vec<Decimal>,
+    pub close: Vec<Decimal>,
+    pub volume: Vec<Decimal>,
 }
 
 impl<const N: usize> Default for KLineBuffer<N> {
@@ -574,5 +575,38 @@ impl<const N: usize> KLineBuffer<N> {
         self.low.extend(i.clone().map(|v| v.low));
         self.close.extend(i.clone().map(|v| v.close));
         self.volume.extend(i.clone().map(|v| v.volume));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::*;
+
+    #[tokio::test]
+    async fn download_and_read() {
+        let path = get_or_download("BTCUSDT/1m", 12).await.unwrap();
+
+        DataSource::from_file_metadata(
+            path,
+            Metadata {
+                symbol: "BTCUSDT".to_string(),
+                level: Level::Minute1,
+                min_size: "0.01".parse().unwrap(),
+                min_notional: "0".parse().unwrap(),
+                tick_size: "0.1".parse().unwrap(),
+                maker_fee: "0.0002".parse().unwrap(),
+                taker_fee: "0.0005".parse().unwrap(),
+                maintenance: "0.004".parse().unwrap(),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_add() {
+        assert!(
+            Decimal::try_from(0.1).unwrap() + Decimal::try_from(0.2).unwrap()
+                == Decimal::try_from(0.3).unwrap()
+        );
     }
 }

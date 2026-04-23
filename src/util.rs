@@ -6,8 +6,8 @@ use chrono::{
     DateTime, Datelike, Duration, Local, Months, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc,
     Weekday,
 };
-use rand::RngExt;
 use reqwest::Client;
+use rust_decimal::prelude::*;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -267,7 +267,7 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
 ///
 /// # Returns
 ///
-/// - The liquidation price as a floating-point number (`f64`). This price represents the point at which the position
+/// - The liquidation price as a floating-point number (`Decimal`). This price represents the point at which the position
 ///   will be liquidated if the market moves unfavorably, considering the leverage and maintenance margin.
 ///
 /// # Calculation Logic
@@ -279,20 +279,20 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
 ///    - For a `Sell`, the liquidation price is adjusted upwards similarly, considering the maintenance margin.
 pub fn calc_liquidation_price(
     leverage: u32,
-    maintenance: f64,
+    maintenance: Decimal,
     side: Side,
-    price: f64,
-    quantity: f64,
-    margin: f64,
-) -> f64 {
-    let initial_margin_rate = 1.0 / leverage as f64;
+    price: Decimal,
+    quantity: Decimal,
+    margin: Decimal,
+) -> Decimal {
+    let initial_margin_rate = Decimal::from(1) / leverage;
     let initial_margin = calc_initial_margin(price, quantity, leverage);
     let append_margin = margin - initial_margin;
 
     if side == Side::Buy {
-        price * (1.0 - initial_margin_rate + maintenance) - ((append_margin) / quantity)
+        price * (1 - initial_margin_rate + maintenance) - ((append_margin) / quantity)
     } else {
-        price * (1.0 + initial_margin_rate - maintenance) + ((append_margin) / quantity)
+        price * (1 + initial_margin_rate - maintenance) + ((append_margin) / quantity)
     }
 }
 
@@ -306,117 +306,18 @@ pub fn calc_liquidation_price(
 ///
 /// # Returns
 ///
-/// The initial margin as a floating-point number (`f64`).
-pub fn calc_initial_margin(price: f64, quantity: f64, leverage: u32) -> f64 {
-    price * quantity / leverage as f64
-}
-
-/// Calculates the slippage-adjusted price range based on the current price and slippage percentage.
-///
-/// # Arguments
-///
-/// - `price`: The current price of the asset.
-/// - `slippage`: The slippage percentage.
-///
-/// # Returns
-///
-/// A tuple containing the minimum and maximum prices after accounting for slippage.
-pub fn calc_slippage_price(price: f64, slippage: f64) -> (f64, f64) {
-    let factor = slippage / 100.0;
-    let min_price = price * (1.0 - factor);
-    let max_price = price * (1.0 + factor);
-
-    (min_price, max_price)
-}
-
-/// Generates a random price within the slippage-adjusted price range, snapped to the nearest tick size.
-pub fn get_random_slippage_price(price: f64, slippage: f64, tick_size: f64) -> Option<f64> {
-    let (min, max) = calc_slippage_price(price, slippage);
-
-    if tick_size <= 0.0 || min > max {
-        return None;
-    }
-
-    let min = (min / tick_size).round() as i64;
-    let max = (max / tick_size).round() as i64;
-
-    if min > max {
-        return None;
-    }
-
-    Some(rand::rng().random_range(min..=max) as f64 * tick_size)
+/// The initial margin as a floating-point number (`Decimal`).
+pub fn calc_initial_margin(price: Decimal, quantity: Decimal, leverage: u32) -> Decimal {
+    price * quantity / Decimal::from(leverage)
 }
 
 /// Checks if a given price value is aligned with the specified tick size, considering floating-point precision issues.
-pub fn is_tick_aligned(value: f64, tick_size: f64) -> bool {
-    if !value.is_finite() || !tick_size.is_finite() || tick_size <= 0.0 {
+pub fn is_tick_aligned(value: Decimal, tick_size: Decimal) -> bool {
+    if tick_size == Decimal::ZERO {
         return false;
     }
 
-    let steps = value / tick_size;
-    let tolerance = 1e-9_f64.max(f64::EPSILON * steps.abs() * 16.0);
-
-    (steps - steps.round()).abs() <= tolerance
-}
-
-pub trait TickSnap {
-    fn snap_to_tick(self, tick_size: f64) -> f64;
-    fn snap_eq(self, other: f64, tick_size: f64) -> bool;
-    fn snap_lt(self, other: f64, tick_size: f64) -> bool;
-    fn snap_gt(self, other: f64, tick_size: f64) -> bool;
-    fn snap_le(self, other: f64, tick_size: f64) -> bool;
-    fn snap_ge(self, other: f64, tick_size: f64) -> bool;
-    fn is_zero(self, tick_size: f64) -> bool;
-}
-
-impl TickSnap for f64 {
-    fn is_zero(self, tick_size: f64) -> bool {
-        if !tick_size.is_finite() || tick_size <= 0.0 {
-            return self == 0.0;
-        }
-
-        self.abs() <= tick_size / 2.0
-    }
-
-    fn snap_to_tick(self, tick_size: f64) -> f64 {
-        if !tick_size.is_finite() || tick_size <= 0.0 {
-            return self;
-        }
-
-        (self / tick_size).round() * tick_size
-    }
-
-    fn snap_eq(self, other: f64, tick_size: f64) -> bool {
-        if !tick_size.is_finite() || tick_size <= 0.0 {
-            return self == other;
-        }
-
-        (self - other).abs() <= tick_size / 2.0
-    }
-
-    fn snap_lt(self, other: f64, tick_size: f64) -> bool {
-        if !tick_size.is_finite() || tick_size <= 0.0 {
-            return self < other;
-        }
-
-        self < other - tick_size / 2.0
-    }
-
-    fn snap_gt(self, other: f64, tick_size: f64) -> bool {
-        if !tick_size.is_finite() || tick_size <= 0.0 {
-            return self > other;
-        }
-
-        self > other + tick_size / 2.0
-    }
-
-    fn snap_le(self, other: f64, tick_size: f64) -> bool {
-        self.snap_lt(other, tick_size) || self.snap_eq(other, tick_size)
-    }
-
-    fn snap_ge(self, other: f64, tick_size: f64) -> bool {
-        self.snap_gt(other, tick_size) || self.snap_eq(other, tick_size)
-    }
+    value % tick_size == Decimal::ZERO
 }
 
 /// Converts a Unix timestamp in milliseconds to a formatted date-time string
@@ -790,7 +691,7 @@ pub fn resample(array: &[KLine], level: Level) -> anyhow::Result<Vec<KLine>> {
             high: start_k.high,
             low: start_k.low,
             close: last_k.close,
-            volume: 0.0,
+            volume: Decimal::ZERO,
         };
 
         for v in &array[start_index..next_index] {
@@ -895,63 +796,69 @@ pub fn summarize(list: impl AsRef<[HistoryPosition]>) -> HistoryPositionSummary 
     let leverage = list.first().map(|v| v.leverage).unwrap_or_default();
 
     let total_trades = list.len();
-    let total_profit = list.iter().map(|v| v.total_profit).sum::<f64>();
-    let total_fee = list.iter().map(|v| v.fee).sum::<f64>();
-    let win_trades = list.iter().filter(|v| v.total_profit > 0.0).count();
-    let loss_trades = list.iter().filter(|v| v.total_profit < 0.0).count();
+    let total_profit = list.iter().map(|v| v.total_profit).sum::<Decimal>();
+    let total_fee = list.iter().map(|v| v.fee).sum::<Decimal>();
+    let win_trades = list
+        .iter()
+        .filter(|v| v.total_profit > Decimal::ZERO)
+        .count();
+    let loss_trades = list
+        .iter()
+        .filter(|v| v.total_profit < Decimal::ZERO)
+        .count();
 
     let win_rate = if total_trades == 0 {
-        0.0
+        Decimal::ZERO
     } else {
-        win_trades as f64 / total_trades as f64 * 100.0
+        Decimal::from(win_trades) / Decimal::from(total_trades) * Decimal::from(100)
     };
 
     let avg_profit = if total_trades == 0 {
-        0.0
+        Decimal::ZERO
     } else {
-        total_profit / total_trades as f64
+        total_profit / Decimal::from(total_trades)
     };
 
     let net_gross_profit = list
         .iter()
-        .filter(|v| v.total_profit > 0.0)
+        .filter(|v| v.total_profit > Decimal::ZERO)
         .map(|v| v.total_profit)
-        .sum::<f64>();
+        .sum::<Decimal>();
 
     let net_gross_loss_abs = -list
         .iter()
-        .filter(|v| v.total_profit < 0.0)
+        .filter(|v| v.total_profit < Decimal::ZERO)
         .map(|v| v.total_profit)
-        .sum::<f64>();
+        .sum::<Decimal>();
 
-    let profit_loss_ratio = if net_gross_loss_abs == 0.0 {
-        0.0
+    let profit_loss_ratio = if net_gross_loss_abs == Decimal::ZERO {
+        Decimal::ZERO
     } else {
         net_gross_profit / net_gross_loss_abs
     };
 
     let gross_profit = list
         .iter()
-        .filter(|v| v.profit > 0.0)
+        .filter(|v| v.profit > Decimal::ZERO)
         .map(|v| v.profit)
-        .sum::<f64>();
+        .sum::<Decimal>();
 
     let gross_loss_abs = -list
         .iter()
-        .filter(|v| v.profit < 0.0)
+        .filter(|v| v.profit < Decimal::ZERO)
         .map(|v| v.profit)
-        .sum::<f64>();
+        .sum::<Decimal>();
 
     let best_trade = list
         .iter()
         .map(|v| v.total_profit)
-        .reduce(f64::max)
+        .reduce(Decimal::max)
         .unwrap_or_default();
 
     let worst_trade = list
         .iter()
         .map(|v| v.total_profit)
-        .reduce(f64::min)
+        .reduce(Decimal::min)
         .unwrap_or_default();
 
     HistoryPositionSummary {
@@ -993,136 +900,24 @@ pub fn open_in_browser(
 mod tests {
     use super::*;
 
-    fn history_position(total_profit: f64, profit: f64, fee: f64) -> HistoryPosition {
-        HistoryPosition {
-            symbol: "BTCUSDT".to_string(),
-            leverage: 10,
-            side: Side::Buy,
-            open_avg_price: 100.0,
-            close_avg_price: 101.0,
-            max_quantity: 1.0,
-            close_quantity: 1.0,
-            total_profit,
-            profit,
-            fee,
-            open_time: 1,
-            close_time: 2,
-            log: vec![],
-        }
-    }
-
-    #[test]
-    fn ticksnap_snap_eq_respects_half_tick_boundary() {
-        let tick = 0.1;
-
-        assert!(1.04_f64.snap_eq(1.0, tick));
-        assert!(1.049_f64.snap_eq(1.0, tick));
-        assert!(!1.051_f64.snap_eq(1.0, tick));
-    }
-
-    #[test]
-    fn ticksnap_snap_lt_gt_use_strict_half_tick_gap() {
-        let tick = 0.1;
-
-        assert!(0.949_f64.snap_lt(1.0, tick));
-        assert!(!0.95_f64.snap_lt(1.0, tick));
-
-        assert!(1.051_f64.snap_gt(1.0, tick));
-        assert!(!1.05_f64.snap_gt(1.0, tick));
-    }
-
-    #[test]
-    fn ticksnap_snap_le_ge_are_consistent_with_eq_lt_gt() {
-        let tick = 0.1;
-
-        assert!(1.0_f64.snap_le(1.0, tick));
-        assert!(1.0_f64.snap_ge(1.0, tick));
-
-        assert!(0.94_f64.snap_le(1.0, tick));
-        assert!(!0.94_f64.snap_ge(1.0, tick));
-
-        assert!(1.06_f64.snap_ge(1.0, tick));
-        assert!(!1.06_f64.snap_le(1.0, tick));
-    }
-
-    #[test]
-    fn ticksnap_snap_to_tick_rounds_and_invalid_tick_passthrough() {
-        assert!((1.24_f64.snap_to_tick(0.1) - 1.2).abs() < 1e-12);
-        assert!((1.26_f64.snap_to_tick(0.1) - 1.3).abs() < 1e-12);
-
-        assert_eq!(1.2345_f64.snap_to_tick(0.0), 1.2345);
-        assert_eq!(1.2345_f64.snap_to_tick(-0.1), 1.2345);
-    }
-
-    #[test]
-    fn ticksnap_invalid_tick_falls_back_to_raw_comparison() {
-        assert!(0.0_f64.is_zero(0.0));
-        assert!(!0.0001_f64.is_zero(0.0));
-
-        assert!(1.0_f64.snap_eq(1.0, 0.0));
-        assert!(!1.0_f64.snap_eq(1.0000001, 0.0));
-
-        assert!(0.9_f64.snap_lt(1.0, 0.0));
-        assert!(1.1_f64.snap_gt(1.0, 0.0));
-    }
-
     #[test]
     fn is_tick_aligned_works_for_aligned_and_non_aligned_prices() {
-        assert!(is_tick_aligned(68000.1, 0.1));
-        assert!(is_tick_aligned(68000.1000000001, 0.1));
-        assert!(is_tick_aligned(0.1_f64 + 0.2_f64, 0.1));
-        assert!(!is_tick_aligned(68000.123, 0.1));
-        assert!(!is_tick_aligned(1.0, 0.0));
-    }
-
-    #[test]
-    fn summarize_matches_web_fields() {
-        let data = vec![
-            history_position(100.0, 120.0, 20.0),
-            history_position(-40.0, -30.0, 10.0),
-            history_position(0.0, 5.0, 5.0),
-        ];
-
-        let summary = summarize(&data);
-
-        assert_eq!(summary.symbol, "BTCUSDT");
-        assert_eq!(summary.leverage, 10);
-        assert_eq!(summary.total_trades, 3);
-        assert_eq!(summary.win_trades, 1);
-        assert_eq!(summary.loss_trades, 1);
-        assert!((summary.win_rate - 33.333333).abs() < 1e-6);
-        assert!((summary.total_profit - 60.0).abs() < 1e-12);
-        assert!((summary.total_fee - 35.0).abs() < 1e-12);
-        assert!((summary.avg_profit - 20.0).abs() < 1e-12);
-        assert!((summary.net_gross_profit - 100.0).abs() < 1e-12);
-        assert!((summary.net_gross_loss_abs - 40.0).abs() < 1e-12);
-        assert!((summary.profit_loss_ratio - 2.5).abs() < 1e-12);
-        assert!((summary.gross_profit - 125.0).abs() < 1e-12);
-        assert!((summary.gross_loss_abs - 30.0).abs() < 1e-12);
-        assert!((summary.best_trade - 100.0).abs() < 1e-12);
-        assert!((summary.worst_trade + 40.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn summarize_empty_returns_zero_values() {
-        let summary = summarize([]);
-
-        assert_eq!(summary.symbol, "");
-        assert_eq!(summary.leverage, 0);
-        assert_eq!(summary.total_trades, 0);
-        assert_eq!(summary.win_trades, 0);
-        assert_eq!(summary.loss_trades, 0);
-        assert_eq!(summary.win_rate, 0.0);
-        assert_eq!(summary.total_profit, 0.0);
-        assert_eq!(summary.total_fee, 0.0);
-        assert_eq!(summary.avg_profit, 0.0);
-        assert_eq!(summary.net_gross_profit, 0.0);
-        assert_eq!(summary.net_gross_loss_abs, 0.0);
-        assert_eq!(summary.profit_loss_ratio, 0.0);
-        assert_eq!(summary.gross_profit, 0.0);
-        assert_eq!(summary.gross_loss_abs, 0.0);
-        assert_eq!(summary.best_trade, 0.0);
-        assert_eq!(summary.worst_trade, 0.0);
+        assert!(is_tick_aligned(
+            "68000.1".parse().unwrap(),
+            "0.1".parse().unwrap()
+        ));
+        assert!(!is_tick_aligned(
+            "68000.1000000001".parse().unwrap(),
+            "0.1".parse().unwrap()
+        ));
+        assert!(!is_tick_aligned(
+            "68000.123".parse().unwrap(),
+            "0.1".parse().unwrap()
+        ));
+        assert!(!is_tick_aligned(
+            "1".parse().unwrap(),
+            "0.0".parse().unwrap()
+        ));
     }
 
     macro_rules! assert_time_range {

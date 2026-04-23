@@ -9,11 +9,11 @@ pub struct Context<'a> {
     pub low: &'a Series,
     pub close: &'a Series,
     pub volume: &'a Series,
-    pub exchange: &'a (dyn Exchange + 'static),
+    pub exchange: &'a ExchangeWrapper,
 }
 
 impl<'a> Deref for Context<'a> {
-    type Target = &'a (dyn Exchange + 'static);
+    type Target = ExchangeWrapper;
 
     fn deref(&self) -> &Self::Target {
         &self.exchange

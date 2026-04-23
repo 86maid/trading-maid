@@ -546,7 +546,6 @@ if (dataSourceList.length != 0) {
   applyOptions()
   series.setData(window.dataSource.data)
 
-  // 设置成交量数据
   if (window.volumeSeries && window.dataSource.data && window.showVolume) {
     const buyColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--buy-color')
     const sellColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--sell-color')

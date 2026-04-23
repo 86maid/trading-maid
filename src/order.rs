@@ -1,4 +1,5 @@
 use overload::overload;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde::Serialize;
 use std::ops;
@@ -18,29 +19,29 @@ impl Side {
     }
 }
 
-overload!((a: f64) * (b: Side) -> f64 { if b == Side::Buy { a } else { -a } });
+overload!((a: Decimal) * (b: Side) -> Decimal { if b == Side::Buy { a } else { -a } });
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Order {
     pub symbol: String,
     pub side: Side,
-    pub trigger_price: f64,
-    pub price: f64,
-    pub quantity: f64,
+    pub trigger_price: Decimal,
+    pub price: Decimal,
+    pub quantity: Decimal,
     pub reduce_only: bool,
 }
 
 impl Order {
     pub fn is_market(&self) -> bool {
-        self.trigger_price == 0.0 && self.price == 0.0
+        self.trigger_price == Decimal::ZERO && self.price == Decimal::ZERO
     }
 
     pub fn is_limit(&self) -> bool {
-        self.trigger_price == 0.0 && self.price != 0.0
+        self.trigger_price == Decimal::ZERO && self.price != Decimal::ZERO
     }
 
     pub fn is_trigger(&self) -> bool {
-        self.trigger_price != 0.0
+        self.trigger_price != Decimal::ZERO
     }
 }
 
@@ -81,14 +82,14 @@ impl Kind {
 pub struct OrderMessage {
     pub symbol: String,
     pub side: Side,
-    pub trigger_price: f64,
-    pub price: f64,
-    pub quantity: f64,
+    pub trigger_price: Decimal,
+    pub price: Decimal,
+    pub quantity: Decimal,
     pub reduce_only: bool,
     pub id: String,
     pub kind: Kind,
-    pub avg_price: f64,
-    pub cumulative_quantity: f64,
+    pub avg_price: Decimal,
+    pub cumulative_quantity: Decimal,
     pub create_time: u64,
     pub update_time: u64,
     pub status: Status,
@@ -99,11 +100,11 @@ pub struct Position {
     pub symbol: String,
     pub leverage: u32,
     pub side: Side,
-    pub open_avg_price: f64,
-    pub quantity: f64,
-    pub margin: f64,
-    pub liquidation_price: f64,
-    pub profit: f64,
+    pub open_avg_price: Decimal,
+    pub quantity: Decimal,
+    pub margin: Decimal,
+    pub liquidation_price: Decimal,
+    pub profit: Decimal,
     pub open_time: u64,
 }
 
@@ -112,13 +113,13 @@ pub struct HistoryPosition {
     pub symbol: String,
     pub leverage: u32,
     pub side: Side,
-    pub open_avg_price: f64,
-    pub close_avg_price: f64,
-    pub max_quantity: f64,
-    pub close_quantity: f64,
-    pub total_profit: f64,
-    pub profit: f64,
-    pub fee: f64,
+    pub open_avg_price: Decimal,
+    pub close_avg_price: Decimal,
+    pub max_quantity: Decimal,
+    pub close_quantity: Decimal,
+    pub total_profit: Decimal,
+    pub profit: Decimal,
+    pub fee: Decimal,
     pub open_time: u64,
     pub close_time: u64,
     pub log: Vec<Record>,
@@ -129,19 +130,19 @@ pub struct HistoryPositionSummary {
     pub symbol: String,
     pub leverage: u32,
     pub total_trades: usize,
-    pub win_rate: f64,
+    pub win_rate: Decimal,
     pub win_trades: usize,
     pub loss_trades: usize,
-    pub total_profit: f64,
-    pub profit_loss_ratio: f64,
-    pub net_gross_profit: f64,
-    pub net_gross_loss_abs: f64,
-    pub gross_profit: f64,
-    pub gross_loss_abs: f64,
-    pub total_fee: f64,
-    pub avg_profit: f64,
-    pub best_trade: f64,
-    pub worst_trade: f64,
+    pub total_profit: Decimal,
+    pub profit_loss_ratio: Decimal,
+    pub net_gross_profit: Decimal,
+    pub net_gross_loss_abs: Decimal,
+    pub gross_profit: Decimal,
+    pub gross_loss_abs: Decimal,
+    pub total_fee: Decimal,
+    pub avg_profit: Decimal,
+    pub best_trade: Decimal,
+    pub worst_trade: Decimal,
 }
 
 impl HistoryPosition {
@@ -158,9 +159,9 @@ pub struct Record {
     pub id: String,
     pub kind: Kind,
     pub side: Side,
-    pub price: f64,
-    pub quantity: f64,
-    pub profit: f64,
-    pub fee: f64,
+    pub price: Decimal,
+    pub quantity: Decimal,
+    pub profit: Decimal,
+    pub fee: Decimal,
     pub time: u64,
 }

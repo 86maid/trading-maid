@@ -1,20 +1,23 @@
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+
 use crate::series::Series;
 
 /// Calculates the Simple Moving Average (SMA) for a given series of prices and a specified length.
-/// Returns the SMA value or NaN if the length is zero or if there are not enough data points in the series.
-pub fn ma(series: &Series, length: usize) -> f64 {
+/// Returns Some(SMA) or None if the length is zero or if there are not enough data points in the series.
+pub fn ma(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length {
-        return f64::NAN;
+        return None;
     }
 
-    series.iter().take(length).sum::<f64>() / length as f64
+    Some(series.iter().take(length).sum::<Decimal>() / Decimal::from(length))
 }
 
 /// Calculates the Exponential Moving Average (EMA) for a given series of prices and a specified length.
-/// Returns the EMA value or NaN if the length is zero or if there are not enough data points in the series.
-pub fn ema(series: &Series, length: usize) -> f64 {
+/// Returns Some(EMA) or None if the length is zero or if there are not enough data points in the series.
+pub fn ema(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length {
-        return f64::NAN;
+        return None;
     }
 
     let mut ema_cache = EMACache::new(length);
@@ -27,10 +30,10 @@ pub fn ema(series: &Series, length: usize) -> f64 {
 }
 
 /// Calculates the Relative Strength Index (RSI) for a given series of prices and a specified length.
-/// Returns the RSI value or NaN if the length is zero or if there are not enough data points in the series.
-pub fn rsi(series: &Series, length: usize) -> f64 {
+/// Returns Some(RSI) or None if the length is zero or if there are not enough data points in the series.
+pub fn rsi(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length + 1 {
-        return f64::NAN;
+        return None;
     }
 
     let mut rsi_cache = RSICache::new(length);
@@ -43,31 +46,31 @@ pub fn rsi(series: &Series, length: usize) -> f64 {
 }
 
 /// Calculates the Commodity Channel Index (CCI) for given high, low, and close price series and a specified length.
-/// Returns the CCI value or NaN if the length is zero or if there are not enough data points in any of the series.
-pub fn cci(high: &Series, low: &Series, close: &Series, length: usize) -> f64 {
+/// Returns Some(CCI) or None if the length is zero or if there are not enough data points in any of the series.
+pub fn cci(high: &Series, low: &Series, close: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || high.len() < length || low.len() < length || close.len() < length {
-        return f64::NAN;
+        return None;
     }
 
-    let typical_prices: Vec<f64> = high
+    let typical_prices: Vec<Decimal> = high
         .iter()
         .zip(low.iter())
         .zip(close.iter())
         .take(length)
-        .map(|((h, l), c)| (h + l + c) / 3.0)
+        .map(|((h, l), c)| (h + l + c) / dec!(3))
         .collect();
 
-    let sma_tp = typical_prices.iter().sum::<f64>() / length as f64;
+    let sma_tp: Decimal = typical_prices.iter().sum::<Decimal>() / Decimal::from(length);
     let mean_deviation = typical_prices
         .iter()
         .map(|tp| (tp - sma_tp).abs())
-        .sum::<f64>()
-        / length as f64;
+        .sum::<Decimal>()
+        / Decimal::from(length);
 
-    if mean_deviation == 0.0 {
-        0.0
+    if mean_deviation.is_zero() {
+        Some(dec!(0))
     } else {
-        (typical_prices[0] - sma_tp) / (0.015 * mean_deviation)
+        Some((typical_prices[0] - sma_tp) / (dec!(0.015) * mean_deviation))
     }
 }
 
@@ -78,9 +81,9 @@ pub fn macd(
     fast_length: usize,
     slow_length: usize,
     signal_length: usize,
-) -> (f64, f64, f64) {
+) -> (Option<Decimal>, Option<Decimal>, Option<Decimal>) {
     if fast_length == 0 || slow_length == 0 || signal_length == 0 || fast_length >= slow_length {
-        return (f64::NAN, f64::NAN, f64::NAN);
+        return (None, None, None);
     }
 
     let mut fast_ema = EMACache::new(fast_length);
@@ -91,107 +94,114 @@ pub fn macd(
         let fast = fast_ema.update(price);
         let slow = slow_ema.update(price);
 
-        if !fast.is_nan() && !slow.is_nan() {
-            let macd_val = fast - slow;
+        if fast.is_some() && slow.is_some() {
+            let macd_val = fast.unwrap() - slow.unwrap();
             signal_ema.update(macd_val);
         }
     }
 
-    let macd_val = fast_ema.value() - slow_ema.value();
-    let signal = signal_ema.value();
-    let histogram = if signal.is_nan() {
-        f64::NAN
-    } else {
-        macd_val - signal
-    };
+    let fast_val = fast_ema.value();
+    let slow_val = slow_ema.value();
+    let signal_val = signal_ema.value();
 
-    (macd_val, signal, histogram)
+    match (fast_val, slow_val, signal_val) {
+        (Some(fast), Some(slow), Some(signal)) => {
+            let macd_val = fast - slow;
+            let histogram = Some(macd_val - signal);
+            (Some(macd_val), Some(signal), histogram)
+        }
+        _ => (None, None, None),
+    }
 }
 
-/// Calculates the highest and lowest values in a given series of prices for a specified length.
-/// Returns the highest and lowest values or NaN if the length is zero or if there are
-pub fn highest(series: &Series, length: usize) -> f64 {
+/// Calculates the highest value in a given series of prices for a specified length.
+/// Returns Some(highest) or None if the length is zero or if there are not enough data points in the series.
+pub fn highest(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length {
-        return f64::NAN;
+        return None;
     }
 
     series
         .iter()
         .take(length)
-        .copied()
         .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or(f64::NAN)
+        .copied()
 }
 
 /// Calculates the lowest value in a given series of prices for a specified length.
-/// Returns the lowest value or NaN if the length is zero or if there are not enough data points in the series.
-pub fn lowest(series: &Series, length: usize) -> f64 {
+/// Returns Some(lowest) or None if the length is zero or if there are not enough data points in the series.
+pub fn lowest(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length {
-        return f64::NAN;
+        return None;
     }
 
     series
         .iter()
         .take(length)
-        .copied()
         .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or(f64::NAN)
+        .copied()
 }
 
 pub struct EMACache {
     length: usize,
-    multiplier: f64,
-    current_ema: f64,
+    multiplier: Decimal,
+    current_ema: Option<Decimal>,
     count: usize,
-    sum: f64,
+    sum: Decimal,
 }
 
 impl EMACache {
     pub fn new(length: usize) -> Self {
-        let multiplier = 2.0 / (length as f64 + 1.0);
+        let multiplier = dec!(2) / (Decimal::from(length) + dec!(1));
 
         EMACache {
             length,
             multiplier,
-            current_ema: 0.0,
+            current_ema: None,
             count: 0,
-            sum: 0.0,
+            sum: dec!(0),
         }
     }
 
-    pub fn with_ema(length: usize, ema: f64) -> Self {
-        let multiplier = 2.0 / (length as f64 + 1.0);
+    pub fn with_ema(length: usize, ema: impl Into<Decimal>) -> Self {
+        let multiplier = dec!(2) / (Decimal::from(length) + dec!(1));
 
         EMACache {
             length,
             multiplier,
-            current_ema: ema,
+            current_ema: Some(ema.into()),
             count: usize::MAX,
-            sum: 0.0,
+            sum: dec!(0),
         }
     }
 
-    pub fn update(&mut self, price: impl Into<f64>) -> f64 {
+    pub fn update(&mut self, price: impl Into<Decimal>) -> Option<Decimal> {
         let price = price.into();
 
         self.count = self.count.saturating_add(1);
 
         if self.count < self.length {
             self.sum += price;
-            f64::NAN
+            None
         } else if self.count == self.length {
             self.sum += price;
-            self.current_ema = self.sum / self.length as f64;
+            self.current_ema = Some(self.sum / Decimal::from(self.length));
             self.current_ema
         } else {
-            self.current_ema = price * self.multiplier + self.current_ema * (1.0 - self.multiplier);
+            if let Some(current) = self.current_ema {
+                self.current_ema =
+                    Some(price * self.multiplier + current * (dec!(1) - self.multiplier));
+            } else {
+                // Fallback to SMA if EMA is not set
+                self.current_ema = Some(self.sum / Decimal::from(self.length));
+            }
             self.current_ema
         }
     }
 
-    pub fn value(&self) -> f64 {
+    pub fn value(&self) -> Option<Decimal> {
         if self.count != usize::MAX && self.count < self.length {
-            f64::NAN
+            None
         } else {
             self.current_ema
         }
@@ -199,20 +209,19 @@ impl EMACache {
 
     pub fn reset(&mut self) {
         self.count = 0;
-        self.sum = 0.0;
-        self.current_ema = 0.0;
+        self.sum = dec!(0);
+        self.current_ema = None;
     }
 }
 
 pub struct RSICache {
     length: usize,
     count: usize,
-    last_price: f64,
-    has_last_price: bool,
-    sum_gain: f64,
-    sum_loss: f64,
-    avg_gain: f64,
-    avg_loss: f64,
+    last_price: Option<Decimal>,
+    sum_gain: Decimal,
+    sum_loss: Decimal,
+    avg_gain: Decimal,
+    avg_loss: Decimal,
 }
 
 impl RSICache {
@@ -220,65 +229,70 @@ impl RSICache {
         RSICache {
             length,
             count: 0,
-            last_price: 0.0,
-            has_last_price: false,
-            sum_gain: 0.0,
-            sum_loss: 0.0,
-            avg_gain: 0.0,
-            avg_loss: 0.0,
+            last_price: None,
+            sum_gain: dec!(0),
+            sum_loss: dec!(0),
+            avg_gain: dec!(0),
+            avg_loss: dec!(0),
         }
     }
 
-    pub fn update(&mut self, price: impl Into<f64>) -> f64 {
+    pub fn update(&mut self, price: impl Into<Decimal>) -> Option<Decimal> {
         let price = price.into();
 
         if self.length == 0 {
-            return f64::NAN;
+            return None;
         }
 
-        if !self.has_last_price {
-            self.last_price = price;
-            self.has_last_price = true;
-            return f64::NAN;
+        match self.last_price {
+            None => {
+                self.last_price = Some(price);
+                None
+            }
+            Some(last) => {
+                let delta = price - last;
+                self.last_price = Some(price);
+
+                let gain = if delta > dec!(0) { delta } else { dec!(0) };
+                let loss = if delta < dec!(0) { -delta } else { dec!(0) };
+
+                self.count = self.count.saturating_add(1);
+
+                if self.count < self.length {
+                    self.sum_gain += gain;
+                    self.sum_loss += loss;
+                    None
+                } else if self.count == self.length {
+                    self.sum_gain += gain;
+                    self.sum_loss += loss;
+                    self.avg_gain = self.sum_gain / Decimal::from(self.length);
+                    self.avg_loss = self.sum_loss / Decimal::from(self.length);
+                    self.value()
+                } else {
+                    self.avg_gain = (self.avg_gain * (Decimal::from(self.length) - dec!(1)) + gain)
+                        / Decimal::from(self.length);
+                    self.avg_loss = (self.avg_loss * (Decimal::from(self.length) - dec!(1)) + loss)
+                        / Decimal::from(self.length);
+                    self.value()
+                }
+            }
         }
-
-        let delta = price - self.last_price;
-        self.last_price = price;
-
-        let gain = delta.max(0.0);
-        let loss = (-delta).max(0.0);
-
-        self.count = self.count.saturating_add(1);
-
-        if self.count < self.length {
-            self.sum_gain += gain;
-            self.sum_loss += loss;
-            return f64::NAN;
-        }
-
-        if self.count == self.length {
-            self.sum_gain += gain;
-            self.sum_loss += loss;
-            self.avg_gain = self.sum_gain / self.length as f64;
-            self.avg_loss = self.sum_loss / self.length as f64;
-            return self.value();
-        }
-
-        self.avg_gain = (self.avg_gain * (self.length as f64 - 1.0) + gain) / self.length as f64;
-        self.avg_loss = (self.avg_loss * (self.length as f64 - 1.0) + loss) / self.length as f64;
-        self.value()
     }
 
-    pub fn value(&self) -> f64 {
+    pub fn value(&self) -> Option<Decimal> {
         if self.count < self.length {
-            return f64::NAN;
+            return None;
         }
 
-        if self.avg_loss == 0.0 {
-            return if self.avg_gain == 0.0 { 50.0 } else { 100.0 };
+        if self.avg_loss.is_zero() {
+            return if self.avg_gain.is_zero() {
+                Some(dec!(50))
+            } else {
+                Some(dec!(100))
+            };
         }
 
         let rs = self.avg_gain / self.avg_loss;
-        100.0 - 100.0 / (1.0 + rs)
+        Some(dec!(100) - dec!(100) / (dec!(1) + rs))
     }
 }

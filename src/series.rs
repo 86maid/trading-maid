@@ -1,3 +1,5 @@
+use overload::overload;
+use rust_decimal::Decimal;
 use std::{
     cmp::Ordering,
     fmt::{Display, Formatter, Result},
@@ -8,16 +10,15 @@ use std::{
     slice::SliceIndex,
 };
 
-use overload::overload;
-
 /// A data series with reverse indexing.
 ///
 /// # Examples
 ///
 /// ```
 /// use trading_maid::series::Series;
+/// use rust_decimal_macros::dec;
 ///
-/// let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+/// let data = [dec!(1.0), dec!(2.0), dec!(3.0), dec!(4.0), dec!(5.0), dec!(6.0), dec!(7.0), dec!(8.0), dec!(9.0)];
 /// let series = Series::new(&data);
 ///
 /// assert!(series == 9);
@@ -27,35 +28,35 @@ use overload::overload;
 /// assert!(series / 3 == 3.0);
 /// assert!(series[0] == 9.0);
 /// assert!(series[series.len() - 1] == 1.0);
-/// assert!(series[2..=7][..] == [2.0, 3.0, 4.0, 5.0, 6.0, 7.0][..]);
-/// assert!(series[..=7][..] == [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0][..]);
-/// assert!(series[5..][..] == [1.0, 2.0, 3.0, 4.0][..]);
+/// assert!(series[2..=7][..] == [dec!(2.0), dec!(3.0), dec!(4.0), dec!(5.0), dec!(6.0), dec!(7.0)][..]);
+/// assert!(series[..=7][..] == [dec!(2.0), dec!(3.0), dec!(4.0), dec!(5.0), dec!(6.0), dec!(7.0), dec!(8.0), dec!(9.0)][..]);
+/// assert!(series[5..][..] == [dec!(1.0), dec!(2.0), dec!(3.0), dec!(4.0)][..]);
 ///
-/// let collected: Vec<f64> = series.iter().copied().collect();
+/// let collected: Vec<Decimal> = series.iter().copied().collect();
 ///
 /// assert_eq!(collected, [9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]);
 /// ```
 #[derive(Debug)]
 pub struct Series {
-    pub inner: [f64],
+    pub inner: [Decimal],
 }
 
 impl Series {
-    pub fn new(value: &[f64]) -> &Self {
+    pub fn new(value: &[Decimal]) -> &Self {
         unsafe { transmute(value) }
     }
 
     fn slice<T>(&self, index: T) -> &Series
     where
-        T: SliceIndex<[f64], Output = [f64]>,
+        T: SliceIndex<[Decimal], Output = [Decimal]>,
     {
-        unsafe { transmute(transmute::<_, &[f64]>(self).get(index).unwrap_or(&[])) }
+        unsafe { transmute(transmute::<_, &[Decimal]>(self).get(index).unwrap_or(&[])) }
     }
 }
 
 impl<'a> IntoIterator for &'a Series {
-    type Item = &'a f64;
-    type IntoIter = std::iter::Rev<std::slice::Iter<'a, f64>>;
+    type Item = &'a Decimal;
+    type IntoIter = std::iter::Rev<std::slice::Iter<'a, Decimal>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.inner.iter().rev()
@@ -63,13 +64,13 @@ impl<'a> IntoIterator for &'a Series {
 }
 
 impl Series {
-    pub fn iter(&self) -> std::iter::Rev<std::slice::Iter<'_, f64>> {
+    pub fn iter(&self) -> std::iter::Rev<std::slice::Iter<'_, Decimal>> {
         self.inner.iter().rev()
     }
 }
 
 impl Deref for Series {
-    type Target = [f64];
+    type Target = [Decimal];
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -82,19 +83,19 @@ impl Display for &Series {
     }
 }
 
-impl From<&Series> for f64 {
+impl From<&Series> for Decimal {
     fn from(val: &Series) -> Self {
         val[0]
     }
 }
 
 impl Index<usize> for Series {
-    type Output = f64;
+    type Output = Decimal;
 
     fn index(&self, index: usize) -> &Self::Output {
         self.inner
             .get(self.inner.len().saturating_sub(1).saturating_sub(index))
-            .unwrap_or(&f64::NAN)
+            .unwrap_or(&Decimal::MAX)
     }
 }
 
@@ -156,36 +157,36 @@ impl Index<RangeToInclusive<usize>> for Series {
 
 impl PartialEq<i32> for &Series {
     fn eq(&self, other: &i32) -> bool {
-        self.index(0) == &(*other as f64)
+        self.index(0) == other
     }
 }
 
 impl PartialEq<u32> for &Series {
     fn eq(&self, other: &u32) -> bool {
-        self.index(0) == &(*other as f64)
+        self.index(0) == other
     }
 }
 
 impl PartialEq<i64> for &Series {
     fn eq(&self, other: &i64) -> bool {
-        self.index(0) == &(*other as f64)
+        self.index(0) == other
     }
 }
 
 impl PartialEq<u64> for &Series {
     fn eq(&self, other: &u64) -> bool {
-        self.index(0) == &(*other as f64)
-    }
-}
-
-impl PartialEq<f64> for &Series {
-    fn eq(&self, other: &f64) -> bool {
         self.index(0) == other
     }
 }
 
-impl PartialEq<[f64]> for Series {
-    fn eq(&self, other: &[f64]) -> bool {
+impl PartialEq<Decimal> for &Series {
+    fn eq(&self, other: &Decimal) -> bool {
+        self.index(0) == other
+    }
+}
+
+impl PartialEq<[Decimal]> for Series {
+    fn eq(&self, other: &[Decimal]) -> bool {
         &self.inner == other
     }
 }
@@ -198,18 +199,18 @@ impl PartialEq for &Series {
 
 impl PartialOrd<i64> for &Series {
     fn partial_cmp(&self, other: &i64) -> Option<Ordering> {
-        self.index(0).partial_cmp(&(*other as f64))
-    }
-}
-
-impl PartialOrd<f64> for &Series {
-    fn partial_cmp(&self, other: &f64) -> Option<Ordering> {
         self.index(0).partial_cmp(other)
     }
 }
 
-impl PartialOrd<[f64]> for Series {
-    fn partial_cmp(&self, other: &[f64]) -> Option<Ordering> {
+impl PartialOrd<Decimal> for &Series {
+    fn partial_cmp(&self, other: &Decimal) -> Option<Ordering> {
+        self.index(0).partial_cmp(other)
+    }
+}
+
+impl PartialOrd<[Decimal]> for Series {
+    fn partial_cmp(&self, other: &[Decimal]) -> Option<Ordering> {
         self.inner.partial_cmp(other)
     }
 }
@@ -220,55 +221,57 @@ impl PartialOrd for &Series {
     }
 }
 
-overload!((a: &Series) + (b: i64) -> f64 { a[0] + b as f64 });
+overload!((a: &Series) + (b: i64) -> Decimal { a[0] + b });
 
-overload!((a: &Series) - (b: i64) -> f64 { a[0] - b as f64 });
+overload!((a: &Series) - (b: i64) -> Decimal { a[0] - b });
 
-overload!((a: &Series) * (b: i64) -> f64 { a[0] * b as f64 });
+overload!((a: &Series) * (b: i64) -> Decimal { a[0] * b });
 
-overload!((a: &Series) / (b: i64) -> f64 { a[0] / b as f64 });
+overload!((a: &Series) / (b: i64) -> Decimal { a[0] / b });
 
-overload!((a: &Series) % (b: i64) -> f64 { a[0] % b as f64 });
+overload!((a: &Series) % (b: i64) -> Decimal { a[0] % b });
 
-overload!((a: &Series) + (b: f64) -> f64 { a[0] + b });
+overload!((a: &Series) + (b: f64) -> Decimal { a[0] + b });
 
-overload!((a: &Series) - (b: f64) -> f64 { a[0] - b });
+overload!((a: &Series) - (b: f64) -> Decimal { a[0] - b });
 
-overload!((a: &Series) * (b: f64) -> f64 { a[0] * b });
+overload!((a: &Series) * (b: f64) -> Decimal { a[0] * b });
 
-overload!((a: &Series) / (b: f64) -> f64 { a[0] / b });
+overload!((a: &Series) / (b: f64) -> Decimal { a[0] / b });
 
-overload!((a: &Series) % (b: f64) -> f64 { a[0] % b });
+overload!((a: &Series) % (b: f64) -> Decimal { a[0] % b });
 
-overload!((a: i64) + (b: &Series) -> f64 { a as f64 + b[0] });
+overload!((a: i64) + (b: &Series) -> Decimal { a + b[0] });
 
-overload!((a: i64) - (b: &Series) -> f64 { a as f64 - b[0] });
+overload!((a: i64) - (b: &Series) -> Decimal { a - b[0] });
 
-overload!((a: i64) * (b: &Series) -> f64 { a as f64 * b[0] });
+overload!((a: i64) * (b: &Series) -> Decimal { a * b[0] });
 
-overload!((a: i64) / (b: &Series) -> f64 { a as f64 / b[0] });
+overload!((a: i64) / (b: &Series) -> Decimal { a / b[0] });
 
-overload!((a: i64) % (b: &Series) -> f64 { a as f64 % b[0] });
+overload!((a: i64) % (b: &Series) -> Decimal { a % b[0] });
 
-overload!((a: f64) + (b: &Series) -> f64 { a + b[0] });
+overload!((a: f64) + (b: &Series) -> Decimal { a + b[0] });
 
-overload!((a: f64) - (b: &Series) -> f64 { a - b[0] });
+overload!((a: f64) - (b: &Series) -> Decimal { a - b[0] });
 
-overload!((a: f64) * (b: &Series) -> f64 { a * b[0] });
+overload!((a: f64) * (b: &Series) -> Decimal { a * b[0] });
 
-overload!((a: f64) / (b: &Series) -> f64 { a / b[0] });
+overload!((a: f64) / (b: &Series) -> Decimal { a / b[0] });
 
-overload!((a: f64) % (b: &Series) -> f64 { a % b[0] });
+overload!((a: f64) % (b: &Series) -> Decimal { a % b[0] });
 
-overload!((a: &Series) + (b: &Series) -> f64 { a[0] + b[0] });
+overload!((a: &Series) + (b: &Series) -> Decimal { a[0] + b[0] });
 
-overload!((a: &Series) - (b: &Series) -> f64 { a[0] - b[0] });
+overload!((a: &Series) - (b: &Series) -> Decimal { a[0] - b[0] });
 
-overload!((a: &Series) * (b: &Series) -> f64 { a[0] * b[0] });
+overload!((a: &Series) * (b: &Series) -> Decimal { a[0] * b[0] });
 
-overload!((a: &Series) / (b: &Series) -> f64 { a[0] / b[0] });
+overload!((a: &Series) / (b: &Series) -> Decimal { a[0] / b[0] });
 
-overload!((a: &Series) % (b: &Series) -> f64 { a[0] % b[0] });
+overload!((a: &Series) % (b: &Series) -> Decimal { a[0] % b[0] });
+
+overload!(- (a: &Series) -> Decimal { -a[0]  });
 
 /// A data series with reverse indexing.
 ///
@@ -417,6 +420,7 @@ impl Index<RangeToInclusive<usize>> for TimeSeries {
         self.slice(self.inner.len().saturating_sub(1).saturating_sub(index.end)..)
     }
 }
+
 impl PartialEq<i32> for &TimeSeries {
     fn eq(&self, other: &i32) -> bool {
         self.index(0) == &(*other as u64)

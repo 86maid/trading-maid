@@ -1,2 +1,4 @@
-/target
-/web/node_modules
+target
+web/node_modules
+web/dist/*.js.map
+web/dist/assets

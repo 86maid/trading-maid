@@ -1751,20 +1751,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust_decimal"
-version = "1.41.0"
+name = "rust_decimal_ext"
+version = "1.41.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ce901f9a19d251159075a4c37af514c3b8ef99c22e02dd8c19161cf397ee94a"
+checksum = "a3e9dfaaf3e73d7f2d9346b6e790a10a3a392c5290a3ced6acf11df5ed371262"
 dependencies = [
  "arrayvec",
  "borsh",
  "bytes",
  "num-traits",
+ "overload",
  "rand 0.8.5",
  "rkyv",
+ "rust_decimal_macros",
  "serde",
  "serde_json",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "rust_decimal_macros"
+version = "1.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74a5a6f027e892c7a035c6fddb50435a1fbf5a734ffc0c2a9fed4d0221440519"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -2450,7 +2462,8 @@ dependencies = [
  "overload",
  "rand 0.10.0",
  "reqwest",
- "rust_decimal",
+ "rust_decimal_ext",
+ "rust_decimal_macros",
  "serde",
  "serde_json",
  "serde_with",

@@ -10,8 +10,8 @@ struct MyStrategy {
 impl MyStrategy {
     pub fn new() -> Self {
         MyStrategy {
-            ema_cache144: EMACache::with_ema(144, 80871.2),
-            ema_cache169: EMACache::with_ema(169, 78705.2),
+            ema_cache144: EMACache::with_ema(144, 80871),
+            ema_cache169: EMACache::with_ema(169, 78705),
             count: 0,
         }
     }
@@ -21,8 +21,13 @@ impl MyStrategy {
 impl Strategy for MyStrategy {
     // 如果连续 50 根 K 线收盘价都在 EMA 之下，且当前 K 线收盘价突破 EMA，则开空单
     async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
-        let ema144 = self.ema_cache144.update(cx.close);
-        let ema169 = self.ema_cache169.update(cx.close);
+        let Some(ema144) = self.ema_cache144.update(cx.close) else {
+            return Ok(());
+        };
+
+        let Some(ema169) = self.ema_cache169.update(cx.close) else {
+            return Ok(());
+        };
 
         if self.count >= 50
             && (cx.close >= ema144 || cx.close >= ema169)
@@ -31,9 +36,12 @@ impl Strategy for MyStrategy {
             println!("place_order: {}", t2s(cx.time));
 
             cx.cancel_all_order("BTCUSDT").await?;
+
             cx.sell("BTCUSDT", 0.01).await?;
+
             cx.buy_limit_reduce_only("BTCUSDT", cx.close - 1000.0, 0.01)
                 .await?;
+
             cx.buy_trigger_market_reduce_only("BTCUSDT", cx.close + 1000.0, 0.01)
                 .await?;
         }
@@ -74,20 +82,20 @@ async fn main() {
         Metadata {
             symbol: "BTCUSDT".to_string(),
             level: Level::Minute1,
-            min_size: 0.01,
-            min_notional: 0.0,
-            tick_size: 0.1,
-            maker_fee: 0.0002,
-            taker_fee: 0.0005,
-            maintenance: 0.004,
+            min_size: "0.01".parse().unwrap(),
+            min_notional: "0".parse().unwrap(),
+            tick_size: "0.1".parse().unwrap(),
+            maker_fee: "0.0002".parse().unwrap(),
+            taker_fee: "0.0005".parse().unwrap(),
+            maintenance: "0.004".parse().unwrap(),
         },
     )
     .unwrap();
 
     let exchange = LocalExchange::new(data_source_1m.clone())
-        .cash(10000.0)
+        .cash(10000)
         .leverage(10)
-        .slippage(0.0);
+        .slippage(0);
 
     let mut engine = Engine::new(exchange.clone(), MyStrategy::new());
 
