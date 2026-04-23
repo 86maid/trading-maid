@@ -15,8 +15,7 @@ use std::{
 /// # Examples
 ///
 /// ```
-/// use trading_maid::series::Series;
-/// use rust_decimal_macros::dec;
+/// use trading_maid::prelude::*;
 ///
 /// let data = [dec!(1.0), dec!(2.0), dec!(3.0), dec!(4.0), dec!(5.0), dec!(6.0), dec!(7.0), dec!(8.0), dec!(9.0)];
 /// let series = Series::new(&data);
@@ -272,59 +271,31 @@ impl PartialEq<&String> for &Series {
     }
 }
 
-impl<const N: usize> PartialEq<[Decimal; N]> for &Series {
+impl<const N: usize> PartialEq<[Decimal; N]> for Series {
     #[track_caller]
     fn eq(&self, other: &[Decimal; N]) -> bool {
         self.inner == *other
     }
 }
 
-impl<const N: usize> PartialEq<&[Decimal; N]> for &Series {
-    #[track_caller]
-    fn eq(&self, other: &&[Decimal; N]) -> bool {
-        self.inner == **other
-    }
-}
-
-impl PartialEq<[Decimal]> for &Series {
+impl PartialEq<[Decimal]> for Series {
     #[track_caller]
     fn eq(&self, other: &[Decimal]) -> bool {
         self.inner == *other
     }
 }
 
-impl PartialEq<&[Decimal]> for &Series {
+impl<const N: usize> PartialEq<Series> for [Decimal; N] {
     #[track_caller]
-    fn eq(&self, other: &&[Decimal]) -> bool {
-        self.inner == **other
-    }
-}
-
-impl<const N: usize> PartialEq<&Series> for [Decimal; N] {
-    #[track_caller]
-    fn eq(&self, other: &&Series) -> bool {
+    fn eq(&self, other: &Series) -> bool {
         other.inner == *self
     }
 }
 
-impl<const N: usize> PartialEq<&Series> for &[Decimal; N] {
+impl PartialEq<Series> for [Decimal] {
     #[track_caller]
-    fn eq(&self, other: &&Series) -> bool {
-        other.inner == **self
-    }
-}
-
-impl PartialEq<&Series> for [Decimal] {
-    #[track_caller]
-    fn eq(&self, other: &&Series) -> bool {
+    fn eq(&self, other: &Series) -> bool {
         other.inner == *self
-    }
-}
-
-impl PartialEq<&Series> for &[Decimal] {
-    #[track_caller]
-    fn eq(&self, other: &&Series) -> bool {
-        other.inner == **self
     }
 }
 
@@ -470,7 +441,7 @@ impl_decimal_ord!(Decimal);
 /// # Examples
 ///
 /// ```
-/// use trading_maid::series::TimeSeries;
+/// use trading_maid::prelude::*;
 ///
 /// let data = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// let series = TimeSeries::new(&data);
@@ -614,24 +585,28 @@ impl Index<RangeToInclusive<usize>> for TimeSeries {
 }
 
 impl PartialEq<i32> for &TimeSeries {
+    #[track_caller]
     fn eq(&self, other: &i32) -> bool {
         self.index(0) == &(*other as u64)
     }
 }
 
 impl PartialEq<u32> for &TimeSeries {
+    #[track_caller]
     fn eq(&self, other: &u32) -> bool {
         self.index(0) == &(*other as u64)
     }
 }
 
 impl PartialEq<i64> for &TimeSeries {
+    #[track_caller]
     fn eq(&self, other: &i64) -> bool {
         self.index(0) == &(*other as u64)
     }
 }
 
 impl PartialEq<u64> for &TimeSeries {
+    #[track_caller]
     fn eq(&self, other: &u64) -> bool {
         self.index(0) == other
     }
@@ -643,21 +618,9 @@ impl<const N: usize> PartialEq<[u64; N]> for TimeSeries {
     }
 }
 
-impl<const N: usize> PartialEq<&[u64; N]> for TimeSeries {
-    fn eq(&self, other: &&[u64; N]) -> bool {
-        &self.inner == *other
-    }
-}
-
 impl PartialEq<[u64]> for TimeSeries {
     fn eq(&self, other: &[u64]) -> bool {
         &self.inner == other
-    }
-}
-
-impl PartialEq<&[u64]> for TimeSeries {
-    fn eq(&self, other: &&[u64]) -> bool {
-        &self.inner == *other
     }
 }
 
@@ -667,21 +630,9 @@ impl<const N: usize> PartialEq<TimeSeries> for [u64; N] {
     }
 }
 
-impl<const N: usize> PartialEq<TimeSeries> for &[u64; N] {
-    fn eq(&self, other: &TimeSeries) -> bool {
-        other == *self
-    }
-}
-
 impl PartialEq<TimeSeries> for [u64] {
     fn eq(&self, other: &TimeSeries) -> bool {
         other == self
-    }
-}
-
-impl PartialEq<TimeSeries> for &[u64] {
-    fn eq(&self, other: &TimeSeries) -> bool {
-        other == *self
     }
 }
 
@@ -709,66 +660,52 @@ impl PartialOrd for &TimeSeries {
     }
 }
 
-overload!((a: &TimeSeries) + (b: i64) -> u64 { a[0] + b as u64 });
-
-overload!((a: &TimeSeries) - (b: i64) -> u64 { a[0] - b as u64 });
-
-overload!((a: &TimeSeries) * (b: i64) -> u64 { a[0] * b as u64 });
-
-overload!((a: &TimeSeries) / (b: i64) -> u64 { a[0] / b as u64 });
-
-overload!((a: &TimeSeries) % (b: i64) -> u64 { a[0] % b as u64 });
-
-overload!((a: i64) + (b: &TimeSeries) -> u64 { a as u64 + b[0] });
-
-overload!((a: i64) - (b: &TimeSeries) -> u64 { a as u64 - b[0] });
-
-overload!((a: i64) * (b: &TimeSeries) -> u64 { a as u64 * b[0] });
-
-overload!((a: i64) / (b: &TimeSeries) -> u64 { a as u64 / b[0] });
-
-overload!((a: i64) % (b: &TimeSeries) -> u64 { a as u64 % b[0] });
-
-overload!((a: &TimeSeries) + (b: u64) -> u64 { a[0] + b as u64 });
-
-overload!((a: &TimeSeries) - (b: u64) -> u64 { a[0] - b as u64 });
-
-overload!((a: &TimeSeries) * (b: u64) -> u64 { a[0] * b as u64 });
-
-overload!((a: &TimeSeries) / (b: u64) -> u64 { a[0] / b as u64 });
-
-overload!((a: &TimeSeries) % (b: u64) -> u64 { a[0] % b as u64 });
-
-overload!((a: u64) + (b: &TimeSeries) -> u64 { a as u64 + b[0] });
-
-overload!((a: u64) - (b: &TimeSeries) -> u64 { a as u64 - b[0] });
-
-overload!((a: u64) * (b: &TimeSeries) -> u64 { a as u64 * b[0] });
-
-overload!((a: u64) / (b: &TimeSeries) -> u64 { a as u64 / b[0] });
-
-overload!((a: u64) % (b: &TimeSeries) -> u64 { a as u64 % b[0] });
-
-overload!((a: &TimeSeries) + (b: &TimeSeries) -> u64 { a[0] + b[0] });
-
-overload!((a: &TimeSeries) - (b: &TimeSeries) -> u64 { a[0] - b[0] });
-
-overload!((a: &TimeSeries) * (b: &TimeSeries) -> u64 { a[0] * b[0] });
-
-overload!((a: &TimeSeries) / (b: &TimeSeries) -> u64 { a[0] / b[0] });
-
-overload!((a: &TimeSeries) % (b: &TimeSeries) -> u64 { a[0] % b[0] });
-
-#[test]
-fn ff() {
-    let a = [Decimal::from(1)];
-    let z = Series::new(&a);
-    let y = [Decimal::from(1)];
-    let d = &y;
-    let f = d.as_slice();
-
-    z == y;
-    z == d;
-    z == *f;
-    z == f;
+macro_rules! ts_overload_all_op_right {
+    ($a:ty, $b:ty) => {
+      overload!((a: $a) + (b: $b) -> u64 { a[0] + b as u64});
+      overload!((a: $a) - (b: $b) -> u64 { a[0] - b as u64});
+      overload!((a: $a) * (b: $b) -> u64 { a[0] * b as u64});
+      overload!((a: $a) / (b: $b) -> u64 { a[0] / b as u64});
+      overload!((a: $a) % (b: $b) -> u64 { a[0] % b as u64});
+    };
 }
+
+macro_rules! ts_overload_all_op_left {
+    ($a:ty, $b:ty) => {
+        overload!((a: $a) + (b: $b) -> u64 { a as u64 + b[0] });
+        overload!((a: $a) - (b: $b) -> u64 { a as u64 - b[0] });
+        overload!((a: $a) * (b: $b) -> u64 { a as u64 * b[0] });
+        overload!((a: $a) / (b: $b) -> u64 { a as u64 / b[0] });
+        overload!((a: $a) % (b: $b) -> u64 { a as u64 % b[0] });
+    };
+}
+
+ts_overload_all_op_right!(&TimeSeries, isize);
+ts_overload_all_op_right!(&TimeSeries, i8);
+ts_overload_all_op_right!(&TimeSeries, i16);
+ts_overload_all_op_right!(&TimeSeries, i32);
+ts_overload_all_op_right!(&TimeSeries, i64);
+ts_overload_all_op_right!(&TimeSeries, i128);
+ts_overload_all_op_right!(&TimeSeries, usize);
+ts_overload_all_op_right!(&TimeSeries, u8);
+ts_overload_all_op_right!(&TimeSeries, u16);
+ts_overload_all_op_right!(&TimeSeries, u32);
+ts_overload_all_op_right!(&TimeSeries, u64);
+ts_overload_all_op_right!(&TimeSeries, u128);
+ts_overload_all_op_right!(&TimeSeries, f32);
+ts_overload_all_op_right!(&TimeSeries, f64);
+
+ts_overload_all_op_left!(isize, &TimeSeries);
+ts_overload_all_op_left!(i8, &TimeSeries);
+ts_overload_all_op_left!(i16, &TimeSeries);
+ts_overload_all_op_left!(i32, &TimeSeries);
+ts_overload_all_op_left!(i64, &TimeSeries);
+ts_overload_all_op_left!(i128, &TimeSeries);
+ts_overload_all_op_left!(usize, &TimeSeries);
+ts_overload_all_op_left!(u8, &TimeSeries);
+ts_overload_all_op_left!(u16, &TimeSeries);
+ts_overload_all_op_left!(u32, &TimeSeries);
+ts_overload_all_op_left!(u64, &TimeSeries);
+ts_overload_all_op_left!(u128, &TimeSeries);
+ts_overload_all_op_left!(f32, &TimeSeries);
+ts_overload_all_op_left!(f64, &TimeSeries);
