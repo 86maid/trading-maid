@@ -78,8 +78,6 @@ function applyOptions() {
   const buyColor = style.getPropertyValue('--buy-color').trim()
   const sellColor = style.getPropertyValue('--sell-color').trim()
 
-  const [chart, series, vm] = [window.chart, window.series, window.vm]
-
   const tickMarkFormatter = (time, tickMarkType, locale) => {
     let date
 
@@ -210,7 +208,7 @@ function applyOptions() {
     autoSize: true,
   })
 
-  series.applyOptions({
+  window.series.applyOptions({
     upColor: buyColor,
     downColor: sellColor,
     borderUpColor: buyColor,
@@ -226,14 +224,14 @@ function applyOptions() {
     }
   })
 
-  chart.subscribeCrosshairMove(({ seriesData, point, time, logical, hoveredObjectId }) => {
+  window.chart.subscribeCrosshairMove(({ seriesData, point, time, logical, hoveredObjectId }) => {
     if (hoveredObjectId) {
       document.body.style.cursor = 'pointer'
     } else {
       document.body.style.cursor = 'default'
     }
 
-    const k = seriesData.get(series)
+    const k = seriesData.get(window.series)
 
     if (!k) {
       return
@@ -244,16 +242,16 @@ function applyOptions() {
     const volume = window.dataSource.data[logical].volume
 
     const list = [
-      { price: open, distance: Math.abs(y - series.priceToCoordinate(open)) },
-      { price: high, distance: Math.abs(y - series.priceToCoordinate(high)) },
-      { price: low, distance: Math.abs(y - series.priceToCoordinate(low)) },
-      { price: close, distance: Math.abs(y - series.priceToCoordinate(close)) },
+      { price: open, distance: Math.abs(y - window.series.priceToCoordinate(open)) },
+      { price: high, distance: Math.abs(y - window.series.priceToCoordinate(high)) },
+      { price: low, distance: Math.abs(y - window.series.priceToCoordinate(low)) },
+      { price: close, distance: Math.abs(y - window.series.priceToCoordinate(close)) },
     ]
 
     const result = list.reduce((a, b) => (b.distance < a.distance ? b : a))
 
     if (window.magnet && result.distance <= 20) {
-      chart.setCrosshairPosition(result.price, time, series)
+      window.chart.setCrosshairPosition(result.price, time, window.series)
     }
 
     class TooltipView {
@@ -312,10 +310,10 @@ function applyOptions() {
       }
     }
 
-    vm.updateLayer("tooltip", new TooltipView(open, high, low, close, volume, "600 13px JetBrains Mono", chart.options().layout.textColor, locale, window.chart.options().localization.priceFormatter, buyColor, sellColor))
+    window.vm.updateLayer("tooltip", new TooltipView(open, high, low, close, volume, "600 13px JetBrains Mono", window.chart.options().layout.textColor, locale, window.chart.options().localization.priceFormatter, buyColor, sellColor))
   })
 
-  chart.subscribeClick(({ hoveredObjectId }) => {
+  window.chart.subscribeClick(({ hoveredObjectId }) => {
     if (hoveredObjectId) {
       const record = document.getElementById("record_" + hoveredObjectId)
 
@@ -557,6 +555,7 @@ if (dataSourceList.length != 0) {
       value: item.volume || 0,
       color: item.close > item.open ? buyColor : sellColor
     }))
+
     window.volumeSeries.setData(volumeData)
   }
 
@@ -886,7 +885,8 @@ function scrollChartToTime(time) {
     return
   }
 
-  series.priceScale().applyOptions({ autoScale: true })
+  window.series.priceScale().applyOptions({ autoScale: true })
+  window.volumeSeries.priceScale().applyOptions({ autoScale: true })
 
   const visibleRange = chart.timeScale().getVisibleRange()
 
@@ -985,6 +985,7 @@ function flashVerticalLineAtTime(time) {
   }
 
   const lineColor = getComputedStyle(document.querySelector("body")).getPropertyValue('--highlight-color').trim() || "#ff9800"
+
   window.vm.updateLayer("flashLine", new FlashVerticalLineView(current, lineColor))
 
   const destroyOnViewportChange = () => {
