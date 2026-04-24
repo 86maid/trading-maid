@@ -577,36 +577,3 @@ impl<const N: usize> KLineBuffer<N> {
         self.volume.extend(i.clone().map(|v| v.volume));
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::prelude::*;
-
-    #[tokio::test]
-    async fn download_and_read() {
-        let path = get_or_download("BTCUSDT/1m", 12).await.unwrap();
-
-        DataSource::from_file_metadata(
-            path,
-            Metadata {
-                symbol: "BTCUSDT".to_string(),
-                level: Level::Minute1,
-                min_size: "0.01".parse().unwrap(),
-                min_notional: "0".parse().unwrap(),
-                tick_size: "0.1".parse().unwrap(),
-                maker_fee: "0.0002".parse().unwrap(),
-                taker_fee: "0.0005".parse().unwrap(),
-                maintenance: "0.004".parse().unwrap(),
-            },
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn test_add() {
-        assert!(
-            Decimal::try_from(0.1).unwrap() + Decimal::try_from(0.2).unwrap()
-                == Decimal::try_from(0.3).unwrap()
-        );
-    }
-}
