@@ -73,6 +73,25 @@ struct PositionEx {
     log: Vec<Record>,
 }
 
+impl PositionEx {
+    fn calc_max_quantity(&self) -> Decimal {
+        let mut max_quantity = None;
+        let mut sum = Decimal::ZERO;
+        for v in self.log.iter() {
+            sum += v.quantity * v.side;
+            let exposure = sum.abs();
+            if let Some(max_quantity) = &mut max_quantity {
+                if exposure > *max_quantity {
+                    *max_quantity = exposure;
+                }
+            } else {
+                max_quantity = Some(exposure);
+            }
+        }
+        max_quantity.unwrap_or(Decimal::ZERO)
+    }
+}
+
 impl LocalExchange {
     pub fn new(data_source: DataSource) -> Self {
         let end_index = data_source.data.len().saturating_sub(1);
@@ -269,11 +288,7 @@ impl LocalExchangeInner {
         self.pending_order_list.shift_remove(order_id)
     }
 
-    fn handle_trigger_order(
-        &mut self,
-        order_id: &str,
-        order_queue: &mut VecDeque<String>,
-    ) {
+    fn handle_trigger_order(&mut self, order_id: &str, order_queue: &mut VecDeque<String>) {
         let mut order_ref = match self.shift_remove_order(order_id) {
             Some(v) => v,
             None => return,
@@ -414,11 +429,7 @@ impl LocalExchangeInner {
         false
     }
 
-    fn handle_pre_execution_checks(
-        &mut self,
-        order_ref: &mut OrderEx,
-        fee_rate: Decimal,
-    ) -> bool {
+    fn handle_pre_execution_checks(&mut self, order_ref: &mut OrderEx, fee_rate: Decimal) -> bool {
         if order_ref.reduce_only {
             if self.handle_reduce_only_checks(order_ref) {
                 return false;
@@ -472,40 +483,6 @@ impl LocalExchangeInner {
         true
     }
 
-    fn handle_add_position(
-        id: &str,
-        position: &mut PositionEx,
-        order_ref: &OrderEx,
-        maintenance: Decimal,
-        fee_rate: Decimal,
-        kline_time: u64,
-    ) {
-        let old_quantity = position.quantity;
-        let new_quantity = old_quantity + order_ref.quantity;
-        let new_avg_price = (old_quantity * position.open_avg_price
-            + order_ref.quantity * order_ref.avg_price)
-            / new_quantity;
-
-        position.quantity = new_quantity;
-        position.open_avg_price = new_avg_price;
-        position.margin += order_ref.freeze_margin;
-
-        position.liquidation_price =
-            calc_liquidation_price(position.leverage, maintenance, position.side,
-                position.open_avg_price, position.quantity, position.margin);
-
-        position.log.push(Record {
-            id: id.to_string(),
-            kind: order_ref.kind,
-            side: order_ref.side,
-            price: order_ref.avg_price,
-            quantity: order_ref.quantity,
-            profit: Decimal::ZERO,
-            fee: order_ref.avg_price * order_ref.quantity * fee_rate,
-            time: kline_time,
-        });
-    }
-
     fn calc_close_metrics(
         &self,
         position: &PositionEx,
@@ -521,23 +498,6 @@ impl LocalExchangeInner {
             (position.open_avg_price - order_ref.avg_price) * close_quantity
         };
         (close_margin, close_profit)
-    }
-
-    fn calc_max_quantity(log: &[Record]) -> Decimal {
-        let mut max_quantity = None;
-        let mut sum = Decimal::ZERO;
-        for v in log.iter() {
-            sum += v.quantity * v.side;
-            let exposure = sum.abs();
-            if let Some(max_quantity) = &mut max_quantity {
-                if exposure > *max_quantity {
-                    *max_quantity = exposure;
-                }
-            } else {
-                max_quantity = Some(exposure);
-            }
-        }
-        max_quantity.unwrap_or(Decimal::ZERO)
     }
 
     fn push_history_position(
@@ -566,10 +526,113 @@ impl LocalExchangeInner {
         });
     }
 
+    fn handle_close_position(
+        &mut self,
+        position: PositionEx,
+        order_ref: &OrderEx,
+        max_quantity: Decimal,
+        profit_sum: Decimal,
+        fee_sum: Decimal,
+    ) {
+        self.cash += order_ref.freeze_margin;
+
+        if let Some(last) = self.history_position_list.iter_mut().last()
+            && last.close_quantity != max_quantity
+        {
+            last.leverage = position.leverage;
+            last.side = position.side;
+            last.open_avg_price = position.open_avg_price;
+            last.close_avg_price = order_ref.avg_price;
+            last.max_quantity = max_quantity;
+            last.close_quantity = max_quantity;
+            last.total_profit = profit_sum - fee_sum;
+            last.profit = profit_sum;
+            last.fee = fee_sum;
+            last.close_time = self.kline.time;
+            last.log = position.log;
+        } else {
+            self.push_history_position(
+                &position,
+                order_ref,
+                max_quantity,
+                max_quantity,
+                profit_sum,
+                fee_sum,
+            );
+        }
+
+        self.pending_order_list
+            .shift_remove(&position.liquidation_order_id);
+    }
+
+    fn handle_partial_close_position(
+        &mut self,
+        mut position: PositionEx,
+        order_ref: &OrderEx,
+        max_quantity: Decimal,
+        profit_sum: Decimal,
+        fee_sum: Decimal,
+    ) {
+        self.cash += order_ref.freeze_margin;
+
+        if let Some(last) = self.history_position_list.iter_mut().last()
+            && last.close_quantity != last.max_quantity
+        {
+            last.leverage = position.leverage;
+            last.side = position.side;
+            last.open_avg_price = position.open_avg_price;
+            last.max_quantity = max_quantity;
+            last.close_avg_price = order_ref.avg_price;
+            last.close_quantity = position
+                .log
+                .iter()
+                .filter(|i| i.side != position.side)
+                .map(|i| i.quantity)
+                .sum::<Decimal>()
+                .max(Decimal::ZERO);
+            last.total_profit = profit_sum - fee_sum;
+            last.profit = profit_sum;
+            last.fee = fee_sum;
+            last.close_time = self.kline.time;
+            last.log = position.log.clone();
+        } else {
+            self.push_history_position(
+                &position,
+                order_ref,
+                position
+                    .log
+                    .iter()
+                    .filter(|i| i.side != position.side)
+                    .map(|i| i.quantity)
+                    .sum::<Decimal>()
+                    .max(Decimal::ZERO),
+                max_quantity,
+                profit_sum,
+                fee_sum,
+            );
+        }
+
+        position.liquidation_price = calc_liquidation_price(
+            position.leverage,
+            self.data_source.metadata.maintenance,
+            position.side,
+            position.open_avg_price,
+            position.quantity,
+            position.margin,
+        );
+
+        self.pending_order_list
+            .get_mut(&position.liquidation_order_id)
+            .unwrap()
+            .price = position.liquidation_price;
+
+        self.position = Some(position);
+    }
+
     fn handle_reverse_position(
         &mut self,
         id: &str,
-        position: &mut PositionEx,
+        position: PositionEx,
         order_ref: &OrderEx,
         fee_rate: Decimal,
         remain_quantity: Decimal,
@@ -596,7 +659,7 @@ impl LocalExchangeInner {
             fee,
             open_time: position.open_time,
             close_time: self.kline.time,
-            log: position.log.clone(),
+            log: position.log,
         });
 
         let liquidation_order = self
@@ -640,12 +703,7 @@ impl LocalExchangeInner {
         });
     }
 
-    fn handle_open_position(
-        &mut self,
-        id: &str,
-        order_ref: &OrderEx,
-        fee_rate: Decimal,
-    ) {
+    fn handle_open_position(&mut self, id: &str, order_ref: &OrderEx, fee_rate: Decimal) {
         let liquidation_price = calc_liquidation_price(
             self.leverage,
             self.data_source.metadata.maintenance,
@@ -704,28 +762,23 @@ impl LocalExchangeInner {
 
         match &mut self.position {
             Some(v) if v.side == order_ref.side => {
-                let maintenance = self.data_source.metadata.maintenance;
-                let kline_time = self.kline.time;
-                Self::handle_add_position(id, v, &order_ref, maintenance, fee_rate, kline_time);
-                self.pending_order_list
-                    .get_mut(&v.liquidation_order_id)
-                    .unwrap()
-                    .price = v.liquidation_price;
+                let position = self.position.take().unwrap();
+                self.handle_add_position(id, &order_ref, fee_rate, position);
             }
             Some(_) => {
-                let mut pos = self.position.take().unwrap();
-                let close_quantity = order_ref.quantity.min(pos.quantity);
-                let remain_quantity = order_ref.quantity - pos.quantity;
+                let mut position = self.position.take().unwrap();
+                let close_quantity = order_ref.quantity.min(position.quantity);
+                let remain_quantity = order_ref.quantity - position.quantity;
                 let (close_margin, close_profit) =
-                    self.calc_close_metrics(&pos, &order_ref, close_quantity);
+                    self.calc_close_metrics(&position, &order_ref, close_quantity);
 
-                pos.quantity -= close_quantity;
-                pos.margin -= close_margin;
+                position.quantity -= close_quantity;
+                position.margin -= close_margin;
                 self.cash += close_margin + close_profit;
 
                 let close_fee = order_ref.avg_price * close_quantity * fee_rate;
 
-                pos.log.push(Record {
+                position.log.push(Record {
                     id: id.to_string(),
                     kind: order_ref.kind,
                     side: order_ref.side,
@@ -736,93 +789,37 @@ impl LocalExchangeInner {
                     time: self.kline.time,
                 });
 
-                let profit_sum = pos.log.iter().map(|v| v.profit).sum();
-                let fee_sum = pos.log.iter().map(|v| v.fee).sum();
-                let max_quantity = Self::calc_max_quantity(&pos.log);
+                let profit_sum = position.log.iter().map(|v| v.profit).sum();
+                let fee_sum = position.log.iter().map(|v| v.fee).sum();
+                let max_quantity = position.calc_max_quantity();
 
                 if remain_quantity > 0 {
                     self.handle_reverse_position(
-                        id, &mut pos, &order_ref, fee_rate, remain_quantity, max_quantity,
-                        profit_sum, fee_sum,
+                        id,
+                        position,
+                        &order_ref,
+                        fee_rate,
+                        remain_quantity,
+                        max_quantity,
+                        profit_sum,
+                        fee_sum,
                     );
                 } else if remain_quantity == 0 {
-                    self.cash += order_ref.freeze_margin;
-
-                    if let Some(last_position) = self.history_position_list.iter_mut().last()
-                        && last_position.close_quantity != max_quantity
-                    {
-                        let last = last_position;
-                        last.leverage = pos.leverage;
-                        last.side = pos.side;
-                        last.open_avg_price = pos.open_avg_price;
-                        last.close_avg_price = order_ref.avg_price;
-                        last.max_quantity = max_quantity;
-                        last.close_quantity = max_quantity;
-                        last.total_profit = profit_sum - fee_sum;
-                        last.profit = profit_sum;
-                        last.fee = fee_sum;
-                        last.close_time = self.kline.time;
-                        last.log = pos.log.clone();
-                    } else {
-                        self.push_history_position(
-                            &pos, &order_ref, max_quantity, max_quantity, profit_sum, fee_sum,
-                        );
-                    }
-
-                    self.pending_order_list
-                        .shift_remove(&pos.liquidation_order_id);
-                } else {
-                    let close_qty_for_history = pos
-                        .log
-                        .iter()
-                        .filter(|i| i.side != pos.side)
-                        .map(|i| i.quantity)
-                        .sum::<Decimal>()
-                        .max(Decimal::ZERO);
-
-                    self.cash += order_ref.freeze_margin;
-
-                    if let Some(last_position) = self.history_position_list.iter_mut().last()
-                        && last_position.close_quantity != last_position.max_quantity
-                    {
-                        let last = last_position;
-                        last.leverage = pos.leverage;
-                        last.side = pos.side;
-                        last.open_avg_price = pos.open_avg_price;
-                        last.max_quantity = max_quantity;
-                        last.close_avg_price = order_ref.avg_price;
-                        last.close_quantity = close_qty_for_history;
-                        last.total_profit = profit_sum - fee_sum;
-                        last.profit = profit_sum;
-                        last.fee = fee_sum;
-                        last.close_time = self.kline.time;
-                        last.log = pos.log.clone();
-                    } else {
-                        self.push_history_position(
-                            &pos,
-                            &order_ref,
-                            close_qty_for_history,
-                            max_quantity,
-                            profit_sum,
-                            fee_sum,
-                        );
-                    }
-
-                    pos.liquidation_price = calc_liquidation_price(
-                        pos.leverage,
-                        self.data_source.metadata.maintenance,
-                        pos.side,
-                        pos.open_avg_price,
-                        pos.quantity,
-                        pos.margin,
+                    self.handle_close_position(
+                        position,
+                        &order_ref,
+                        max_quantity,
+                        profit_sum,
+                        fee_sum,
                     );
-
-                    self.pending_order_list
-                        .get_mut(&pos.liquidation_order_id)
-                        .unwrap()
-                        .price = pos.liquidation_price;
-
-                    self.position = Some(pos);
+                } else {
+                    self.handle_partial_close_position(
+                        position,
+                        &order_ref,
+                        max_quantity,
+                        profit_sum,
+                        fee_sum,
+                    );
                 }
             }
             None => {
@@ -834,6 +831,54 @@ impl LocalExchangeInner {
         order_ref.cumulative_quantity = order_ref.quantity;
         self.history_order_list
             .insert(order_ref.id.clone(), order_ref);
+    }
+
+    fn handle_add_position(
+        &mut self,
+        id: &str,
+        order_ref: &OrderEx,
+        fee_rate: Decimal,
+        mut position: PositionEx,
+    ) {
+        let maintenance = self.data_source.metadata.maintenance;
+        let kline_time = self.kline.time;
+        let order_ref: &OrderEx = order_ref;
+        let old_quantity = position.quantity;
+        let new_quantity = old_quantity + order_ref.quantity;
+        let new_avg_price = (old_quantity * position.open_avg_price
+            + order_ref.quantity * order_ref.avg_price)
+            / new_quantity;
+
+        position.quantity = new_quantity;
+        position.open_avg_price = new_avg_price;
+        position.margin += order_ref.freeze_margin;
+
+        position.liquidation_price = calc_liquidation_price(
+            position.leverage,
+            maintenance,
+            position.side,
+            position.open_avg_price,
+            position.quantity,
+            position.margin,
+        );
+
+        position.log.push(Record {
+            id: id.to_string(),
+            kind: order_ref.kind,
+            side: order_ref.side,
+            price: order_ref.avg_price,
+            quantity: order_ref.quantity,
+            profit: Decimal::ZERO,
+            fee: order_ref.avg_price * order_ref.quantity * fee_rate,
+            time: kline_time,
+        });
+
+        self.pending_order_list
+            .get_mut(&position.liquidation_order_id)
+            .unwrap()
+            .price = position.liquidation_price;
+
+        self.position = Some(position);
     }
 }
 
