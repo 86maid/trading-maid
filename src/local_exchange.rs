@@ -265,6 +265,114 @@ impl LocalExchangeInner {
         }
     }
 
+    fn shift_remove_order(&mut self, order_id: &str) -> Option<OrderEx> {
+        self.pending_order_list.shift_remove(order_id)
+    }
+
+    fn handle_trigger_order(
+        &mut self,
+        order_id: &str,
+        order_queue: &mut VecDeque<String>,
+    ) {
+        let mut order_ref = match self.shift_remove_order(order_id) {
+            Some(v) => v,
+            None => return,
+        };
+
+        let result = self.place_order(
+            Order {
+                symbol: order_ref.symbol.clone(),
+                side: order_ref.side,
+                trigger_price: Decimal::ZERO,
+                price: if order_ref.price == Decimal::ZERO {
+                    order_ref.trigger_price
+                } else {
+                    order_ref.price
+                },
+                quantity: order_ref.quantity,
+                reduce_only: order_ref.reduce_only,
+            },
+            if order_ref.price == Decimal::ZERO {
+                Kind::Market
+            } else {
+                Kind::Limit
+            },
+        );
+
+        order_ref.update_time = self.kline.time;
+        order_ref.status = if let Ok(v) = result {
+            order_queue.push_back(v);
+            Status::Filled
+        } else {
+            Status::Rejected
+        };
+
+        self.history_order_list
+            .insert(order_ref.id.clone(), order_ref);
+    }
+
+    fn handle_limit_or_liquidation_order(&mut self, order_id: &str) {
+        let order_ref = self.try_fill_limit_order(order_id);
+        let Some(order_ref) = order_ref else {
+            return;
+        };
+
+        let fee_rate = if order_ref.kind == Kind::Liquidation {
+            self.data_source.metadata.taker_fee
+        } else {
+            self.data_source.metadata.maker_fee
+        };
+
+        self.execute_order(order_id, order_ref, fee_rate);
+    }
+
+    fn try_fill_limit_order(&mut self, order_id: &str) -> Option<OrderEx> {
+        let order = self.pending_order_list.get(order_id)?;
+
+        if order.kind == Kind::Liquidation {
+            if !(order.price >= self.kline.low && order.price <= self.kline.high) {
+                return None;
+            }
+            let mut order_ref = self.shift_remove_order(order_id)?;
+            order_ref.avg_price = order_ref.price;
+            Some(order_ref)
+        } else if (order.side == Side::Buy && order.price >= self.kline.open)
+            || (order.side == Side::Sell && order.price <= self.kline.open)
+        {
+            let mut order_ref = self.shift_remove_order(order_id)?;
+            order_ref.avg_price = if order_ref.side == Side::Buy {
+                self.kline.high
+            } else {
+                self.kline.low
+            };
+            Some(order_ref)
+        } else if (order.side == Side::Buy && self.kline.low <= order.price)
+            || (order.side == Side::Sell && self.kline.high >= order.price)
+        {
+            let mut order_ref = self.shift_remove_order(order_id)?;
+            order_ref.avg_price = order_ref.price;
+            Some(order_ref)
+        } else {
+            None
+        }
+    }
+
+    fn handle_market_order(&mut self, order_id: &str) {
+        let mut order_ref = match self.shift_remove_order(order_id) {
+            Some(v) => v,
+            None => return,
+        };
+
+        if order_ref.price == 0 {
+            order_ref.price = self.calc_market_price_slippage(order_ref.side, self.kline.open);
+        } else {
+            order_ref.price = self.calc_market_price_slippage(order_ref.side, order_ref.price);
+        }
+
+        order_ref.avg_price = order_ref.price;
+        self.execute_order(order_id, order_ref, self.data_source.metadata.taker_fee);
+    }
+
     fn update_order(&mut self, order_id: &str, order_queue: &mut VecDeque<String>) {
         let Some(order) = self.pending_order_list.get(order_id) else {
             return;
@@ -275,162 +383,67 @@ impl LocalExchangeInner {
         }
 
         if order.kind == Kind::Trigger {
-            // 条件单触发判断
             if !(order.trigger_price >= self.kline.low && order.trigger_price <= self.kline.high) {
                 return;
             }
-
-            let mut order_ref = match self.pending_order_list.shift_remove(order_id) {
-                Some(v) => v,
-                None => return,
-            };
-
-            let result = self.place_order(
-                Order {
-                    symbol: order_ref.symbol.clone(),
-                    side: order_ref.side,
-                    trigger_price: Decimal::ZERO,
-                    price: if order_ref.price == Decimal::ZERO {
-                        order_ref.trigger_price
-                    } else {
-                        order_ref.price
-                    },
-                    quantity: order_ref.quantity,
-                    reduce_only: order_ref.reduce_only,
-                },
-                if order_ref.price == Decimal::ZERO {
-                    Kind::Market
-                } else {
-                    Kind::Limit
-                },
-            );
-
-            order_ref.update_time = self.kline.time;
-            order_ref.status = if let Ok(v) = result {
-                order_queue.push_back(v);
-                Status::Filled
-            } else {
-                Status::Rejected
-            };
-
-            self.history_order_list
-                .insert(order_ref.id.clone(), order_ref);
+            self.handle_trigger_order(order_id, order_queue);
         } else if order.kind == Kind::Limit || order.kind == Kind::Liquidation {
-            // 限价单逻辑（包含强平单的处理）
-            let order_ref = if order.kind == Kind::Liquidation {
-                if !(order.price >= self.kline.low && order.price <= self.kline.high) {
-                    return;
-                }
-
-                let mut order_ref = match self.pending_order_list.shift_remove(order_id) {
-                    Some(v) => v,
-                    None => return,
-                };
-
-                order_ref.avg_price = order_ref.price;
-                order_ref
-            } else if (order.side == Side::Buy && order.price >= self.kline.open)
-                || (order.side == Side::Sell && order.price <= self.kline.open)
-            {
-                let mut order_ref = match self.pending_order_list.shift_remove(order_id) {
-                    Some(v) => v,
-                    None => return,
-                };
-
-                order_ref.avg_price = if order_ref.side == Side::Buy {
-                    self.kline.high
-                } else {
-                    self.kline.low
-                };
-
-                order_ref
-            } else if (order.side == Side::Buy && self.kline.low <= order.price)
-                || (order.side == Side::Sell && self.kline.high >= order.price)
-            {
-                let mut order_ref = match self.pending_order_list.shift_remove(order_id) {
-                    Some(v) => v,
-                    None => return,
-                };
-
-                order_ref.avg_price = order_ref.price;
-                order_ref
-            } else {
-                return;
-            };
-
-            let fee_rate = if order_ref.kind == Kind::Liquidation {
-                self.data_source.metadata.taker_fee
-            } else {
-                self.data_source.metadata.maker_fee
-            };
-
-            self.execute_order(order_id, order_ref, fee_rate);
+            self.handle_limit_or_liquidation_order(order_id);
         } else {
-            // 市价单
-            let mut order_ref = match self.pending_order_list.shift_remove(order_id) {
-                Some(v) => v,
-                None => return,
-            };
-
-            if order_ref.price == 0 {
-                order_ref.price = self.calc_market_price_slippage(order_ref.side, self.kline.open);
-            } else {
-                // 条件市价单的市价等于触发价
-                order_ref.price = self.calc_market_price_slippage(order_ref.side, order_ref.price);
-            }
-
-            order_ref.avg_price = order_ref.price;
-            self.execute_order(order_id, order_ref, self.data_source.metadata.taker_fee);
+            self.handle_market_order(order_id);
         }
     }
 
-    fn execute_order(&mut self, id: &str, mut order_ref: OrderEx, fee_rate: Decimal) {
-        order_ref.update_time = self.kline.time;
-
-        if order_ref.reduce_only {
-            if let Some(v) = &self.position {
-                if v.side == order_ref.side {
-                    order_ref.status = Status::Canceled;
-                    self.history_order_list
-                        .insert(order_ref.id.clone(), order_ref);
-                    return;
-                } else {
-                    let close_quantity = order_ref.quantity.min(v.quantity);
-
-                    order_ref.quantity = close_quantity;
-                }
-            } else {
+    fn handle_reduce_only_checks(&mut self, order_ref: &mut OrderEx) -> bool {
+        if let Some(v) = &self.position {
+            if v.side == order_ref.side {
                 order_ref.status = Status::Canceled;
-                order_ref.update_time = self.kline.time;
                 self.history_order_list
-                    .insert(order_ref.id.clone(), order_ref);
-                return;
+                    .insert(order_ref.id.clone(), order_ref.clone());
+                return true;
+            } else {
+                order_ref.quantity = order_ref.quantity.min(v.quantity);
+            }
+        } else {
+            order_ref.status = Status::Canceled;
+            order_ref.update_time = self.kline.time;
+            self.history_order_list
+                .insert(order_ref.id.clone(), order_ref.clone());
+            return true;
+        }
+        false
+    }
+
+    fn handle_pre_execution_checks(
+        &mut self,
+        order_ref: &mut OrderEx,
+        fee_rate: Decimal,
+    ) -> bool {
+        if order_ref.reduce_only {
+            if self.handle_reduce_only_checks(order_ref) {
+                return false;
             }
         } else if order_ref.freeze_margin == 0
-            && self.freeze_margin(&mut order_ref, self.leverage).is_err()
+            && self.freeze_margin(order_ref, self.leverage).is_err()
         {
-            // 市价单冻结保证金
             order_ref.status = Status::Rejected;
             self.history_order_list
-                .insert(order_ref.id.clone(), order_ref);
-            return;
+                .insert(order_ref.id.clone(), order_ref.clone());
+            return false;
         }
 
-        // 退还超额冻结的保证金
-        // 例如，做多委托价 ≥ 市价时，将导致订单立即以市价成交
         if order_ref.avg_price != order_ref.price
             && self
-                .adjust_freeze_margin_by_avg_price(&mut order_ref, self.leverage)
+                .adjust_freeze_margin_by_avg_price(order_ref, self.leverage)
                 .is_err()
         {
             self.cash += order_ref.freeze_margin;
             order_ref.status = Status::Rejected;
             self.history_order_list
-                .insert(order_ref.id.clone(), order_ref);
-            return;
+                .insert(order_ref.id.clone(), order_ref.clone());
+            return false;
         }
 
-        // 检查市价单和限价单名义价值
         if order_ref.kind.is_normal()
             && self.data_source.metadata.min_notional != 0
             && (order_ref.avg_price * order_ref.quantity) < self.data_source.metadata.min_notional
@@ -438,348 +451,387 @@ impl LocalExchangeInner {
             self.cash += order_ref.freeze_margin;
             order_ref.status = Status::Rejected;
             self.history_order_list
-                .insert(order_ref.id.clone(), order_ref);
-            return;
+                .insert(order_ref.id.clone(), order_ref.clone());
+            return false;
         }
 
         let fee_cost = order_ref.avg_price * order_ref.quantity * fee_rate;
 
         if self.need_cash(fee_cost).is_err() {
             if order_ref.kind.is_normal() {
-                // 普通单（包括 reduce-only）不允许因手续费导致现金为负，余额不足直接拒绝。
                 self.cash += order_ref.freeze_margin;
                 order_ref.status = Status::Rejected;
                 self.history_order_list
-                    .insert(order_ref.id.clone(), order_ref);
-                return;
+                    .insert(order_ref.id.clone(), order_ref.clone());
+                return false;
             } else {
-                // 强平/ADL 允许穿仓，但手续费仍需入账，现金可为负。
                 self.cash -= fee_cost;
             }
         }
 
+        true
+    }
+
+    fn handle_add_position(
+        id: &str,
+        position: &mut PositionEx,
+        order_ref: &OrderEx,
+        maintenance: Decimal,
+        fee_rate: Decimal,
+        kline_time: u64,
+    ) {
+        let old_quantity = position.quantity;
+        let new_quantity = old_quantity + order_ref.quantity;
+        let new_avg_price = (old_quantity * position.open_avg_price
+            + order_ref.quantity * order_ref.avg_price)
+            / new_quantity;
+
+        position.quantity = new_quantity;
+        position.open_avg_price = new_avg_price;
+        position.margin += order_ref.freeze_margin;
+
+        position.liquidation_price =
+            calc_liquidation_price(position.leverage, maintenance, position.side,
+                position.open_avg_price, position.quantity, position.margin);
+
+        position.log.push(Record {
+            id: id.to_string(),
+            kind: order_ref.kind,
+            side: order_ref.side,
+            price: order_ref.avg_price,
+            quantity: order_ref.quantity,
+            profit: Decimal::ZERO,
+            fee: order_ref.avg_price * order_ref.quantity * fee_rate,
+            time: kline_time,
+        });
+    }
+
+    fn calc_close_metrics(
+        &self,
+        position: &PositionEx,
+        order_ref: &OrderEx,
+        close_quantity: Decimal,
+    ) -> (Decimal, Decimal) {
+        let close_margin = position.margin * (close_quantity / position.quantity);
+        let close_profit = if order_ref.kind == Kind::Liquidation {
+            -close_margin
+        } else if position.side == Side::Buy {
+            (order_ref.avg_price - position.open_avg_price) * close_quantity
+        } else {
+            (position.open_avg_price - order_ref.avg_price) * close_quantity
+        };
+        (close_margin, close_profit)
+    }
+
+    fn calc_max_quantity(log: &[Record]) -> Decimal {
+        let mut max_quantity = None;
+        let mut sum = Decimal::ZERO;
+        for v in log.iter() {
+            sum += v.quantity * v.side;
+            let exposure = sum.abs();
+            if let Some(max_quantity) = &mut max_quantity {
+                if exposure > *max_quantity {
+                    *max_quantity = exposure;
+                }
+            } else {
+                max_quantity = Some(exposure);
+            }
+        }
+        max_quantity.unwrap_or(Decimal::ZERO)
+    }
+
+    fn push_history_position(
+        &mut self,
+        position: &PositionEx,
+        order_ref: &OrderEx,
+        close_quantity: Decimal,
+        max_quantity: Decimal,
+        profit: Decimal,
+        fee: Decimal,
+    ) {
+        self.history_position_list.push(HistoryPosition {
+            symbol: position.symbol.clone(),
+            leverage: position.leverage,
+            side: position.side,
+            open_avg_price: position.open_avg_price,
+            close_avg_price: order_ref.avg_price,
+            max_quantity,
+            close_quantity,
+            total_profit: profit - fee,
+            profit,
+            fee,
+            open_time: position.open_time,
+            close_time: self.kline.time,
+            log: position.log.clone(),
+        });
+    }
+
+    fn handle_reverse_position(
+        &mut self,
+        id: &str,
+        position: &mut PositionEx,
+        order_ref: &OrderEx,
+        fee_rate: Decimal,
+        remain_quantity: Decimal,
+        max_quantity: Decimal,
+        profit: Decimal,
+        fee: Decimal,
+    ) {
+        let reverse_quantity = remain_quantity.abs();
+        let reverse_margin =
+            calc_initial_margin(order_ref.avg_price, reverse_quantity, self.leverage);
+
+        self.cash += order_ref.freeze_margin - reverse_margin;
+
+        self.history_position_list.push(HistoryPosition {
+            symbol: position.symbol.clone(),
+            leverage: position.leverage,
+            side: position.side,
+            open_avg_price: position.open_avg_price,
+            close_avg_price: order_ref.avg_price,
+            max_quantity,
+            close_quantity: max_quantity,
+            total_profit: profit - fee,
+            profit,
+            fee,
+            open_time: position.open_time,
+            close_time: self.kline.time,
+            log: position.log.clone(),
+        });
+
+        let liquidation_order = self
+            .pending_order_list
+            .get_mut(&position.liquidation_order_id)
+            .unwrap();
+
+        liquidation_order.side = order_ref.side.neg();
+        liquidation_order.price = calc_liquidation_price(
+            self.leverage,
+            self.data_source.metadata.maintenance,
+            order_ref.side,
+            order_ref.avg_price,
+            reverse_quantity,
+            reverse_margin,
+        );
+
+        self.position = Some(PositionEx {
+            liquidation_order_id: liquidation_order.id.clone(),
+            log: vec![Record {
+                id: id.to_string(),
+                kind: order_ref.kind,
+                side: order_ref.side,
+                price: order_ref.avg_price,
+                quantity: reverse_quantity,
+                profit: Decimal::ZERO,
+                fee: order_ref.avg_price * reverse_quantity * fee_rate,
+                time: self.kline.time,
+            }],
+            parent: Position {
+                symbol: order_ref.symbol.clone(),
+                leverage: self.leverage,
+                side: order_ref.side,
+                open_avg_price: order_ref.avg_price,
+                quantity: reverse_quantity,
+                margin: reverse_margin,
+                liquidation_price: liquidation_order.price,
+                profit: Decimal::ZERO,
+                open_time: self.kline.time,
+            },
+        });
+    }
+
+    fn handle_open_position(
+        &mut self,
+        id: &str,
+        order_ref: &OrderEx,
+        fee_rate: Decimal,
+    ) {
+        let liquidation_price = calc_liquidation_price(
+            self.leverage,
+            self.data_source.metadata.maintenance,
+            order_ref.side,
+            order_ref.avg_price,
+            order_ref.quantity,
+            order_ref.freeze_margin,
+        );
+
+        let liquidation_order_id = self
+            .place_order(
+                Order {
+                    symbol: order_ref.symbol.clone(),
+                    side: order_ref.side.neg(),
+                    trigger_price: Decimal::ZERO,
+                    price: liquidation_price,
+                    quantity: Decimal::MAX,
+                    reduce_only: true,
+                },
+                Kind::Liquidation,
+            )
+            .unwrap();
+
+        self.position = Some(PositionEx {
+            liquidation_order_id,
+            log: vec![Record {
+                id: id.to_string(),
+                kind: order_ref.kind,
+                side: order_ref.side,
+                price: order_ref.avg_price,
+                quantity: order_ref.quantity,
+                profit: Decimal::ZERO,
+                fee: order_ref.avg_price * order_ref.quantity * fee_rate,
+                time: self.kline.time,
+            }],
+            parent: Position {
+                symbol: order_ref.symbol.clone(),
+                leverage: self.leverage,
+                side: order_ref.side,
+                open_avg_price: order_ref.avg_price,
+                quantity: order_ref.quantity,
+                margin: order_ref.freeze_margin,
+                liquidation_price,
+                profit: Decimal::ZERO,
+                open_time: self.kline.time,
+            },
+        });
+    }
+
+    fn execute_order(&mut self, id: &str, mut order_ref: OrderEx, fee_rate: Decimal) {
+        order_ref.update_time = self.kline.time;
+
+        if !self.handle_pre_execution_checks(&mut order_ref, fee_rate) {
+            return;
+        }
+
         match &mut self.position {
-            Some(v) => {
-                if v.side == order_ref.side {
-                    // 加仓
-                    let old_quantity = v.quantity;
-                    let new_quantity = old_quantity + order_ref.quantity;
-                    let new_avg_price = (old_quantity * v.open_avg_price
-                        + order_ref.quantity * order_ref.avg_price)
-                        / new_quantity;
+            Some(v) if v.side == order_ref.side => {
+                let maintenance = self.data_source.metadata.maintenance;
+                let kline_time = self.kline.time;
+                Self::handle_add_position(id, v, &order_ref, maintenance, fee_rate, kline_time);
+                self.pending_order_list
+                    .get_mut(&v.liquidation_order_id)
+                    .unwrap()
+                    .price = v.liquidation_price;
+            }
+            Some(_) => {
+                let mut pos = self.position.take().unwrap();
+                let close_quantity = order_ref.quantity.min(pos.quantity);
+                let remain_quantity = order_ref.quantity - pos.quantity;
+                let (close_margin, close_profit) =
+                    self.calc_close_metrics(&pos, &order_ref, close_quantity);
 
-                    let fee = order_ref.avg_price * order_ref.quantity * fee_rate;
+                pos.quantity -= close_quantity;
+                pos.margin -= close_margin;
+                self.cash += close_margin + close_profit;
 
-                    v.quantity = new_quantity;
-                    v.open_avg_price = new_avg_price;
-                    v.margin += order_ref.freeze_margin;
+                let close_fee = order_ref.avg_price * close_quantity * fee_rate;
 
-                    v.liquidation_price = calc_liquidation_price(
-                        v.leverage,
+                pos.log.push(Record {
+                    id: id.to_string(),
+                    kind: order_ref.kind,
+                    side: order_ref.side,
+                    price: order_ref.avg_price,
+                    quantity: order_ref.quantity,
+                    profit: close_profit,
+                    fee: close_fee,
+                    time: self.kline.time,
+                });
+
+                let profit_sum = pos.log.iter().map(|v| v.profit).sum();
+                let fee_sum = pos.log.iter().map(|v| v.fee).sum();
+                let max_quantity = Self::calc_max_quantity(&pos.log);
+
+                if remain_quantity > 0 {
+                    self.handle_reverse_position(
+                        id, &mut pos, &order_ref, fee_rate, remain_quantity, max_quantity,
+                        profit_sum, fee_sum,
+                    );
+                } else if remain_quantity == 0 {
+                    self.cash += order_ref.freeze_margin;
+
+                    if let Some(last_position) = self.history_position_list.iter_mut().last()
+                        && last_position.close_quantity != max_quantity
+                    {
+                        let last = last_position;
+                        last.leverage = pos.leverage;
+                        last.side = pos.side;
+                        last.open_avg_price = pos.open_avg_price;
+                        last.close_avg_price = order_ref.avg_price;
+                        last.max_quantity = max_quantity;
+                        last.close_quantity = max_quantity;
+                        last.total_profit = profit_sum - fee_sum;
+                        last.profit = profit_sum;
+                        last.fee = fee_sum;
+                        last.close_time = self.kline.time;
+                        last.log = pos.log.clone();
+                    } else {
+                        self.push_history_position(
+                            &pos, &order_ref, max_quantity, max_quantity, profit_sum, fee_sum,
+                        );
+                    }
+
+                    self.pending_order_list
+                        .shift_remove(&pos.liquidation_order_id);
+                } else {
+                    let close_qty_for_history = pos
+                        .log
+                        .iter()
+                        .filter(|i| i.side != pos.side)
+                        .map(|i| i.quantity)
+                        .sum::<Decimal>()
+                        .max(Decimal::ZERO);
+
+                    self.cash += order_ref.freeze_margin;
+
+                    if let Some(last_position) = self.history_position_list.iter_mut().last()
+                        && last_position.close_quantity != last_position.max_quantity
+                    {
+                        let last = last_position;
+                        last.leverage = pos.leverage;
+                        last.side = pos.side;
+                        last.open_avg_price = pos.open_avg_price;
+                        last.max_quantity = max_quantity;
+                        last.close_avg_price = order_ref.avg_price;
+                        last.close_quantity = close_qty_for_history;
+                        last.total_profit = profit_sum - fee_sum;
+                        last.profit = profit_sum;
+                        last.fee = fee_sum;
+                        last.close_time = self.kline.time;
+                        last.log = pos.log.clone();
+                    } else {
+                        self.push_history_position(
+                            &pos,
+                            &order_ref,
+                            close_qty_for_history,
+                            max_quantity,
+                            profit_sum,
+                            fee_sum,
+                        );
+                    }
+
+                    pos.liquidation_price = calc_liquidation_price(
+                        pos.leverage,
                         self.data_source.metadata.maintenance,
-                        v.side,
-                        v.open_avg_price,
-                        v.quantity,
-                        v.margin,
+                        pos.side,
+                        pos.open_avg_price,
+                        pos.quantity,
+                        pos.margin,
                     );
 
                     self.pending_order_list
-                        .get_mut(&v.liquidation_order_id)
+                        .get_mut(&pos.liquidation_order_id)
                         .unwrap()
-                        .price = v.liquidation_price;
+                        .price = pos.liquidation_price;
 
-                    order_ref.cumulative_quantity = order_ref.quantity;
-
-                    v.log.push(Record {
-                        id: id.to_string(),
-                        kind: order_ref.kind,
-                        side: order_ref.side,
-                        price: order_ref.avg_price,
-                        quantity: order_ref.cumulative_quantity,
-                        profit: Decimal::ZERO,
-                        fee,
-                        time: self.kline.time,
-                    });
-                } else {
-                    // 平仓或反向开仓
-                    let close_quantity = order_ref.quantity.min(v.quantity);
-                    let remain_quantity = order_ref.quantity - v.quantity;
-                    let close_margin = v.margin * (close_quantity / v.quantity);
-                    let close_profit = if order_ref.kind == Kind::Liquidation {
-                        -close_margin
-                    } else if v.side == Side::Buy {
-                        (order_ref.avg_price - v.open_avg_price) * close_quantity
-                    } else {
-                        (v.open_avg_price - order_ref.avg_price) * close_quantity
-                    };
-
-                    v.quantity -= close_quantity;
-                    v.margin -= close_margin;
-
-                    self.cash += close_margin + close_profit;
-
-                    let close_fee = order_ref.avg_price * close_quantity * fee_rate;
-
-                    order_ref.cumulative_quantity = order_ref.quantity; //TODO: 不要使用 close_quantity，要保证平仓和反向开仓是同一个订单
-
-                    v.log.push(Record {
-                        id: id.to_string(),
-                        kind: order_ref.kind,
-                        side: order_ref.side,
-                        price: order_ref.avg_price,
-                        quantity: order_ref.cumulative_quantity,
-                        profit: close_profit,
-                        fee: close_fee,
-                        time: self.kline.time,
-                    });
-
-                    let profit = v.log.iter().map(|v| v.profit).sum();
-                    let fee = v.log.iter().map(|v| v.fee).sum();
-
-                    let mut max_quantity = None;
-                    let mut sum = Decimal::ZERO;
-
-                    for v in v.log.iter() {
-                        sum += v.quantity * v.side;
-                        let exposure = sum.abs();
-
-                        if let Some(max_quantity) = &mut max_quantity {
-                            if exposure > *max_quantity {
-                                *max_quantity = exposure;
-                            }
-                        } else {
-                            max_quantity = Some(exposure);
-                        }
-                    }
-
-                    let max_quantity = max_quantity.unwrap_or(Decimal::ZERO);
-
-                    if remain_quantity > 0 {
-                        // 反向开仓
-                        let reverse_quantity = remain_quantity.abs();
-                        let reverse_margin = calc_initial_margin(
-                            order_ref.avg_price,
-                            reverse_quantity,
-                            self.leverage,
-                        );
-
-                        // 下单阶段按整单冻结；进入反向后只需要为新仓保留 reverse_margin。
-                        // 其余冻结保证金应返还，避免资金凭空减少。
-                        self.cash += order_ref.freeze_margin - reverse_margin;
-
-                        self.history_position_list.push(HistoryPosition {
-                            symbol: v.symbol.clone(),
-                            leverage: v.leverage,
-                            side: v.side,
-                            open_avg_price: v.open_avg_price,
-                            close_avg_price: order_ref.avg_price,
-                            max_quantity,
-                            close_quantity: max_quantity,
-                            total_profit: profit - fee,
-                            profit,
-                            fee,
-                            open_time: v.open_time,
-                            close_time: self.kline.time,
-                            log: v.log.clone(),
-                        });
-
-                        let liquidation_order = self
-                            .pending_order_list
-                            .get_mut(&v.liquidation_order_id)
-                            .unwrap();
-
-                        liquidation_order.side = order_ref.side.neg();
-                        liquidation_order.price = calc_liquidation_price(
-                            self.leverage,
-                            self.data_source.metadata.maintenance,
-                            order_ref.side,
-                            order_ref.avg_price,
-                            reverse_quantity,
-                            reverse_margin,
-                        );
-
-                        self.position = Some(PositionEx {
-                            liquidation_order_id: liquidation_order.id.clone(),
-                            log: vec![Record {
-                                id: id.to_string(),
-                                kind: order_ref.kind,
-                                side: order_ref.side,
-                                price: order_ref.avg_price,
-                                quantity: reverse_quantity,
-                                profit: Decimal::ZERO,
-                                fee: order_ref.avg_price * reverse_quantity * fee_rate,
-                                time: self.kline.time,
-                            }],
-                            parent: Position {
-                                symbol: order_ref.symbol.clone(),
-                                leverage: self.leverage,
-                                side: order_ref.side,
-                                open_avg_price: order_ref.avg_price,
-                                quantity: reverse_quantity,
-                                margin: reverse_margin,
-                                liquidation_price: liquidation_order.price,
-                                profit: Decimal::ZERO,
-                                open_time: self.kline.time,
-                            },
-                        });
-                    } else if remain_quantity == 0 {
-                        // 全部平仓
-                        // 对手方向普通单若未形成新仓，整单冻结应全额返还。
-                        self.cash += order_ref.freeze_margin;
-
-                        if let Some(last_position) = self.history_position_list.iter_mut().last()
-                            && last_position.close_quantity != max_quantity
-                        {
-                            last_position.leverage = v.leverage;
-                            last_position.side = v.side;
-                            last_position.open_avg_price = v.open_avg_price;
-                            last_position.close_avg_price = order_ref.avg_price;
-                            last_position.max_quantity = max_quantity;
-                            last_position.close_quantity = max_quantity;
-                            last_position.total_profit = profit - fee;
-                            last_position.profit = profit;
-                            last_position.fee = fee;
-                            last_position.open_time = v.open_time;
-                            last_position.close_time = self.kline.time;
-                            last_position.log = v.log.clone();
-                        } else {
-                            self.history_position_list.push(HistoryPosition {
-                                symbol: v.symbol.clone(),
-                                leverage: v.leverage,
-                                side: v.side,
-                                open_avg_price: v.open_avg_price,
-                                close_avg_price: order_ref.avg_price,
-                                max_quantity,
-                                close_quantity: max_quantity,
-                                total_profit: profit - fee,
-                                profit,
-                                fee,
-                                open_time: v.open_time,
-                                close_time: self.kline.time,
-                                log: v.log.clone(),
-                            });
-                        }
-
-                        self.pending_order_list
-                            .shift_remove(&v.liquidation_order_id);
-
-                        self.position = None;
-                    } else {
-                        // 部分平仓
-                        // 对手方向普通单仅执行平仓时，整单冻结应全额返还。
-                        self.cash += order_ref.freeze_margin;
-
-                        if let Some(last_position) = self.history_position_list.iter_mut().last()
-                            && last_position.close_quantity != last_position.max_quantity
-                        {
-                            let close_quantity = v
-                                .log
-                                .iter()
-                                .filter(|i| i.side != v.side)
-                                .map(|i| i.quantity)
-                                .sum::<Decimal>()
-                                .max(Decimal::ZERO);
-
-                            last_position.leverage = v.leverage;
-                            last_position.side = v.side;
-                            last_position.open_avg_price = v.open_avg_price;
-                            last_position.max_quantity = max_quantity;
-                            last_position.close_avg_price = order_ref.avg_price;
-                            last_position.close_quantity = close_quantity;
-                            last_position.total_profit = profit - fee;
-                            last_position.profit = profit;
-                            last_position.fee = fee;
-                            last_position.close_time = self.kline.time;
-                            last_position.log = v.log.clone();
-                        } else {
-                            self.history_position_list.push(HistoryPosition {
-                                symbol: v.symbol.clone(),
-                                leverage: v.leverage,
-                                side: v.side,
-                                open_avg_price: v.open_avg_price,
-                                close_avg_price: order_ref.avg_price,
-                                max_quantity,
-                                close_quantity,
-                                total_profit: profit - fee,
-                                profit,
-                                fee,
-                                open_time: v.open_time,
-                                close_time: self.kline.time,
-                                log: v.log.clone(),
-                            });
-                        }
-
-                        v.liquidation_price = calc_liquidation_price(
-                            v.leverage,
-                            self.data_source.metadata.maintenance,
-                            v.side,
-                            v.open_avg_price,
-                            v.quantity,
-                            v.margin,
-                        );
-
-                        self.pending_order_list
-                            .get_mut(&v.liquidation_order_id)
-                            .unwrap()
-                            .price = v.liquidation_price;
-                    }
+                    self.position = Some(pos);
                 }
             }
             None => {
-                // 开仓
-                let liquidation_price = calc_liquidation_price(
-                    self.leverage,
-                    self.data_source.metadata.maintenance,
-                    order_ref.side,
-                    order_ref.avg_price,
-                    order_ref.quantity,
-                    order_ref.freeze_margin,
-                );
-
-                let liquidation_order_id = self
-                    .place_order(
-                        Order {
-                            symbol: order_ref.symbol.clone(),
-                            side: order_ref.side.neg(),
-                            trigger_price: Decimal::ZERO,
-                            price: liquidation_price,
-                            quantity: Decimal::MAX,
-                            reduce_only: true,
-                        },
-                        Kind::Liquidation,
-                    )
-                    .unwrap();
-
-                order_ref.cumulative_quantity = order_ref.quantity;
-
-                self.position = Some(PositionEx {
-                    liquidation_order_id,
-                    log: vec![Record {
-                        id: id.to_string(),
-                        kind: order_ref.kind,
-                        side: order_ref.side,
-                        price: order_ref.avg_price,
-                        quantity: order_ref.cumulative_quantity,
-                        profit: Decimal::ZERO,
-                        fee: order_ref.avg_price * order_ref.cumulative_quantity * fee_rate,
-                        time: self.kline.time,
-                    }],
-                    parent: Position {
-                        symbol: order_ref.symbol.clone(),
-                        leverage: self.leverage,
-                        side: order_ref.side,
-                        open_avg_price: order_ref.avg_price,
-                        quantity: order_ref.cumulative_quantity,
-                        margin: order_ref.freeze_margin,
-                        liquidation_price,
-                        profit: Decimal::ZERO,
-                        open_time: self.kline.time,
-                    },
-                });
+                self.handle_open_position(id, &order_ref, fee_rate);
             }
         }
 
         order_ref.status = Status::Filled;
+        order_ref.cumulative_quantity = order_ref.quantity;
         self.history_order_list
             .insert(order_ref.id.clone(), order_ref);
     }
