@@ -226,7 +226,7 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
             );
         }
 
-        let mut output_file = fs::File::create(output_file_path).await?;
+        let mut output_file = tokio::io::BufWriter::new(fs::File::create(output_file_path).await?);
 
         for v in csv_file_list.iter() {
             let file_content = fs::read_to_string(v).await?;
