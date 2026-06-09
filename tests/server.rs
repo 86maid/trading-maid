@@ -20,15 +20,11 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     Ok(())
 }
 
-// cargo test -r --test time -- --ignored
+// cargo test -r --test server -- --ignored
 #[ignore]
 #[tokio::test]
 async fn main() {
-    let start = tokio::time::Instant::now();
-
     let path = get_or_download("BTCUSDT/1m", 12).await.unwrap();
-
-    println!("load: {:?}", start.elapsed());
 
     let data_source_1m = DataSource::from_file_metadata(
         path,
@@ -52,23 +48,23 @@ async fn main() {
 
     let mut engine = Engine::new(exchange.clone(), my_strategy);
 
-    let start = tokio::time::Instant::now();
-
     if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
         println!("{:#?}", v);
     }
 
-    println!("run: {:?}", start.elapsed());
+    let history_position = exchange.get_history_position_list("BTCUSDT").await.unwrap();
+    let history_order = exchange.get_history_order_list("BTCUSDT").await.unwrap();
+    let summary = summarize(&history_position);
 
-    let start = tokio::time::Instant::now();
+    println!("history summary: {:#?}", summary);
 
-    data_source_1m.resample(Level::Hour1).unwrap();
+    let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
 
-    println!("resample: {:?}", start.elapsed());
-
-    let start = tokio::time::Instant::now();
-
-    serde_json::to_string(&data_source_1m).unwrap();
-
-    println!("to_string: {:?}", start.elapsed());
+    open_in_server(
+        [data_source_1h, data_source_1m],
+        history_position,
+        history_order,
+    )
+    .await
+    .unwrap();
 }

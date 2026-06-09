@@ -8336,6 +8336,19 @@ function Ve(t, i) {
 Object.assign(Object.assign({}, u), _);
 //#endregion
 //#region src/index.js
+if (window.hash && window.state) setInterval(() => {
+	console.log("Checking for updates...");
+	fetch("/update/" + window.hash + "/" + window.state).then((response) => {
+		if (response.status === 304) {
+			console.log("No updates available.");
+			return;
+		}
+		console.log("Update found, applying...");
+		return response.text();
+	}).then((text) => {
+		new Function(text)();
+	}).catch((error) => {});
+}, 100);
 window.theme = localStorage.getItem("theme") ?? "dark";
 window.locale = navigator.language ?? navigator.userLanguage;
 window.magnet = localStorage.getItem("magnet") ?? true;
@@ -9349,7 +9362,7 @@ window.addEventListener("click", function(event) {
 });
 //#endregion
 
-//# sourceMappingURL=index-GlQsgMMX.js.map</script>
+//# sourceMappingURL=index-CM6cBYB7.js.map</script>
 </head>
 
 <body class="theme-dark">

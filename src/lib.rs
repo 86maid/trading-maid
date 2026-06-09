@@ -7,6 +7,7 @@ pub mod indicator;
 pub mod local_exchange;
 pub mod order;
 pub mod series;
+pub mod server;
 pub mod strategy;
 pub mod util;
 pub use rust_decimal;
@@ -21,6 +22,7 @@ pub mod prelude {
     pub use crate::local_exchange::*;
     pub use crate::order::*;
     pub use crate::series::*;
+    pub use crate::server::*;
     pub use crate::strategy::*;
     pub use crate::util::*;
     pub use anyhow;

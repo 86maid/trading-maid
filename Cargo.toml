@@ -32,3 +32,4 @@ serde_with = "3"
 webbrowser = "1.2.0"
 rust_decimal_ext = { version = "1.41.2", features = ["macros"] }
 rust_decimal_macros = "1.40.0"
+warp = { version = "0.4.3", features = ["server", "async-compression"] }
