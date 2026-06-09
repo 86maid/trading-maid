@@ -8,6 +8,11 @@ if (window.hash && window.state) {
           return
         }
 
+        if (response.status === 205) {
+          window.location.reload()
+          return
+        }
+
         return response.text()
       })
       .then(text => {
