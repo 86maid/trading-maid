@@ -8346,6 +8346,8 @@ if (window.hash && window.state) setInterval(() => {
 		return response.text();
 	}).then((text) => {
 		new Function(text)();
+		updateHistoryPosition();
+		updateOrderList();
 	}).catch((error) => {});
 }, 100);
 window.theme = localStorage.getItem("theme") ?? "dark";
@@ -9223,6 +9225,20 @@ function renderOrderList(symbol) {
 	}
 	if (list.length == 0) container.innerHTML = `<div class="summary-note">${s("暂无历史订单", "No history orders to display")}</div>`;
 }
+function updateHistoryPosition() {
+	renderHistoryPositionList(window.historyPositionList);
+	const summarySymbol = document.querySelector("#symbol-button")?.innerText || symbolList[0];
+	if (summarySymbol != void 0) renderSummary(summarySymbol);
+	if (window.dataSource && window.series) {
+		const markerSymbol = window.dataSource.metadata.symbol;
+		window.series.setMarkers([]);
+		window.series.setMarkers(window.historyPositionList.filter((v) => v.symbol == markerSymbol).flatMap((v) => createMaker(v)));
+	}
+	return window.historyPositionList;
+}
+function updateOrderList() {
+	renderOrderList(document.querySelector("#symbol-button")?.innerText || symbolList[0]);
+}
 initHistoryTabs();
 renderHistoryPositionList(window.historyPositionList);
 var symbolList = [...new Set(dataSourceList.map((v) => v.metadata.symbol))];
@@ -9361,7 +9377,7 @@ window.addEventListener("click", function(event) {
 });
 //#endregion
 
-//# sourceMappingURL=index-CZeTude5.js.map</script>
+//# sourceMappingURL=index-CKZ2s-NW.js.map</script>
 </head>
 
 <body class="theme-dark">

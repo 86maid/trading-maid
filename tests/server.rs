@@ -1,21 +1,24 @@
+use std::time::Duration;
+
+use tokio::time::sleep;
 use trading_maid::prelude::*;
 
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-    // let body_size = (cx.open - cx.close).abs();
-    // let upper_shadow_size = (cx.high - cx.open).abs();
-    // let open_short_condition =
-    //     cx.open > cx.close && upper_shadow_size >= body_size * 2.0 && body_size >= 300.0;
+    let body_size = (cx.open - cx.close).abs();
+    let upper_shadow_size = (cx.high - cx.open).abs();
+    let open_short_condition =
+        cx.open > cx.close && upper_shadow_size >= body_size * 2.0 && body_size >= 300.0;
 
-    // if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
-    //     let take_profit_price = cx.open - upper_shadow_size;
-    //     let stop_price = cx.open + upper_shadow_size;
+    if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
+        let take_profit_price = cx.open - upper_shadow_size;
+        let stop_price = cx.open + upper_shadow_size;
 
-    //     cx.cancel_all_order("BTCUSDT").await?;
+        cx.cancel_all_order("BTCUSDT").await?;
 
-    //     _ = cx
-    //         .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
-    //         .await?;
-    // }
+        _ = cx
+            .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
+            .await?;
+    }
 
     Ok(())
 }
@@ -59,6 +62,12 @@ async fn main() {
     println!("history summary: {:#?}", summary);
 
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
+
+    open_in_server([data_source_1h.clone(), data_source_1m.clone()], [], [])
+        .await
+        .unwrap();
+
+    sleep(Duration::from_secs(30)).await;
 
     open_in_server(
         [data_source_1h, data_source_1m],

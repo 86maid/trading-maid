@@ -17,6 +17,8 @@ if (window.hash && window.state) {
       })
       .then(text => {
         new Function(text)()
+        updateHistoryPosition()
+        updateOrderList()
       }).catch(error => {
 
       })
