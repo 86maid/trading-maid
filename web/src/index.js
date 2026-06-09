@@ -1,5 +1,23 @@
 import { createChart } from 'lightweight-charts'
 
+if (window.hash && window.state) {
+  setInterval(() => {
+    fetch("/update/" + window.hash + "/" + window.state)
+      .then(response => {
+        if (response.status === 304) {
+          return
+        }
+
+        return response.text()
+      })
+      .then(text => {
+        new Function(text)()
+      }).catch(error => {
+
+      })
+  }, 100)
+}
+
 window.theme = localStorage.getItem("theme") ?? "dark"
 window.locale = navigator.language ?? navigator.userLanguage
 window.magnet = localStorage.getItem("magnet") ?? true
