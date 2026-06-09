@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Notify;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use warp::Filter;
 use warp::reply::Reply;
 use zip::ZipArchive;
@@ -958,7 +958,7 @@ pub async fn open_in_server(
             let history_position = history_position.clone();
             let history_order = history_order.clone();
 
-            notify.notify_one();
+            notify.notify_waiters();
 
             let text = format!(
                 "<script>window.hash={};window.state={};window.dataSourceList={};window.historyPositionList={};window.historyOrderList={}</script>",
@@ -982,11 +982,11 @@ pub async fn open_in_server(
 
         move |client_hash: String, client_state: u64| {
             let hash = hash.clone();
-            let data_source = data_source.clone();
             let history_position = history_position.clone();
             let history_order = history_order.clone();
+            let notify = notify.clone();
 
-            notify.notify_one();
+            notify.notify_waiters();
 
             async move {
                 if client_hash == *hash {
@@ -1007,10 +1007,9 @@ pub async fn open_in_server(
                         )))
                     }
                 } else {
-                    Ok::<Box<dyn Reply>, warp::Rejection>(Box::new(warp::reply::with_header(
-                        to_html(data_source, history_position, history_order),
-                        "Content-Type",
-                        "text/html; charset=utf-8",
+                    Ok::<Box<dyn Reply>, warp::Rejection>(Box::new(warp::reply::with_status(
+                        "",
+                        StatusCode::RESET_CONTENT,
                     )))
                 }
             }
@@ -1027,15 +1026,28 @@ pub async fn open_in_server(
         .find(|&port| !is_port_in_use(port))
         .context("no available port found")?;
 
-    tokio::spawn(warp::serve(route).bind(([0, 0, 0, 0], port)).await.run());
+    let task = tokio::spawn(
+        warp::serve(route)
+            .bind(([0, 0, 0, 0], port))
+            .await
+            .graceful({
+                let notify = notify.clone();
+
+                async move {
+                    notify.notified().await;
+                }
+            })
+            .run(),
+    );
 
     if timeout(std::time::Duration::from_secs(1), notify.notified())
         .await
         .is_err()
     {
         webbrowser::open(&format!("http://127.0.0.1:{}", port))?;
-        notify.notified().await;
     }
+
+    task.await?;
 
     Ok(())
 }

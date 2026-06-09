@@ -8337,13 +8337,12 @@ Object.assign(Object.assign({}, u), _);
 //#endregion
 //#region src/index.js
 if (window.hash && window.state) setInterval(() => {
-	console.log("Checking for updates...");
 	fetch("/update/" + window.hash + "/" + window.state).then((response) => {
-		if (response.status === 304) {
-			console.log("No updates available.");
+		if (response.status === 304) return;
+		if (response.status === 205) {
+			window.location.reload();
 			return;
 		}
-		console.log("Update found, applying...");
 		return response.text();
 	}).then((text) => {
 		new Function(text)();
@@ -9362,7 +9361,7 @@ window.addEventListener("click", function(event) {
 });
 //#endregion
 
-//# sourceMappingURL=index-CM6cBYB7.js.map</script>
+//# sourceMappingURL=index-CZeTude5.js.map</script>
 </head>
 
 <body class="theme-dark">
