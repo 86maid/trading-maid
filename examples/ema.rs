@@ -37,12 +37,8 @@ impl Strategy for MyStrategy {
 
             cx.cancel_all_order("BTCUSDT").await?;
 
-            cx.sell("BTCUSDT", 0.01).await?;
-
-            cx.buy_limit_reduce_only("BTCUSDT", cx.close - 1000.0, 0.01)
-                .await?;
-
-            cx.buy_trigger_market_reduce_only("BTCUSDT", cx.close + 1000.0, 0.01)
+            _ = cx
+                .sell_tp_sl("BTCUSDT", cx.close - 1000.0, cx.close + 1000.0, 0.01)
                 .await?;
         }
 

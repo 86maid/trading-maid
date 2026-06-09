@@ -4083,8 +4083,7 @@ mod tests {
         let history = exchange.get_history_order_list(SYMBOL).await.unwrap();
 
         // 检查是否有仓位
-        let position = exchange.get_position(SYMBOL).await.unwrap();
-        println!("Position: {:?}", position);
+        assert!(exchange.get_position(SYMBOL).await.unwrap().is_none());
 
         // 转换的限价单因名义价值不足被拒绝
         let converted_limit = history

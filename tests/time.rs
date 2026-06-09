@@ -1,6 +1,5 @@
 use trading_maid::prelude::*;
 
-// 出现长上影线时开空单
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     let body_size = (cx.open - cx.close).abs();
     let upper_shadow_size = (cx.high - cx.open).abs();
@@ -8,8 +7,6 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         cx.open > cx.close && upper_shadow_size >= body_size * 2.0 && body_size >= 300.0;
 
     if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
-        println!("place order: {}", t2s(cx.time));
-
         let take_profit_price = cx.open - upper_shadow_size;
         let stop_price = cx.open + upper_shadow_size;
 
@@ -23,9 +20,14 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::main]
+#[ignore]
+#[tokio::test]
 async fn main() {
+    let start = tokio::time::Instant::now();
+
     let path = get_or_download("BTCUSDT/1m", 12).await.unwrap();
+
+    println!("load: {:?}", start.elapsed());
 
     let data_source_1m = DataSource::from_file_metadata(
         path,
@@ -49,24 +51,11 @@ async fn main() {
 
     let mut engine = Engine::new(exchange.clone(), my_strategy);
 
-    // 使用 1 分钟级别数据进行回测，但在每个 1 小时级别的 K 线生成时都会调用策略函数
+    let start = tokio::time::Instant::now();
+
     if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
         println!("{:#?}", v);
     }
 
-    let history_position = exchange.get_history_position_list("BTCUSDT").await.unwrap();
-    let history_order = exchange.get_history_order_list("BTCUSDT").await.unwrap();
-    let summary = summarize(&history_position);
-
-    println!("history summary: {:#?}", summary);
-
-    // 从 1 分钟级别数据重采样得到 1 小时级别数据
-    let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
-
-    open_in_browser(
-        [data_source_1h, data_source_1m],
-        history_position,
-        history_order,
-    )
-    .unwrap();
+    println!("run: {:?}", start.elapsed());
 }
