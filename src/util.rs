@@ -7,12 +7,19 @@ use chrono::{
     Weekday,
 };
 use reqwest::Client;
+use reqwest::StatusCode;
 use rust_decimal::prelude::*;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Notify;
+use tokio::time::timeout;
+use warp::Filter;
+use warp::reply::Reply;
 use zip::ZipArchive;
 
 /// Downloads and merges K-line data from Binance into a single CSV file
@@ -892,6 +899,143 @@ pub fn open_in_browser(
 
     std::fs::write(&temp_file_path, html_content)?;
     webbrowser::open(temp_file_path.to_str().context("open_in_browser")?)?;
+
+    Ok(())
+}
+
+/// Starts a local web server to serve an HTML page generated from the provided data sources, history positions, and history orders.
+pub async fn open_in_server(
+    data_source: impl Into<Vec<DataSource>>,
+    history_position: impl Into<Vec<HistoryPosition>>,
+    history_order: impl Into<Vec<OrderMessage>>,
+) -> anyhow::Result<()> {
+    let data_source: Arc<[DataSource]> = Arc::from(data_source.into());
+    let history_position: Arc<[HistoryPosition]> = Arc::from(history_position.into());
+    let history_order: Arc<[OrderMessage]> = Arc::from(history_order.into());
+
+    let hash = data_source
+        .as_ref()
+        .iter()
+        .map(|v| {
+            v.metadata.symbol.clone()
+                + "-"
+                + v.data
+                    .first()
+                    .map(|v| v.time)
+                    .unwrap_or_default()
+                    .to_string()
+                    .as_str()
+                + "-"
+                + v.data
+                    .last()
+                    .map(|v| v.time)
+                    .unwrap_or_default()
+                    .to_string()
+                    .as_str()
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+
+    let state = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let notify = Arc::new(Notify::new());
+
+    let root = warp::path::end().and_then({
+        let hash = hash.clone();
+        let state = state.clone();
+        let data_source = data_source.clone();
+        let history_position = history_position.clone();
+        let history_order = history_order.clone();
+        let notify = notify.clone();
+
+        move || {
+            let hash = hash.clone();
+            let state = state.clone();
+            let data_source = data_source.clone();
+            let history_position = history_position.clone();
+            let history_order = history_order.clone();
+
+            notify.notify_one();
+
+            let text = format!(
+                "<script>window.hash={};window.state={};window.dataSourceList={};window.historyPositionList={};window.historyOrderList={}</script>",
+                &serde_json::to_string(&hash).unwrap(),
+                &serde_json::to_string(&state).unwrap(),
+                &serde_json::to_string(data_source.as_ref()).unwrap(),
+                &serde_json::to_string(history_position.as_ref()).unwrap(),
+                &serde_json::to_string(history_order.as_ref()).unwrap(),
+            );
+
+            let html = include_str!("../web/dist/index.html").replace("<!-- template -->", &text);
+
+            async move {
+                Ok::<_, warp::Rejection>(warp::reply::html(html))
+            }
+        }
+    });
+
+    let update = warp::path!("update" / String / u64).and_then({
+        let notify = notify.clone();
+
+        move |client_hash: String, client_state: u64| {
+            let hash = hash.clone();
+            let data_source = data_source.clone();
+            let history_position = history_position.clone();
+            let history_order = history_order.clone();
+
+            notify.notify_one();
+
+            async move {
+                if client_hash == *hash {
+                    if client_state != state {
+                        Ok::<Box<dyn Reply>, warp::Rejection>(Box::new(warp::reply::with_header(
+                            format!(
+                                "window.historyPositionList={};window.historyOrderList={}",
+                                serde_json::to_string(history_position.as_ref()).unwrap(),
+                                serde_json::to_string(history_order.as_ref()).unwrap()
+                            ),
+                            "Content-Type",
+                            "application/javascript; charset=utf-8",
+                        )))
+                    } else {
+                        Ok::<Box<dyn Reply>, warp::Rejection>(Box::new(warp::reply::with_status(
+                            "",
+                            StatusCode::NOT_MODIFIED,
+                        )))
+                    }
+                } else {
+                    Ok::<Box<dyn Reply>, warp::Rejection>(Box::new(warp::reply::with_header(
+                        to_html(data_source, history_position, history_order),
+                        "Content-Type",
+                        "text/html; charset=utf-8",
+                    )))
+                }
+            }
+        }
+    });
+
+    let route = root.or(update).with(warp::cors().allow_any_origin());
+
+    fn is_port_in_use(port: u16) -> bool {
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
+    }
+
+    let port = (8686..9999)
+        .find(|&port| !is_port_in_use(port))
+        .context("no available port found")?;
+
+    tokio::spawn(warp::serve(route).bind(([0, 0, 0, 0], port)).await.run());
+
+    if timeout(std::time::Duration::from_secs(1), notify.notified())
+        .await
+        .is_err()
+    {
+        webbrowser::open(&format!("http://127.0.0.1:{}", port))?;
+        notify.notified().await;
+    }
 
     Ok(())
 }
