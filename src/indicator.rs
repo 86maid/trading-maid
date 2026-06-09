@@ -296,3 +296,97 @@ impl RSICache {
         Some(dec!(100) - dec!(100) / (dec!(1) + rs))
     }
 }
+
+/// Detect a **swing high** (local maximum) in a price series.
+///
+/// A swing high is identified when the middle element is strictly greater
+/// than all elements on its left and right within the given windows.
+///
+/// # Arguments
+///
+/// * `series` – Slice of price data (e.g. highs).
+/// * `left`  – Number of bars to inspect before the candidate bar (left side) and the candidate position.
+/// * `right` – Number of bars to inspect after the candidate bar (right side).
+///
+/// # Returns
+///
+/// Returns `Some((mid, left_min, right_min))` if a swing high is found:
+///
+/// * `mid` – The swing high value.
+/// * `left_min` – Minimum value in the left window (older bars).
+/// * `right_min` – Minimum value in the right window (newer bars).
+///
+/// Returns `None` if:
+/// * `left == 0` or `right == 0`
+/// * The series is too short
+/// * The middle value is not strictly greater than both neighbors
+pub fn swing_high(
+    series: &Series,
+    left: usize,
+    right: usize,
+) -> Option<(Decimal, Decimal, Decimal)> {
+    if left == 0 || right == 0 || series.len() < left + right + 1 {
+        return None;
+    }
+
+    let mid = &series[left];
+    let left_array = &series[left + 1..left + 1 + right];
+    let right_array = &series[..left];
+
+    if left_array.iter().all(|x| x < mid) && right_array.iter().all(|x| x < mid) {
+        Some((
+            *mid,
+            left_array.iter().min().copied()?,
+            right_array.iter().min().copied()?,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Detect a **swing low** (local minimum) in a price series.
+///
+/// A swing low is identified when the middle element is strictly less
+/// than all elements on its left and right within the given windows.
+///
+/// # Arguments
+///
+/// * `series` – Slice of price data (e.g. lows).
+/// * `left`  – Number of bars to inspect before the candidate bar (left side) and the candidate position.
+/// * `right` – Number of bars to inspect after the candidate bar (right side).
+///
+/// # Returns
+///
+/// Returns `Some((mid, left_max, right_max))` if a swing low is found:
+///
+/// * `mid` – The swing low value.
+/// * `left_max` – Maximum value in the left window (older bars).
+/// * `right_max` – Maximum value in the right window (newer bars).
+///
+/// Returns `None` if:
+/// * `left == 0` or `right == 0`
+/// * The series is too short
+/// * The middle value is not strictly smaller than both neighbors
+pub fn swing_low(
+    series: &Series,
+    left: usize,
+    right: usize,
+) -> Option<(Decimal, Decimal, Decimal)> {
+    if left == 0 || right == 0 || series.len() < left + right + 1 {
+        return None;
+    }
+
+    let mid = &series[left];
+    let left_array = &series[left + 1..left + 1 + right];
+    let right_array = &series[..left];
+
+    if left_array.iter().all(|x| x > mid) && right_array.iter().all(|x| x > mid) {
+        Some((
+            *mid,
+            left_array.iter().max().copied()?,
+            right_array.iter().max().copied()?,
+        ))
+    } else {
+        None
+    }
+}

@@ -63,6 +63,20 @@ pub enum Status {
     Rejected,
 }
 
+impl Status {
+    pub fn is_valid(&self) -> bool {
+        !matches!(self, Status::Canceled | Status::Rejected)
+    }
+
+    pub fn ok(&self) -> anyhow::Result<()> {
+        if self.is_valid() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("order is not valid: {:?}", self))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Trigger,

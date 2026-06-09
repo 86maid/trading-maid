@@ -299,6 +299,166 @@ where
         })
         .await
     }
+
+    async fn buy_tp_sl(
+        &self,
+        symbol: &str,
+        tp_price: Decimal,
+        sl_price: Decimal,
+        quantity: Decimal,
+    ) -> anyhow::Result<(String, anyhow::Result<String>, anyhow::Result<String>)> {
+        let master_order_id = self
+            .place_order(Order {
+                symbol: symbol.to_string(),
+                side: Side::Buy,
+                trigger_price: Decimal::ZERO,
+                price: Decimal::ZERO,
+                quantity,
+                reduce_only: false,
+            })
+            .await?;
+
+        self.get_order(&master_order_id)
+            .await?
+            .context("master order not found")?
+            .status
+            .ok()?;
+
+        let (take_profit_result, stop_loss_result) = tokio::join!(
+            async move {
+                let result: anyhow::Result<String> = async {
+                    let order_id = self
+                        .place_order(Order {
+                            symbol: symbol.to_string(),
+                            side: Side::Sell,
+                            trigger_price: Decimal::ZERO,
+                            price: tp_price,
+                            quantity,
+                            reduce_only: true,
+                        })
+                        .await?;
+
+                    self.get_order(&order_id)
+                        .await?
+                        .context("take profit order not found")?
+                        .status
+                        .ok()?;
+
+                    Ok(order_id)
+                }
+                .await;
+
+                result
+            },
+            async move {
+                let result: anyhow::Result<String> = async {
+                    let order_id = self
+                        .place_order(Order {
+                            symbol: symbol.to_string(),
+                            side: Side::Sell,
+                            trigger_price: sl_price,
+                            price: Decimal::ZERO,
+                            quantity,
+                            reduce_only: true,
+                        })
+                        .await?;
+
+                    self.get_order(&order_id)
+                        .await?
+                        .context("stop loss order not found")?
+                        .status
+                        .ok()?;
+
+                    Ok(order_id)
+                }
+                .await;
+
+                result
+            }
+        );
+
+        Ok((master_order_id, take_profit_result, stop_loss_result))
+    }
+
+    async fn sell_tp_sl(
+        &self,
+        symbol: &str,
+        tp_price: Decimal,
+        sl_price: Decimal,
+        quantity: Decimal,
+    ) -> anyhow::Result<(String, anyhow::Result<String>, anyhow::Result<String>)> {
+        let master_order_id = self
+            .place_order(Order {
+                symbol: symbol.to_string(),
+                side: Side::Sell,
+                trigger_price: Decimal::ZERO,
+                price: Decimal::ZERO,
+                quantity,
+                reduce_only: false,
+            })
+            .await?;
+
+        self.get_order(&master_order_id)
+            .await?
+            .context("master order not found")?
+            .status
+            .ok()?;
+
+        let (take_profit_result, stop_loss_result) = tokio::join!(
+            async move {
+                let result: anyhow::Result<String> = async {
+                    let order_id = self
+                        .place_order(Order {
+                            symbol: symbol.to_string(),
+                            side: Side::Buy,
+                            trigger_price: Decimal::ZERO,
+                            price: tp_price,
+                            quantity,
+                            reduce_only: true,
+                        })
+                        .await?;
+
+                    self.get_order(&order_id)
+                        .await?
+                        .context("take profit order not found")?
+                        .status
+                        .ok()?;
+
+                    Ok(order_id)
+                }
+                .await;
+
+                result
+            },
+            async move {
+                let result: anyhow::Result<String> = async {
+                    let order_id = self
+                        .place_order(Order {
+                            symbol: symbol.to_string(),
+                            side: Side::Buy,
+                            trigger_price: sl_price,
+                            price: Decimal::ZERO,
+                            quantity,
+                            reduce_only: true,
+                        })
+                        .await?;
+
+                    self.get_order(&order_id)
+                        .await?
+                        .context("stop loss order not found")?
+                        .status
+                        .ok()?;
+
+                    Ok(order_id)
+                }
+                .await;
+
+                result
+            }
+        );
+
+        Ok((master_order_id, take_profit_result, stop_loss_result))
+    }
 }
 
 #[derive(Clone)]
@@ -309,6 +469,7 @@ impl ExchangeWrapper {
         Self(exchange)
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn next(&self, symbol: &str, level: Level) -> anyhow::Result<Option<KLine>> {
         self.0.next(symbol, level).await
     }
@@ -730,6 +891,40 @@ impl ExchangeWrapper {
                     .try_into()
                     .ok()
                     .context("invalid quantity for sell_trigger_market_reduce_only")?,
+            )
+            .await
+    }
+
+    pub async fn buy_tp_sl(
+        &self,
+        symbol: impl AsRef<str>,
+        tp_price: impl TryInto<Decimal>,
+        sl_price: impl TryInto<Decimal>,
+        quantity: impl TryInto<Decimal>,
+    ) -> anyhow::Result<(String, anyhow::Result<String>, anyhow::Result<String>)> {
+        self.0
+            .buy_tp_sl(
+                symbol.as_ref(),
+                tp_price.try_into().ok().context("invalid tp_price")?,
+                sl_price.try_into().ok().context("invalid sl_price")?,
+                quantity.try_into().ok().context("invalid quantity")?,
+            )
+            .await
+    }
+
+    pub async fn sell_tp_sl(
+        &self,
+        symbol: impl AsRef<str>,
+        tp_price: impl TryInto<Decimal>,
+        sl_price: impl TryInto<Decimal>,
+        quantity: impl TryInto<Decimal>,
+    ) -> anyhow::Result<(String, anyhow::Result<String>, anyhow::Result<String>)> {
+        self.0
+            .sell_tp_sl(
+                symbol.as_ref(),
+                tp_price.try_into().ok().context("invalid tp_price")?,
+                sl_price.try_into().ok().context("invalid sl_price")?,
+                quantity.try_into().ok().context("invalid quantity")?,
             )
             .await
     }
