@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Notify;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 use warp::Filter;
 use warp::reply::Reply;
 use zip::ZipArchive;
