@@ -38,7 +38,7 @@ impl Strategy for MyStrategy {
             cx.cancel_all_order("BTCUSDT").await?;
 
             _ = cx
-                .sell_tp_sl("BTCUSDT", cx.close - 1000.0, cx.close + 1000.0, 0.01)
+                .sell_tp_sl("BTCUSDT", cx.close - 1000, cx.close + 1000, 0.01)
                 .await?;
         }
 
@@ -110,10 +110,11 @@ async fn main() {
     let data_source_5m = data_source_1m.resample(Level::Minute5).unwrap();
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
 
-    open_in_browser(
+    open_in_server(
         [data_source_5m, data_source_1m, data_source_1h],
         history_position,
         history_order,
     )
+    .await
     .unwrap();
 }

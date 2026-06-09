@@ -903,7 +903,7 @@ pub fn open_in_browser(
     Ok(())
 }
 
-/// Starts a local web server to serve an HTML page generated from the provided data sources, history positions, and history orders.
+/// Starts a local web server to serve the provided data sources, history positions, and history orders, and opens it in the default web browser.
 pub async fn open_in_server(
     data_source: impl Into<Vec<DataSource>>,
     history_position: impl Into<Vec<HistoryPosition>>,

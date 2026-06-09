@@ -5,7 +5,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     let body_size = (cx.open - cx.close).abs();
     let upper_shadow_size = (cx.high - cx.open).abs();
     let open_short_condition =
-        cx.open > cx.close && upper_shadow_size >= body_size * 2.0 && body_size >= 300.0;
+        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= 300;
 
     if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
         println!("place order: {}", t2s(cx.time));
@@ -63,10 +63,11 @@ async fn main() {
     // 从 1 分钟级别数据重采样得到 1 小时级别数据
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
 
-    open_in_browser(
+    open_in_server(
         [data_source_1h, data_source_1m],
         history_position,
         history_order,
     )
+    .await
     .unwrap();
 }
