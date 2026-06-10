@@ -12,7 +12,7 @@ trading-maid 是一个面向加密货币合约交易的回测与实盘框架，�
 
 > ⚡ 关键词：高拟真撮合 / 双阶段触发单 / 保证金与强平机制 / 回测可视化
 
-![trading-maid](a.png)
+![trading-maid](a.gif)
 
 ## 目录
 
@@ -88,20 +88,21 @@ use trading_maid::prelude::*;
 
 // 出现长上影线时开空单
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-    let body = (cx.open - cx.close).abs();
-    let line = (cx.high - cx.open).abs();
-    let cond = cx.open > cx.close && line >= body * 2.0 && body >= 300.0;
+    let body_size = (cx.open - cx.close).abs();
+    let upper_shadow_size = (cx.high - cx.open).abs();
+    let open_short_condition =
+        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= 300;
 
-    if cx.get_position("BTCUSDT").await?.is_none() && cond {
+    if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
         println!("place order: {}", t2s(cx.time));
 
-        let tp = cx.open - line;
-        let sp = cx.open + line;
+        let take_profit_price = cx.open - upper_shadow_size;
+        let stop_price = cx.open + upper_shadow_size;
 
         cx.cancel_all_order("BTCUSDT").await?;
-        cx.sell("BTCUSDT", 0.01).await?;
-        cx.buy_limit_reduce_only("BTCUSDT", tp, 0.01).await?;
-        cx.buy_trigger_market_reduce_only("BTCUSDT", sp, 0.01)
+
+        _ = cx
+            .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
             .await?;
     }
 
@@ -118,20 +119,20 @@ async fn main() {
         Metadata {
             symbol: "BTCUSDT".to_string(),
             level: Level::Minute1,
-            min_size: 0.01,
-            min_notional: 0.0,
-            tick_size: 0.1,
-            maker_fee: 0.0002,
-            taker_fee: 0.0005,
-            maintenance: 0.004,
+            min_size: "0.01".parse().unwrap(),
+            min_notional: "0".parse().unwrap(),
+            tick_size: "0.1".parse().unwrap(),
+            maker_fee: "0.0002".parse().unwrap(),
+            taker_fee: "0.0005".parse().unwrap(),
+            maintenance: "0.004".parse().unwrap(),
         },
     )
     .unwrap();
 
     let exchange = LocalExchange::new(data_source_1m.clone())
-        .cash(10000.0)
+        .cash(10000)
         .leverage(10)
-        .slippage(0.0);
+        .slippage(0);
 
     let mut engine = Engine::new(exchange.clone(), my_strategy);
 
@@ -149,11 +150,12 @@ async fn main() {
     // 从 1 分钟级别数据重采样得到 1 小时级别数据
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
 
-    open_in_browser(
+    open_in_server(
         [data_source_1h, data_source_1m],
         history_position,
         history_order,
     )
+    .await
     .unwrap();
 }
 ```
@@ -169,6 +171,12 @@ async fn main() {
 * 现金 (cash)  = 10000  
 * 杠杆 (leverage) = 10  
 * 滑点 (slippage) = 0
+
+`open_in_server` 会启动一个本地服务器并自动在浏览器中打开回测可视化页面。
+
+推荐优先使用 `open_in_server` 而非 `open_in_browser`，后者会每次都把 K 线数据写入文件导致浏览器重新加载，浪费时间。
+
+> ⚠️ 注意：`sell_tp_sl` 只是语法糖，并非真正的 OCO 订单（框架不支持 OCO），它仅仅是同时下了两张单，需要你自己在开新仓前调用 `cancel_all_order` 来取消旧单。
 
 回测为 1 分钟级别，策略为 1 小时级别，回测引擎会在 1 小时级别的 k 线收盘时（一小时的最后一分钟）调用策略，策略获取到的每一根 k 线都是 1 小时级别的。
 
@@ -269,8 +277,8 @@ struct MyStrategy {
 impl MyStrategy {
     pub fn new() -> Self {
         MyStrategy {
-            ema_cache144: EMACache::with_ema(144, 80871.2),
-            ema_cache169: EMACache::with_ema(169, 78705.2),
+            ema_cache144: EMACache::with_ema(144, 80871),
+            ema_cache169: EMACache::with_ema(169, 78705),
             count: 0,
         }
     }
@@ -280,8 +288,13 @@ impl MyStrategy {
 impl Strategy for MyStrategy {
     // 如果连续 50 根 K 线收盘价都在 EMA 之下，且当前 K 线收盘价突破 EMA，则开空单
     async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
-        let ema144 = self.ema_cache144.update(cx.close);
-        let ema169 = self.ema_cache169.update(cx.close);
+        let Some(ema144) = self.ema_cache144.update(cx.close) else {
+            return Ok(());
+        };
+
+        let Some(ema169) = self.ema_cache169.update(cx.close) else {
+            return Ok(());
+        };
 
         if self.count >= 50
             && (cx.close >= ema144 || cx.close >= ema169)
@@ -290,10 +303,9 @@ impl Strategy for MyStrategy {
             println!("place_order: {}", t2s(cx.time));
 
             cx.cancel_all_order("BTCUSDT").await?;
-            cx.sell("BTCUSDT", 0.01).await?;
-            cx.buy_limit_reduce_only("BTCUSDT", cx.close - 1000.0, 0.01)
-                .await?;
-            cx.buy_trigger_market_reduce_only("BTCUSDT", cx.close + 1000.0, 0.01)
+
+            _ = cx
+                .sell_tp_sl("BTCUSDT", cx.close - 1000, cx.close + 1000, 0.01)
                 .await?;
         }
 
@@ -334,20 +346,20 @@ async fn main() {
         Metadata {
             symbol: "BTCUSDT".to_string(),
             level: Level::Minute1,
-            min_size: 0.01,
-            min_notional: 0.0,
-            tick_size: 0.1,
-            maker_fee: 0.0002,
-            taker_fee: 0.0005,
-            maintenance: 0.004,
+            min_size: "0.01".parse().unwrap(),
+            min_notional: "0".parse().unwrap(),
+            tick_size: "0.1".parse().unwrap(),
+            maker_fee: "0.0002".parse().unwrap(),
+            taker_fee: "0.0005".parse().unwrap(),
+            maintenance: "0.004".parse().unwrap(),
         },
     )
     .unwrap();
 
     let exchange = LocalExchange::new(data_source_1m.clone())
-        .cash(10000.0)
+        .cash(10000)
         .leverage(10)
-        .slippage(0.0);
+        .slippage(0);
 
     let mut engine = Engine::new(exchange.clone(), MyStrategy::new());
 
@@ -366,11 +378,12 @@ async fn main() {
     let data_source_5m = data_source_1m.resample(Level::Minute5).unwrap();
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
 
-    open_in_browser(
+    open_in_server(
         [data_source_5m, data_source_1m, data_source_1h],
         history_position,
         history_order,
     )
+    .await
     .unwrap();
 }
 ```

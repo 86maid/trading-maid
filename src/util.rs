@@ -814,6 +814,7 @@ pub fn to_html(
     include_str!("../web/dist/index.html").replace("<!-- template -->", &text)
 }
 
+/// Summarizes a list of history positions into a single summary object containing aggregated statistics and metrics.
 pub fn summarize(list: impl AsRef<[HistoryPosition]>) -> HistoryPositionSummary {
     let list = list.as_ref();
     let symbol = list.first().map(|v| v.symbol.clone()).unwrap_or_default();

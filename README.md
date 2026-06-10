@@ -12,7 +12,7 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 
 > ⚡ Keywords: high-fidelity matching / two-stage trigger orders / margin and liquidation mechanics / backtest visualization
 
-![trading-maid](a.png)
+![trading-maid](a.gif)
 
 ## Contents
 
@@ -88,20 +88,21 @@ use trading_maid::prelude::*;
 
 // Open a short position when a long upper shadow appears.
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-    let body = (cx.open - cx.close).abs();
-    let line = (cx.high - cx.open).abs();
-    let cond = cx.open > cx.close && line >= body * 2.0 && body >= 300.0;
+    let body_size = (cx.open - cx.close).abs();
+    let upper_shadow_size = (cx.high - cx.open).abs();
+    let open_short_condition =
+        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= 300;
 
-    if cx.get_position("BTCUSDT").await?.is_none() && cond {
+    if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
         println!("place order: {}", t2s(cx.time));
 
-        let tp = cx.open - line;
-        let sp = cx.open + line;
+        let take_profit_price = cx.open - upper_shadow_size;
+        let stop_price = cx.open + upper_shadow_size;
 
         cx.cancel_all_order("BTCUSDT").await?;
-        cx.sell("BTCUSDT", 0.01).await?;
-        cx.buy_limit_reduce_only("BTCUSDT", tp, 0.01).await?;
-        cx.buy_trigger_market_reduce_only("BTCUSDT", sp, 0.01)
+
+        _ = cx
+            .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
             .await?;
     }
 
@@ -118,20 +119,20 @@ async fn main() {
         Metadata {
             symbol: "BTCUSDT".to_string(),
             level: Level::Minute1,
-            min_size: 0.01,
-            min_notional: 0.0,
-            tick_size: 0.1,
-            maker_fee: 0.0002,
-            taker_fee: 0.0005,
-            maintenance: 0.004,
+            min_size: "0.01".parse().unwrap(),
+            min_notional: "0".parse().unwrap(),
+            tick_size: "0.1".parse().unwrap(),
+            maker_fee: "0.0002".parse().unwrap(),
+            taker_fee: "0.0005".parse().unwrap(),
+            maintenance: "0.004".parse().unwrap(),
         },
     )
     .unwrap();
 
     let exchange = LocalExchange::new(data_source_1m.clone())
-        .cash(10000.0)
+        .cash(10000)
         .leverage(10)
-        .slippage(0.0);
+        .slippage(0);
 
     let mut engine = Engine::new(exchange.clone(), my_strategy);
 
@@ -149,11 +150,12 @@ async fn main() {
     // Resample 1-minute data into 1-hour data.
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
 
-    open_in_browser(
+    open_in_server(
         [data_source_1h, data_source_1m],
         history_position,
         history_order,
     )
+    .await
     .unwrap();
 }
 ```
@@ -169,6 +171,12 @@ In this example, we set:
 * cash: 10000
 * leverage: 10
 * slippage: 0
+
+`open_in_server` starts a local server and automatically opens the backtest visualization page in the browser. 
+
+Prefer `open_in_server` over `open_in_browser` — the latter writes k-line data to a file each time, causing the browser to reload and wasting time.
+
+> ⚠️ Note: `sell_tp_sl` is syntactic sugar, not a real OCO order (OCO is not supported by the framework). It simply places two orders at once — you still need to call `cancel_all_order` to cancel old orders before opening a new position.
 
 The backtest runs on 1-minute data while the strategy runs on 1-hour k-lines. The engine calls the strategy at each 1-hour k-line close (the last minute of each hour), and every k-line observed by the strategy is 1-hour-level.
 
@@ -269,8 +277,8 @@ struct MyStrategy {
 impl MyStrategy {
     pub fn new() -> Self {
         MyStrategy {
-            ema_cache144: EMACache::with_ema(144, 80871.2),
-            ema_cache169: EMACache::with_ema(169, 78705.2),
+            ema_cache144: EMACache::with_ema(144, 80871),
+            ema_cache169: EMACache::with_ema(169, 78705),
             count: 0,
         }
     }
@@ -280,8 +288,13 @@ impl MyStrategy {
 impl Strategy for MyStrategy {
     // If the close stays below EMA for 50 consecutive k-lines and the current close breaks above EMA, open a short.
     async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
-        let ema144 = self.ema_cache144.update(cx.close);
-        let ema169 = self.ema_cache169.update(cx.close);
+        let Some(ema144) = self.ema_cache144.update(cx.close) else {
+            return Ok(());
+        };
+
+        let Some(ema169) = self.ema_cache169.update(cx.close) else {
+            return Ok(());
+        };
 
         if self.count >= 50
             && (cx.close >= ema144 || cx.close >= ema169)
@@ -290,10 +303,9 @@ impl Strategy for MyStrategy {
             println!("place_order: {}", t2s(cx.time));
 
             cx.cancel_all_order("BTCUSDT").await?;
-            cx.sell("BTCUSDT", 0.01).await?;
-            cx.buy_limit_reduce_only("BTCUSDT", cx.close - 1000.0, 0.01)
-                .await?;
-            cx.buy_trigger_market_reduce_only("BTCUSDT", cx.close + 1000.0, 0.01)
+
+            _ = cx
+                .sell_tp_sl("BTCUSDT", cx.close - 1000, cx.close + 1000, 0.01)
                 .await?;
         }
 
@@ -334,20 +346,20 @@ async fn main() {
         Metadata {
             symbol: "BTCUSDT".to_string(),
             level: Level::Minute1,
-            min_size: 0.01,
-            min_notional: 0.0,
-            tick_size: 0.1,
-            maker_fee: 0.0002,
-            taker_fee: 0.0005,
-            maintenance: 0.004,
+            min_size: "0.01".parse().unwrap(),
+            min_notional: "0".parse().unwrap(),
+            tick_size: "0.1".parse().unwrap(),
+            maker_fee: "0.0002".parse().unwrap(),
+            taker_fee: "0.0005".parse().unwrap(),
+            maintenance: "0.004".parse().unwrap(),
         },
     )
     .unwrap();
 
     let exchange = LocalExchange::new(data_source_1m.clone())
-        .cash(10000.0)
+        .cash(10000)
         .leverage(10)
-        .slippage(0.0);
+        .slippage(0);
 
     let mut engine = Engine::new(exchange.clone(), MyStrategy::new());
 
@@ -366,11 +378,12 @@ async fn main() {
     let data_source_5m = data_source_1m.resample(Level::Minute5).unwrap();
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
 
-    open_in_browser(
+    open_in_server(
         [data_source_5m, data_source_1m, data_source_1h],
         history_position,
         history_order,
     )
+    .await
     .unwrap();
 }
 ```
