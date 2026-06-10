@@ -78,7 +78,7 @@ cargo add trading-maid
 
 ```toml
 [dependencies]
-trading-maid = "1.0.2"
+trading-maid = "1"
 ```
 
 ### 🛠️ 使用
