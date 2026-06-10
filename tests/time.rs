@@ -46,9 +46,9 @@ async fn main() {
     println!("load: {:?}", start.elapsed());
 
     let exchange = LocalExchange::new(data_source_1m.clone())
-        .cash(10000.0)
+        .cash(10000)
         .leverage(10)
-        .slippage(0.0);
+        .slippage(0);
 
     let mut engine = Engine::new(exchange.clone(), my_strategy);
 
