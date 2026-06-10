@@ -800,9 +800,13 @@ function renderSummary(symbol) {
   const winRate = totalTrades == 0 ? 0 : winTrades / totalTrades * 100
   const avgProfit = totalTrades == 0 ? 0 : totalProfit / totalTrades
   const netProfits = list.map(v => Number(v.total_profit || 0))
-  const netGrossProfit = netProfits.filter(v => v > 0).reduce((acc, v) => acc + v, 0)
-  const netGrossLossAbs = Math.abs(netProfits.filter(v => v < 0).reduce((acc, v) => acc + v, 0))
-  const profitLossRatio = netGrossLossAbs == 0 ? null : netGrossProfit / netGrossLossAbs
+  const winProfits = netProfits.filter(v => v > 0)
+  const lossProfits = netProfits.filter(v => v < 0)
+  const avgWin = winProfits.length === 0 ? 0 : winProfits.reduce((acc, v) => acc + v, 0) / winProfits.length
+  const avgLoss = lossProfits.length === 0 ? 0 : Math.abs(lossProfits.reduce((acc, v) => acc + v, 0)) / lossProfits.length
+  const profitLossRatio = avgLoss === 0 ? 0 : avgWin / avgLoss
+  const netGrossProfit = winProfits.reduce((acc, v) => acc + v, 0)
+  const netGrossLossAbs = Math.abs(lossProfits.reduce((acc, v) => acc + v, 0))
   const grossPnLList = list.map(v => Number(v.profit || 0))
   const grossProfit = grossPnLList.filter(v => v > 0).reduce((acc, v) => acc + v, 0)
   const grossLossAbs = Math.abs(grossPnLList.filter(v => v < 0).reduce((acc, v) => acc + v, 0))

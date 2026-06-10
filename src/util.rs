@@ -814,7 +814,6 @@ pub fn to_html(
     include_str!("../web/dist/index.html").replace("<!-- template -->", &text)
 }
 
-/// Summarizes history positions into the same metrics used by the web summary panel.
 pub fn summarize(list: impl AsRef<[HistoryPosition]>) -> HistoryPositionSummary {
     let list = list.as_ref();
     let symbol = list.first().map(|v| v.symbol.clone()).unwrap_or_default();
@@ -844,6 +843,32 @@ pub fn summarize(list: impl AsRef<[HistoryPosition]>) -> HistoryPositionSummary 
         total_profit / Decimal::from(total_trades)
     };
 
+    let avg_win = if win_trades == 0 {
+        Decimal::ZERO
+    } else {
+        list.iter()
+            .filter(|v| v.total_profit > Decimal::ZERO)
+            .map(|v| v.total_profit)
+            .sum::<Decimal>()
+            / Decimal::from(win_trades)
+    };
+
+    let avg_loss = if loss_trades == 0 {
+        Decimal::ZERO
+    } else {
+        list.iter()
+            .filter(|v| v.total_profit < Decimal::ZERO)
+            .map(|v| -v.total_profit)
+            .sum::<Decimal>()
+            / Decimal::from(loss_trades)
+    };
+
+    let profit_loss_ratio = if avg_loss == Decimal::ZERO {
+        Decimal::ZERO
+    } else {
+        avg_win / avg_loss
+    };
+
     let net_gross_profit = list
         .iter()
         .filter(|v| v.total_profit > Decimal::ZERO)
@@ -855,12 +880,6 @@ pub fn summarize(list: impl AsRef<[HistoryPosition]>) -> HistoryPositionSummary 
         .filter(|v| v.total_profit < Decimal::ZERO)
         .map(|v| v.total_profit)
         .sum::<Decimal>();
-
-    let profit_loss_ratio = if net_gross_loss_abs == Decimal::ZERO {
-        Decimal::ZERO
-    } else {
-        net_gross_profit / net_gross_loss_abs
-    };
 
     let gross_profit = list
         .iter()
