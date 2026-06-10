@@ -23,13 +23,15 @@ csv = "1"
 chrono = "0.4.38"
 dirs = "6"
 reqwest = "0.13"
-sevenz-rust = "0.6.1"
 inherits = "0.1.2"
 indexmap = "2.5.0"
 rand = "0.10.0"
 zip = "0.6"
 serde_with = "3"
 webbrowser = "1.2.0"
-rust_decimal_ext = { version = "1.41.2", features = ["macros"] }
+rust_decimal_ext = { version = "1.41.2", features = [
+  "macros",
+  "serde-bincode",
+] }
 rust_decimal_macros = "1.40.0"
 warp = { version = "0.4.3", features = ["server", "async-compression"] }

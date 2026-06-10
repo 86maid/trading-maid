@@ -24,11 +24,9 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 #[ignore]
 #[tokio::test]
 async fn main() {
-    let start = tokio::time::Instant::now();
-
     let path = get_or_download("BTCUSDT/1m", 12).await.unwrap();
 
-    println!("load: {:?}", start.elapsed());
+    let start = tokio::time::Instant::now();
 
     let data_source_1m = DataSource::from_file_metadata(
         path,
@@ -44,6 +42,8 @@ async fn main() {
         },
     )
     .unwrap();
+
+    println!("load: {:?}", start.elapsed());
 
     let exchange = LocalExchange::new(data_source_1m.clone())
         .cash(10000.0)

@@ -22,7 +22,7 @@ use warp::Filter;
 use warp::reply::Reply;
 use zip::ZipArchive;
 
-/// Downloads and merges K-line data from Binance into a single CSV file
+/// Downloads and merges K-line data from Binance into a single bin file
 ///
 /// # Arguments
 /// - `format`       - Data format: `symbol/interval[/market_type]`
@@ -32,8 +32,8 @@ use zip::ZipArchive;
 /// - `month_count`  - Number of months to download, 0 means all available data (up to 120 months)
 ///
 /// # Returns
-/// - On success, returns the path to the merged CSV file
-/// - Data storage location: `~/.trading-maid/<symbol>/<interval>.csv`
+/// - On success, returns the path to the merged bin file
+/// - Data storage location: `~/.trading-maid/<symbol>/<interval>.bin`
 ///
 /// # Data Source
 /// https://data.binance.vision
@@ -148,7 +148,7 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
 
     let symbol_directory = base_data_directory.join(base_symbol);
     let monthly_directory = symbol_directory.join(interval);
-    let merged_file_path = symbol_directory.join(format!("{}.csv", interval));
+    let merged_file_path = symbol_directory.join(format!("{}.bin", interval));
     let marged_lock_path = symbol_directory.join(format!("{}.lock", interval));
 
     fs::create_dir_all(&monthly_directory).await?;
@@ -195,10 +195,10 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
 
     async fn merge_monthly_files(
         monthly_directory: &Path,
-        output_file_path: &Path,
+        merged_file_path: &Path,
         marged_lock_path: &Path,
     ) -> anyhow::Result<()> {
-        if !marged_lock_path.exists() && output_file_path.exists() {
+        if !marged_lock_path.exists() && merged_file_path.exists() {
             return Ok(());
         }
 
@@ -226,7 +226,8 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
             );
         }
 
-        let mut output_file = tokio::io::BufWriter::new(fs::File::create(output_file_path).await?);
+        let mut output_file = fs::File::create(merged_file_path).await?;
+        let mut array = Vec::new();
 
         for v in csv_file_list.iter() {
             let file_content = fs::read_to_string(v).await?;
@@ -240,10 +241,27 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
                     bail!("parse csv error: less than 6 commas");
                 };
 
-                output_file.write_all(&v.as_bytes()[..pos]).await?;
-                output_file.write_all(b"\n").await?;
+                let line = &v[..pos];
+                let mut columns = line.split(',');
+                let time = columns.next().context("missing time")?.parse::<u64>()?;
+                let open = Decimal::from_str(columns.next().context("missing open")?)?;
+                let high = Decimal::from_str(columns.next().context("missing high")?)?;
+                let low = Decimal::from_str(columns.next().context("missing low")?)?;
+                let close = Decimal::from_str(columns.next().context("missing close")?)?;
+                let volume = Decimal::from_str(columns.next().context("missing volume")?)?;
+
+                array.push(KLine {
+                    time,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                });
             }
         }
+
+        output_file.write_all(&bincode::serialize(&array)?).await?;
 
         if marged_lock_path.exists() {
             std::fs::remove_file(marged_lock_path)?;
