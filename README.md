@@ -175,13 +175,13 @@ In this example, we set:
 * leverage: 10
 * slippage: 0
 
+**The backtest runs on 1-minute data while the strategy runs on 1-hour k-lines.** The engine calls the strategy at each 1-hour k-line close (the last minute of each hour), and every k-line observed by the strategy is 1-hour-level.
+
+Although other levels can be used, you should **always use 1-minute data as the backtest source** to achieve high-precision results.
+
 `open_in_server` starts a local server and automatically opens the backtest visualization page in the browser. 
 
 Prefer `open_in_server` over `open_in_browser` — the latter writes k-line data to a file each time, causing the browser to reload and wasting time.
-
-The backtest runs on 1-minute data while the strategy runs on 1-hour k-lines. The engine calls the strategy at each 1-hour k-line close (the last minute of each hour), and every k-line observed by the strategy is 1-hour-level.
-
-Although other levels can be used, you should always use 1-minute data as the backtest source to achieve high-precision results.
 
 Use `cargo run -r` to run backtests faster.
 
