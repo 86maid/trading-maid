@@ -51,7 +51,7 @@ async fn main() {
 
     // 使用 1 分钟级别数据进行回测，但在每个 1 小时级别的 K 线生成时都会调用策略函数
     if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
-        println!("{:#?}", v);
+        println!("error: {:#?}", v);
     }
 
     let history_position = exchange.get_history_position_list("BTCUSDT").await.unwrap();

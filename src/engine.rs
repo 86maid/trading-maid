@@ -38,6 +38,7 @@ pub struct Engine<S, const N: usize = DEFAULT_SERIES_MAX_LENGTH> {
     exchange: Arc<dyn Exchange + 'static>,
     strategy: S,
     hook: Option<Box<dyn HookFn>>,
+    on_error: Option<Box<dyn Fn(anyhow::Error) -> anyhow::Result<()>>>,
 }
 
 impl<S> Engine<S, DEFAULT_SERIES_MAX_LENGTH>
@@ -58,11 +59,16 @@ where
             exchange: Arc::new(exchange),
             strategy,
             hook: None,
+            on_error: None,
         }
     }
 
     pub fn hook(&mut self, hook: impl HookFn + 'static) {
         self.hook = Some(Box::new(hook));
+    }
+
+    pub fn on_error(&mut self, on_error: impl Fn(anyhow::Error) -> anyhow::Result<()> + 'static) {
+        self.on_error = Some(Box::new(on_error));
     }
 
     pub async fn run(&mut self, symbol: impl AsRef<str>, level: Level) -> anyhow::Result<()> {
@@ -93,7 +99,13 @@ where
                                 volume: Series::new(&max_level_buffer.volume),
                             };
 
-                            self.strategy.next(&context).await?;
+                            if let Err(v) = self.strategy.next(&context).await {
+                                if let Some(on_error) = &self.on_error {
+                                    on_error(v)?;
+                                } else {
+                                    bail!(v);
+                                }
+                            }
                         }
 
                         if let Some(hook) = &mut self.hook {

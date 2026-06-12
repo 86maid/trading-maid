@@ -4,6 +4,8 @@ use tokio::time::sleep;
 use trading_maid::prelude::*;
 
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    cx.buy("symbol", "quantity").await?;
+
     let body_size = (cx.open - cx.close).abs();
     let upper_shadow_size = (cx.high - cx.open).abs();
     let open_short_condition =
@@ -52,7 +54,7 @@ async fn main() {
     let mut engine = Engine::new(exchange.clone(), my_strategy);
 
     if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
-        println!("{:#?}", v);
+        println!("error: {:#?}", v);
     }
 
     let history_position = exchange.get_history_position_list("BTCUSDT").await.unwrap();

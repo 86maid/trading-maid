@@ -318,12 +318,6 @@ where
             })
             .await?;
 
-        self.get_order(&master_order_id)
-            .await?
-            .context("master order not found")?
-            .status
-            .ok()?;
-
         let (take_profit_result, stop_loss_result) = tokio::join!(
             async move {
                 let result: anyhow::Result<String> = async {
@@ -397,12 +391,6 @@ where
                 reduce_only: false,
             })
             .await?;
-
-        self.get_order(&master_order_id)
-            .await?
-            .context("master order not found")?
-            .status
-            .ok()?;
 
         let (take_profit_result, stop_loss_result) = tokio::join!(
             async move {

@@ -203,9 +203,7 @@ impl DataSource {
     }
 
     pub fn is_sorted_by_time(&self) -> bool {
-        self.data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
+        self.data.windows(2).all(|pair| pair[0].time < pair[1].time)
     }
 
     pub fn from_file(path: impl AsRef<Path>) -> anyhow::Result<Self> {
@@ -227,12 +225,10 @@ impl DataSource {
         let mut inner =
             serde_json::from_reader::<_, DataSourceInner>(BufReader::new(File::open(path)?))?;
 
-        if !inner
-            .data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
-        {
-            inner.data.sort_by_key(|v| v.time);
+        if let [first, second, ..] = &inner.data[..] {
+            if first.time > second.time {
+                inner.data.sort_by_key(|v| v.time);
+            }
         }
 
         Ok(DataSource(Arc::new(inner)))
@@ -241,12 +237,10 @@ impl DataSource {
     pub fn from_json_text(text: impl AsRef<str>) -> anyhow::Result<Self> {
         let mut inner = serde_json::from_str::<DataSourceInner>(text.as_ref())?;
 
-        if !inner
-            .data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
-        {
-            inner.data.sort_by_key(|v| v.time);
+        if let [first, second, ..] = &inner.data[..] {
+            if first.time > second.time {
+                inner.data.sort_by_key(|v| v.time);
+            }
         }
 
         Ok(DataSource(Arc::new(inner)))
@@ -264,12 +258,10 @@ impl DataSource {
 
         let mut inner = DataSourceInner { metadata, data };
 
-        if !inner
-            .data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
-        {
-            inner.data.sort_by_key(|v| v.time);
+        if let [first, second, ..] = &inner.data[..] {
+            if first.time > second.time {
+                inner.data.sort_by_key(|v| v.time);
+            }
         }
 
         Ok(DataSource(Arc::new(inner)))
@@ -287,12 +279,10 @@ impl DataSource {
 
         let mut inner = DataSourceInner { metadata, data };
 
-        if !inner
-            .data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
-        {
-            inner.data.sort_by_key(|v| v.time);
+        if let [first, second, ..] = &inner.data[..] {
+            if first.time > second.time {
+                inner.data.sort_by_key(|v| v.time);
+            }
         }
 
         Ok(DataSource(Arc::new(inner)))
@@ -301,12 +291,10 @@ impl DataSource {
     pub fn from_bin_file(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let mut inner = bincode::deserialize::<DataSourceInner>(&fs::read(path)?)?;
 
-        if !inner
-            .data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
-        {
-            inner.data.sort_by_key(|v| v.time);
+        if let [first, second, ..] = &inner.data[..] {
+            if first.time > second.time {
+                inner.data.sort_by_key(|v| v.time);
+            }
         }
 
         Ok(DataSource(Arc::new(inner)))
@@ -331,12 +319,10 @@ impl DataSource {
         let data: Vec<KLine> = serde_json::from_reader(BufReader::new(File::open(path)?))?;
         let mut inner = DataSourceInner { metadata, data };
 
-        if !inner
-            .data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
-        {
-            inner.data.sort_by_key(|v| v.time);
+        if let [first, second, ..] = &inner.data[..] {
+            if first.time > second.time {
+                inner.data.sort_by_key(|v| v.time);
+            }
         }
 
         Ok(DataSource(Arc::new(inner)))
@@ -349,12 +335,10 @@ impl DataSource {
         let data: Vec<KLine> = serde_json::from_str(text.as_ref())?;
         let mut inner = DataSourceInner { metadata, data };
 
-        if !inner
-            .data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
-        {
-            inner.data.sort_by_key(|v| v.time);
+        if let [first, second, ..] = &inner.data[..] {
+            if first.time > second.time {
+                inner.data.sort_by_key(|v| v.time);
+            }
         }
 
         Ok(DataSource(Arc::new(inner)))
@@ -369,12 +353,10 @@ impl DataSource {
         let data = reader.deserialize().collect::<Result<Vec<KLine>, _>>()?;
         let mut inner = DataSourceInner { metadata, data };
 
-        if !inner
-            .data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
-        {
-            inner.data.sort_by_key(|v| v.time);
+        if let [first, second, ..] = &inner.data[..] {
+            if first.time > second.time {
+                inner.data.sort_by_key(|v| v.time);
+            }
         }
 
         Ok(DataSource(Arc::new(inner)))
@@ -392,12 +374,10 @@ impl DataSource {
         let data = reader.deserialize().collect::<Result<Vec<KLine>, _>>()?;
         let mut inner = DataSourceInner { metadata, data };
 
-        if !inner
-            .data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
-        {
-            inner.data.sort_by_key(|v| v.time);
+        if let [first, second, ..] = &inner.data[..] {
+            if first.time > second.time {
+                inner.data.sort_by_key(|v| v.time);
+            }
         }
 
         Ok(DataSource(Arc::new(inner)))
@@ -407,12 +387,10 @@ impl DataSource {
         let data: Vec<KLine> = bincode::deserialize(&fs::read(path)?)?;
         let mut inner = DataSourceInner { metadata, data };
 
-        if !inner
-            .data
-            .windows(2)
-            .all(|pair| pair[0].time <= pair[1].time)
-        {
-            inner.data.sort_by_key(|v| v.time);
+        if let [first, second, ..] = &inner.data[..] {
+            if first.time > second.time {
+                inner.data.sort_by_key(|v| v.time);
+            }
         }
 
         Ok(DataSource(Arc::new(inner)))

@@ -7,10 +7,10 @@ English | [中文](README.zh-CN.md)
 [![GitHub Repo stars](https://img.shields.io/github/stars/86maid/trading-maid)](https://github.com/86maid/trading-maid)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-2563eb.svg)](https://opensource.org/licenses/Apache-2.0)
 
+> ⚡ Keywords: high-fidelity matching / two-stage trigger orders / margin and liquidation mechanics / backtest visualization
+
 trading-maid is a backtesting and live-trading framework for crypto futures, with a strong focus on behavior close to real exchanges.
 It includes key mechanics such as matching, slippage, leverage, margin, and liquidation for strategy validation, iteration, and live integration.
-
-> ⚡ Keywords: high-fidelity matching / two-stage trigger orders / margin and liquidation mechanics / backtest visualization
 
 ![trading-maid](a.gif)
 
@@ -22,15 +22,17 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - [🚀 Quick Start](#-quick-start)
 - [🧠 Context](#-context)
 - [📈 Indicators](#-indicators)
+- [🧩 Strategy as Struct](#-strategy-as-struct)
+- [🛑 Error Handling](#-error-handling)
 - [🚦 Hook Intercept](#-hook-intercept)
 - [🧪 A Complete Example](#-a-complete-example)
 
 ## ✨ Core Capabilities
 
-- Backtesting environment close to live trading: simulates exchange matching logic to reduce backtest/live deviation.
-- Live exchange abstraction: provides a unified exchange interface for smooth migration from backtest to live trading.
-- Indicator and series tools: includes common technical indicators and time-series processing utilities.
-- Backtest result visualization: render candlesticks, orders, and position history in a web page.
+- **Backtesting environment close to live trading**: simulates exchange matching logic, with built-in **slippage**, **leverage**, **margin**, and **forced liquidation** mechanics to reduce backtest/live deviation.
+- **Live exchange abstraction**: provides a unified exchange interface for smooth migration from backtest to live trading.
+- **Indicator and series tools**: includes common technical indicators and time-series processing utilities.
+- **Backtest result visualization**: render candlesticks, orders, and position history in a web page.
 
 ## 🧭 Trading Model and Constraints
 
@@ -138,7 +140,7 @@ async fn main() {
 
     // Backtest with 1-minute data, but call the strategy whenever each 1-hour k-line is generated.
     if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
-        println!("{:#?}", v);
+        println!("error: {:#?}", v);
     }
 
     let history_position = exchange.get_history_position_list("BTCUSDT").await.unwrap();
@@ -150,6 +152,7 @@ async fn main() {
     // Resample 1-minute data into 1-hour data.
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
 
+    // Pass multiple time levels for easier switching in the visualization.
     open_in_server(
         [data_source_1h, data_source_1m],
         history_position,
@@ -176,13 +179,17 @@ In this example, we set:
 
 Prefer `open_in_server` over `open_in_browser` — the latter writes k-line data to a file each time, causing the browser to reload and wasting time.
 
-> ⚠️ Note: `sell_tp_sl` is syntactic sugar, not a real OCO order (OCO is not supported by the framework). It simply places two orders at once — you still need to call `cancel_all_order` to cancel old orders before opening a new position.
-
 The backtest runs on 1-minute data while the strategy runs on 1-hour k-lines. The engine calls the strategy at each 1-hour k-line close (the last minute of each hour), and every k-line observed by the strategy is 1-hour-level.
 
 Although other levels can be used, you should always use 1-minute data as the backtest source to achieve high-precision results.
 
 Use `cargo run -r` to run backtests faster.
+
+> ⚠️ Note: `sell_tp_sl` is syntactic sugar, not a real OCO order (OCO is not supported by the framework). It simply places two orders at once — you still need to call `cancel_all_order` to cancel old orders before opening a new position.
+
+> ⚠️ **Stop Loss**: After a market buy, use `sell_trigger_market_reduce_only` (trigger price reached → reduce-only market sell) for the stop loss, not `sell_limit_reduce_only`. In an order book, a sell limit below the current price crosses the spread and matches instantly against existing bids — your "stop loss" becomes an immediate market exit instead of waiting for the price to drop. Simply put, your limit order fills instantly at the market price. Also, always use `reduce_only` for stop loss — without it, the order may open a reverse position instead of closing your current one.
+
+> ⚠️ **Precision Warning**: When creating orders (e.g., `buy`, `sell`, `buy_limit`, `sell_tp_sl`, etc.), price and quantity parameters accept `impl TryInto<Decimal>`. To avoid floating-point precision loss, pass high-precision values as strings (e.g., `"0.01"`) instead of `f64` literals like `0.01`.
 
 ## 🧠 Context
 
@@ -230,10 +237,51 @@ Calling `ema` directly may lead to slow backtests and incorrect calculations, be
 
 Use `EMACache::with_ema` to create an instance with an initial EMA value.
 
+## 🧩 Strategy as Struct
+
+When your strategy needs to maintain state (e.g., caches, counters), implement the `Strategy` trait on a struct.
+
+```rust
+struct MyStrategy {
+    ema_cache: EMACache,
+    count: usize,
+}
+
+#[async_trait(?Send)]
+impl Strategy for MyStrategy {
+    async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
+        // use self.ema_cache, self.count ...
+        Ok(())
+    }
+}
+
+let mut engine = Engine::new(exchange.clone(), MyStrategy::new());
+```
+
+## 🛑 Error Handling
+
+Use `on_error` to handle errors returned by the strategy. If not set, the engine stops immediately when an error occurs.
+
+```rust
+let mut engine = Engine::new(exchange.clone(), MyStrategy::new());
+
+engine.on_error(|err| {
+    eprintln!("strategy error: {:#?}", err);
+    Ok(()) // return Ok to continue, or Err to stop the engine
+});
+
+if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
+    println!("{:#?}", v);
+}
+```
+
+> 💡 Unlike `hook` which runs on every k-line, `on_error` is only called when the strategy returns an error.
 
 ## 🚦 Hook Intercept
 
 You can use `hook` to stop backtesting when a position is liquidated or an order is rejected (insufficient balance).
+
+The hook function is called after the strategy executes on each k-line.
 
 ```rust
 async fn my_hook(_: KLine, exchange: Arc<dyn Exchange + 'static>) -> anyhow::Result<()> {
