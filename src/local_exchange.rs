@@ -12,6 +12,24 @@ use crate::exchange::*;
 use crate::order::*;
 use crate::util::*;
 
+/// A local, backtesting-oriented exchange that replays historical K-line data.
+///
+/// `LocalExchange` steps through a [`DataSource`] one candle at a time via [`Exchange::next`].
+/// It simulates order placement, cancellation, position management, margin, leverage,
+/// slippage, and liquidation — all without connecting to a real exchange.
+///
+/// # Builder pattern
+///
+/// After [`LocalExchange::new`], chain any of the following to configure the simulation:
+/// - [`cash`](LocalExchange::cash) — starting balance (default: 10,000).
+/// - [`leverage`](LocalExchange::leverage) — account-wide leverage multiplier (default: 1).
+/// - [`slippage`](LocalExchange::slippage) — fraction applied to market-order fill prices (default: 0).
+/// - [`range`](LocalExchange::range) — restrict the replayed data to `[start_time, end_time)`.
+///
+/// # Thread safety
+///
+/// All public methods take `&self` (not `&mut self`) and lock an internal `Arc<Mutex<…>>`
+/// so the exchange can be shared across async tasks.
 #[derive(Clone)]
 pub struct LocalExchange {
     inner: Arc<Mutex<LocalExchangeInner>>,
@@ -93,6 +111,10 @@ impl PositionEx {
 }
 
 impl LocalExchange {
+    /// Creates a new `LocalExchange` with the given [`DataSource`].
+    ///
+    /// Defaults: cash = 10,000, leverage = 1, slippage = 0,
+    /// replay range = the entire data series.
     pub fn new(data_source: DataSource) -> Self {
         let end_index = data_source.data.len().saturating_sub(1);
 
@@ -115,17 +137,32 @@ impl LocalExchange {
         }
     }
 
+    /// Sets the starting cash balance.
+    ///
+    /// Accepts any type that implements `TryInto<Decimal>` (e.g. `f64`, `i64`, `Decimal`).
+    /// Panics if the conversion fails.
     pub fn cash(self, cash: impl TryInto<Decimal>) -> Self {
         self.inner.try_lock().unwrap().cash =
             cash.try_into().unwrap_or_else(|_| panic!("invalid cash"));
         self
     }
 
+    /// Sets the account-wide leverage multiplier.
+    ///
+    /// Must be ≥ 1. This leverage is applied to all new positions.
+    /// It can be changed later via [`Exchange::set_leverage`]
+    /// (only when no normal pending orders exist).
     pub fn leverage(self, leverage: u32) -> Self {
         self.inner.try_lock().unwrap().leverage = leverage;
         self
     }
 
+    /// Sets the slippage fraction applied to market-order fill prices.
+    ///
+    /// A buy market order fills at `open × (1 + slippage)`, clamped to `[low, high]`.
+    /// A sell market order fills at `open × (1 − slippage)`, clamped to `[low, high]`.
+    /// Does **not** affect limit orders.
+    /// Panics if the conversion fails.
     pub fn slippage(self, slippage: impl TryInto<Decimal>) -> Self {
         self.inner.try_lock().unwrap().slippage = slippage
             .try_into()
@@ -134,6 +171,10 @@ impl LocalExchange {
         self
     }
 
+    /// Restricts the replayed data to candles whose `time` falls in `[start_time, end_time)`.
+    ///
+    /// After this call, [`Exchange::next`] will only yield K-lines within the range.
+    /// When `end_time` exceeds the last candle timestamp, playback stops at the end of data.
     pub fn range(self, start_time: u64, end_time: u64) -> Self {
         let mut inner = self.inner.try_lock().unwrap();
 
