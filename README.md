@@ -414,7 +414,7 @@ async fn main() {
     engine.hook(my_hook);
 
     if let Err(v) = engine.run("BTCUSDT", Level::Minute5).await {
-        println!("{:#?}", v);
+        println!("error: {:#?}", v);
     }
 
     let history_position = exchange.get_history_position_list("BTCUSDT").await.unwrap();
