@@ -1,29 +1,94 @@
 use trading_maid::prelude::*;
 
-async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+/// Holds outstanding order IDs per symbol so we can cancel them individually
+/// when the position closes, instead of calling `cancel_all_order`.
+struct MyStrategy {
+    btc: Option<SymbolOrders>,
+    eth: Option<SymbolOrders>,
+}
+
+struct SymbolOrders {
+    master_id: String,
+    tp_id: Option<String>,
+    sl_id: Option<String>,
+}
+
+impl SymbolOrders {
+    async fn cancel(self, cx: &Context<'_>, symbol: &str) {
+        _ = cx.cancel_order(symbol, &self.master_id).await;
+        if let Some(id) = self.tp_id {
+            _ = cx.cancel_order(symbol, &id).await;
+        }
+        if let Some(id) = self.sl_id {
+            _ = cx.cancel_order(symbol, &id).await;
+        }
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl Strategy for MyStrategy {
+    async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
+        // ---- BTCUSDT ----
+        if cx.get_position("BTCUSDT").await?.is_none() {
+            // Position gone → cancel any leftover orders by id.
+            if let Some(orders) = self.btc.take() {
+                orders.cancel(cx, "BTCUSDT").await;
+            }
+
+            // Check entry condition on BTCUSDT's own OHLCV.
+            if let Some((tp, sl)) = entry_signal(cx) {
+                println!("BTCUSDT: {}", t2s(cx.time));
+
+                let (master, tp_r, sl_r) = cx.sell_tp_sl("BTCUSDT", tp, sl, dec!(0.01)).await?;
+
+                self.btc = Some(SymbolOrders {
+                    master_id: master,
+                    tp_id: tp_r.ok(),
+                    sl_id: sl_r.ok(),
+                });
+            }
+        }
+
+        // ---- ETHUSDT ----
+        if cx.get_position("ETHUSDT").await?.is_none() {
+            if let Some(orders) = self.eth.take() {
+                orders.cancel(cx, "ETHUSDT").await;
+            }
+
+            // Read ETHUSDT's own OHLCV via multi-symbol request.
+            if let Some(eth_cx) = cx.request("ETHUSDT", Level::Hour1) {
+                if let Some((tp, sl)) = entry_signal(&eth_cx) {
+                    println!("ETHUSDT: {}", t2s(cx.time));
+
+                    let (master, tp_r, sl_r) = cx.sell_tp_sl("ETHUSDT", tp, sl, dec!(0.01)).await?;
+
+                    self.eth = Some(SymbolOrders {
+                        master_id: master,
+                        tp_id: tp_r.ok(),
+                        sl_id: sl_r.ok(),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Returns `(take_profit_price, stop_loss_price)` when the short-entry
+/// condition is met on the given context's bar.
+fn entry_signal(cx: &Context<'_>) -> Option<(Decimal, Decimal)> {
     let body_size = (cx.open - cx.close).abs();
     let upper_shadow_size = (cx.high - cx.open).abs();
-    let open_short_condition =
-        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= 300;
 
-    if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
-        println!("place order: {}", t2s(cx.time));
+    let condition =
+        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= dec!(300);
 
-        let take_profit_price = cx.open - upper_shadow_size;
-        let stop_price = cx.open + upper_shadow_size;
-
-        cx.cancel_all_order("BTCUSDT").await?;
-
-        _ = cx
-            .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
-            .await?;
-
-        _ = cx
-            .sell_tp_sl("ETHUSDT", take_profit_price, stop_price, 0.01)
-            .await?;
+    if condition {
+        Some((cx.open - upper_shadow_size, cx.open + upper_shadow_size))
+    } else {
+        None
     }
-
-    Ok(())
 }
 
 // cargo test -r --test multi -- --ignored
@@ -69,9 +134,14 @@ async fn main() {
         .leverage(10)
         .slippage(0);
 
-    let mut engine = Engine::new(exchange.clone(), my_strategy);
+    let mut engine = Engine::new(
+        exchange.clone(),
+        MyStrategy {
+            btc: None,
+            eth: None,
+        },
+    );
 
-    // 使用 1 分钟级别数据进行回测，但在每个 1 小时级别的 K 线生成时都会调用策略函数
     if let Err(v) = engine
         .run_multi(
             vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()],
@@ -88,7 +158,6 @@ async fn main() {
 
     println!("history summary: {:#?}", summary);
 
-    // 从 1 分钟级别数据重采样得到 1 小时级别数据
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
     let data_source_1h_eth = data_source_1m_eth.resample(Level::Hour1).unwrap();
 
