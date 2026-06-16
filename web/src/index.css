@@ -100,3 +100,37 @@ body {
   height: 100%;
   overflow: hidden;
 }
+
+/* ===== Ant Tabs flex containment ===== */
+/* Needed so Ant Tabs works inside a flex column — inline styles can't reach
+   these internal class names. Without this, tab content grows unbounded. */
+.history-tabs.ant-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.history-tabs > .ant-tabs-content-holder {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.history-tabs > .ant-tabs-content-holder > .ant-tabs-content {
+  height: 100%;
+}
+
+.history-tabs .ant-tabs-tabpane {
+  height: 100%;
+  overflow: hidden auto;  /* scroll y only, no horizontal scrollbar */
+}
+
+/* Layout container inside tab panes — scrolling is handled by the tabpane */
+.history-scroll-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}

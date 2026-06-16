@@ -99,6 +99,35 @@ body {
   height: 100%;
   overflow: hidden;
 }
+/* ===== Ant Tabs flex containment ===== */
+/* Needed so Ant Tabs works inside a flex column — inline styles can't reach
+   these internal class names. Without this, tab content grows unbounded. */
+.history-tabs.ant-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.history-tabs > .ant-tabs-content-holder {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.history-tabs > .ant-tabs-content-holder > .ant-tabs-content {
+  height: 100%;
+}
+.history-tabs .ant-tabs-tabpane {
+  height: 100%;
+  overflow: hidden auto;  /* scroll y only, no horizontal scrollbar */
+}
+/* Layout container inside tab panes — scrolling is handled by the tabpane */
+.history-scroll-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
   </style>
   <title>Trading Maid</title>
   <script type="module" crossorigin>//#region \0rolldown/runtime.js
@@ -44143,15 +44172,6 @@ function HistoryPanel({ scrollToTime, activeTab, onTabChange }) {
 	const { historyPositionList, historyOrderList, currentSymbol, isZh } = useTradingData();
 	const filteredPositions = historyPositionList.filter((v) => v.symbol === currentSymbol);
 	const filteredOrders = historyOrderList.filter((v) => v.symbol === currentSymbol);
-	const scrollContainerStyle = {
-		overflow: "auto",
-		padding: 14,
-		display: "flex",
-		flexDirection: "column",
-		gap: 12,
-		flex: 1,
-		minHeight: 0
-	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("aside", {
 		style: {
 			flex: 1,
@@ -44163,68 +44183,53 @@ function HistoryPanel({ scrollToTime, activeTab, onTabChange }) {
 			flexDirection: "column",
 			overflow: "hidden"
 		},
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			style: {
-				flex: 1,
-				minHeight: 0,
-				display: "flex",
-				flexDirection: "column",
-				overflow: "hidden"
-			},
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tabs, {
-				items: [
-					{
-						key: "summary",
-						label: isZh ? "总结" : "Summary",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SummaryView, {})
-					},
-					{
-						key: "positions",
-						label: isZh ? "历史仓位" : "History Position",
-						children: filteredPositions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, {
-							description: isZh ? "暂无历史仓位" : "No history positions to display",
-							style: { padding: 40 }
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							id: "history-position-container",
-							style: scrollContainerStyle,
-							children: filteredPositions.map((position, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PositionCard, {
-								position,
-								scrollToTime,
-								isFirst: i === 0
-							}, `${position.symbol}-${position.open_time}-${i}`))
-						})
-					},
-					{
-						key: "orders",
-						label: isZh ? "历史订单" : "History Order",
-						children: filteredOrders.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, {
-							description: isZh ? "暂无历史订单" : "No history orders to display",
-							style: { padding: 40 }
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							id: "history-order-container",
-							style: scrollContainerStyle,
-							children: filteredOrders.map((order, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OrderCard, {
-								order,
-								scrollToTime
-							}, order.id || i))
-						})
-					}
-				],
-				activeKey: activeTab,
-				onChange: onTabChange,
-				size: "small",
-				tabBarStyle: {
-					padding: "0 14px",
-					marginBottom: 0
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tabs, {
+			className: "history-tabs",
+			items: [
+				{
+					key: "summary",
+					label: isZh ? "总结" : "Summary",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SummaryView, {})
 				},
-				style: {
-					flex: 1,
-					minHeight: 0,
-					display: "flex",
-					flexDirection: "column",
-					overflow: "hidden"
+				{
+					key: "positions",
+					label: isZh ? "历史仓位" : "History Position",
+					children: filteredPositions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, {
+						description: isZh ? "暂无历史仓位" : "No history positions to display",
+						style: { padding: 40 }
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						id: "history-position-container",
+						className: "history-scroll-container",
+						children: filteredPositions.map((position, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PositionCard, {
+							position,
+							scrollToTime,
+							isFirst: i === 0
+						}, `${position.symbol}-${position.open_time}-${i}`))
+					})
+				},
+				{
+					key: "orders",
+					label: isZh ? "历史订单" : "History Order",
+					children: filteredOrders.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, {
+						description: isZh ? "暂无历史订单" : "No history orders to display",
+						style: { padding: 40 }
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						id: "history-order-container",
+						className: "history-scroll-container",
+						children: filteredOrders.map((order, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OrderCard, {
+							order,
+							scrollToTime
+						}, order.id || i))
+					})
 				}
-			})
+			],
+			activeKey: activeTab,
+			onChange: onTabChange,
+			size: "small",
+			tabBarStyle: {
+				padding: "0 14px",
+				marginBottom: 0
+			}
 		})
 	});
 }
@@ -44265,7 +44270,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-C6HdmEgi.js.map</script>
+//# sourceMappingURL=index-BfveCBEG.js.map</script>
 </head>
 
 <body class="theme-dark">
