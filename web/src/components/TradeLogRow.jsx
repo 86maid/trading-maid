@@ -1,4 +1,7 @@
 import React, { useEffect, useRef } from 'react';
+import { Flex, Typography } from 'antd';
+
+const { Text } = Typography;
 
 export default function TradeLogRow({ log, priceFormatter, isZh, isFlashing, onClick }) {
   const rowRef = useRef(null);
@@ -11,6 +14,9 @@ export default function TradeLogRow({ log, priceFormatter, isZh, isFlashing, onC
         : 'Liquidation'
       : sideText;
 
+  const isBuy = log.side === 'Buy';
+  const sideColor = isBuy ? 'var(--buy-color)' : 'var(--sell-color)';
+
   useEffect(() => {
     if (!rowRef.current) return;
     if (isFlashing) {
@@ -20,25 +26,37 @@ export default function TradeLogRow({ log, priceFormatter, isZh, isFlashing, onC
     } else {
       rowRef.current.style.backgroundColor = '';
     }
-    // cleanup on unmount or before next effect run
     return () => {
       if (rowRef.current) rowRef.current.style.backgroundColor = '';
     };
   }, [isFlashing]);
 
-  const isBuy = log.side === 'Buy';
-
   return (
-    <div
+    <Flex
       ref={rowRef}
-      className={`position-card-section ${isBuy ? 'position-card-side-buy' : 'position-card-side-sell'}`}
+      gap="small"
+      data-log-row
       id={`record_${log.id}`}
       onClick={onClick}
+      style={{
+        padding: '7px 6px',
+        cursor: 'pointer',
+        fontSize: 11,
+        borderRadius: 6,
+      }}
     >
-      <div>{new Date(log.time).toLocaleString()}</div>
-      <div>{priceFormatter(log.price)}</div>
-      <div>{log.quantity}</div>
-      <div>{kindText}</div>
-    </div>
+      <Text style={{ flex: 2, fontSize: 11 }}>
+        {new Date(log.time).toLocaleString()}
+      </Text>
+      <Text style={{ flex: 1, fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+        {priceFormatter(log.price)}
+      </Text>
+      <Text style={{ flex: 1, fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+        {log.quantity}
+      </Text>
+      <Text strong style={{ flex: 1, textAlign: 'right', fontSize: 11, color: sideColor }}>
+        {kindText}
+      </Text>
+    </Flex>
   );
 }

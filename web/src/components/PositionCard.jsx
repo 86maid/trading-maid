@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Card, Tag, Flex } from 'antd';
+import { Card, Tag, Flex, Typography, Descriptions } from 'antd';
 import TradeLogRow from './TradeLogRow';
 import { useTradingData } from '../context/TradingDataContext';
 import { makePriceFormatter } from '../utils/priceUtils';
 import { t } from '../utils/i18n';
+
+const { Text } = Typography;
 
 export default function PositionCard({ position, scrollToTime, isFirst }) {
   const { isZh, currentDataSource } = useTradingData();
@@ -23,7 +25,6 @@ export default function PositionCard({ position, scrollToTime, isFirst }) {
       ? t('Full Close', '完全平仓', isZh)
       : t('Partial Close', '部分平仓', isZh);
 
-  // Expand first card by default
   useEffect(() => {
     if (isFirst) setLogExpanded(true);
   }, [isFirst]);
@@ -39,7 +40,7 @@ export default function PositionCard({ position, scrollToTime, isFirst }) {
   };
 
   const handleCardClick = (e) => {
-    if (e.target.closest('.position-card-section')) return;
+    if (e.target.closest('[data-log-row]')) return;
     setLogExpanded((prev) => !prev);
   };
 
@@ -53,6 +54,15 @@ export default function PositionCard({ position, scrollToTime, isFirst }) {
     },
     [scrollToTime]
   );
+
+  const tagColor = isBuy ? 'red' : 'green';
+
+  // Profit color helpers — use CSS variables for consistency with chart theme
+  const profitColor = (v) =>
+    Number(v) >= 0
+      ? 'var(--profit-positive-color)'
+      : 'var(--profit-negative-color)';
+  const profitSign = (v) => (Number(v) >= 0 ? '+' : '');
 
   // Computed values
   const openAvgPrice = Number(position.open_avg_price);
@@ -76,32 +86,20 @@ export default function PositionCard({ position, scrollToTime, isFirst }) {
     closeReturnPct == null
       ? '-'
       : `${closeReturnPct >= 0 ? '+' : ''}${closeReturnPct.toFixed(2)}%`;
-  const closeReturnPctClass =
-    closeReturnPct == null
-      ? ''
-      : closeReturnPct >= 0
-        ? 'position-card-value-profit-positive'
-        : 'position-card-value-profit-negative';
-
-  const profitClass = (v) =>
-    Number(v) >= 0
-      ? 'position-card-value-profit-positive'
-      : 'position-card-value-profit-negative';
-  const profitSign = (v) => (Number(v) >= 0 ? '+' : '');
-
-  const tagColor = isBuy ? 'red' : 'green';
 
   return (
     <Card
-      className="order-card position-card"
       size="small"
       onClick={handleCardClick}
       hoverable
       data-open-time={position.open_time}
+      style={{ marginBottom: 0 }}
     >
       {/* Head */}
-      <div className="order-card-head">
-        <div className="order-card-title">{position.symbol}</div>
+      <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
+        <Text strong style={{ fontFamily: 'var(--font-mono)', fontSize: 14 }}>
+          {position.symbol}
+        </Text>
         <Flex gap="2px" wrap="wrap">
           <Tag color={tagColor}>{statusText}</Tag>
           <Tag color={tagColor}>{position.leverage}x</Tag>
@@ -110,91 +108,108 @@ export default function PositionCard({ position, scrollToTime, isFirst }) {
             {isBuy ? t('Buy', '买', isZh) : t('Sell', '卖', isZh)}
           </Tag>
         </Flex>
-      </div>
+      </Flex>
 
       {/* Stats grid */}
-      <div className="order-card-grid position-card-grid">
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Entry Price', '开仓均价', isZh)}
-          </div>
-          <div className="order-card-value">
+      <Descriptions size="small" column={2} colon={false}>
+        <Descriptions.Item label={t('Entry Price', '开仓均价', isZh)}>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
             {formatPrice(position.open_avg_price)}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Max Position Size', '最大持仓量', isZh)}
-          </div>
-          <div className="order-card-value">{position.max_quantity}</div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Exit Price', '平仓均价', isZh)}
-          </div>
-          <div className="order-card-value">
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Max Position Size', '最大持仓量', isZh)}>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+            {position.max_quantity}
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Exit Price', '平仓均价', isZh)}>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
             {formatPrice(position.close_avg_price)}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Close Quantity', '平仓量', isZh)}
-          </div>
-          <div className="order-card-value">{position.close_quantity}</div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Net PnL', '净盈亏', isZh)}
-          </div>
-          <div className={`order-card-value ${profitClass(position.total_profit)}`}>
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Close Quantity', '平仓量', isZh)}>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+            {position.close_quantity}
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Net PnL', '净盈亏', isZh)}>
+          <Text
+            strong
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              color: profitColor(position.total_profit),
+            }}
+          >
             {profitSign(position.total_profit)}
             {position.total_profit}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Rate of Return', '收益率', isZh)}%
-          </div>
-          <div className={`order-card-value ${closeReturnPctClass}`}>
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={`${t('Rate of Return', '收益率', isZh)}%`}>
+          <Text
+            strong
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              color:
+                closeReturnPct == null
+                  ? undefined
+                  : closeReturnPct >= 0
+                    ? 'var(--profit-positive-color)'
+                    : 'var(--profit-negative-color)',
+            }}
+          >
             {closeReturnPctText}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Gross PnL', '毛盈亏', isZh)}
-          </div>
-          <div className={`order-card-value ${profitClass(position.profit)}`}>
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Gross PnL', '毛盈亏', isZh)}>
+          <Text
+            strong
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              color: profitColor(position.profit),
+            }}
+          >
             {profitSign(position.profit)}
             {position.profit}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">{t('Fee', '手续费', isZh)}</div>
-          <div className="order-card-value position-card-value-profit-negative">
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Fee', '手续费', isZh)}>
+          <Text
+            strong
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              color: 'var(--profit-negative-color)',
+            }}
+          >
             -{position.fee}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Entry Time', '开仓时间', isZh)}
-          </div>
-          <div className="order-card-value">
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Entry Time', '开仓时间', isZh)}>
+          <Text style={{ fontSize: 12 }}>
             {new Date(position.open_time).toLocaleString()}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Exit Time', '平仓时间', isZh)}
-          </div>
-          <div className="order-card-value">
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Exit Time', '平仓时间', isZh)}>
+          <Text style={{ fontSize: 12 }}>
             {new Date(position.close_time).toLocaleString()}
-          </div>
-        </div>
-      </div>
+          </Text>
+        </Descriptions.Item>
+      </Descriptions>
 
       {/* Expandable trade log */}
       {logExpanded && (
-        <div className="log" style={{ display: 'block' }}>
+        <div
+          data-section="trade-log"
+          style={{
+            display: 'block',
+            marginTop: 8,
+            borderTop: '1px solid var(--panel-border-color)',
+            paddingTop: 8,
+          }}
+        >
           {position.log.map((log, index) => (
             <TradeLogRow
               key={log.id}

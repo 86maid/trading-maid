@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Tag, Flex } from 'antd';
+import { Card, Tag, Flex, Typography, Descriptions } from 'antd';
 import { useTradingData } from '../context/TradingDataContext';
 import {
   makePriceFormatter,
@@ -11,6 +11,8 @@ import {
   statusText,
 } from '../utils/priceUtils';
 import { t } from '../utils/i18n';
+
+const { Text } = Typography;
 
 export default function OrderCard({ order, scrollToTime }) {
   const { isZh, currentDataSource } = useTradingData();
@@ -30,13 +32,15 @@ export default function OrderCard({ order, scrollToTime }) {
 
   return (
     <Card
-      className="order-card"
       size="small"
       hoverable
       onClick={() => scrollToTime(order.update_time)}
+      style={{ marginBottom: 0 }}
     >
-      <div className="order-card-head">
-        <div className="order-card-title">{enumText(order.id)}</div>
+      <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
+        <Text strong style={{ fontFamily: 'var(--font-mono)', fontSize: 14 }}>
+          {enumText(order.id)}
+        </Text>
         <Flex gap="2px" wrap="wrap">
           {order.reduce_only && (
             <Tag color={tagColor}>
@@ -53,73 +57,54 @@ export default function OrderCard({ order, scrollToTime }) {
                 : side}
           </Tag>
         </Flex>
-      </div>
-      <div className="order-card-grid">
-        <div className="order-card-item">
-          <div className="order-card-label">{t('Symbol', '交易对', isZh)}</div>
-          <div className="order-card-value">{enumText(order.symbol)}</div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Trigger Price', '触发价', isZh)}
-          </div>
-          <div className="order-card-value">
+      </Flex>
+
+      <Descriptions size="small" column={2} colon={false}>
+        <Descriptions.Item label={t('Symbol', '交易对', isZh)}>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+            {enumText(order.symbol)}
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Trigger Price', '触发价', isZh)}>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
             {priceText(order.trigger_price, priceFormatter)}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Order Price', '委托价', isZh)}
-          </div>
-          <div className="order-card-value">
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Order Price', '委托价', isZh)}>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
             {priceText(order.price, priceFormatter)}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Quantity', '数量', isZh)}
-          </div>
-          <div className="order-card-value">
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Quantity', '数量', isZh)}>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
             {qtyText(order.quantity, qtyFormatter)}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Average Fill', '成交均价', isZh)}
-          </div>
-          <div className="order-card-value">
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Average Fill', '成交均价', isZh)}>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
             {priceText(order.avg_price, priceFormatter)}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Cumulative Qty', '累计成交', isZh)}
-          </div>
-          <div className="order-card-value">
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Cumulative Qty', '累计成交', isZh)}>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
             {qtyText(order.cumulative_quantity, qtyFormatter)}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Create Time', '创建时间', isZh)}
-          </div>
-          <div className="order-card-value">
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Create Time', '创建时间', isZh)}>
+          <Text style={{ fontSize: 12 }}>
             {Number.isFinite(createTime)
               ? new Date(createTime).toLocaleString()
               : '-'}
-          </div>
-        </div>
-        <div className="order-card-item">
-          <div className="order-card-label">
-            {t('Update Time', '更新时间', isZh)}
-          </div>
-          <div className="order-card-value">
+          </Text>
+        </Descriptions.Item>
+        <Descriptions.Item label={t('Update Time', '更新时间', isZh)}>
+          <Text style={{ fontSize: 12 }}>
             {Number.isFinite(updateTime)
               ? new Date(updateTime).toLocaleString()
               : '-'}
-          </div>
-        </div>
-      </div>
+          </Text>
+        </Descriptions.Item>
+      </Descriptions>
     </Card>
   );
 }

@@ -1,7 +1,9 @@
 import React, { useMemo } from 'react';
-import { Card, Empty } from 'antd';
+import { Card, Empty, Row, Col, Typography } from 'antd';
 import { useTradingData } from '../context/TradingDataContext';
 import { computeSummary } from '../utils/summaryUtils';
+
+const { Text } = Typography;
 
 export default function SummaryView() {
   const { historyPositionList, currentSymbol, isZh } = useTradingData();
@@ -23,13 +25,39 @@ export default function SummaryView() {
   }
 
   return (
-    <div className="summary-grid">
+    <Row gutter={[10, 10]} style={{ padding: 14 }}>
       {stats.rows.map((row, i) => (
-        <Card key={i} className="summary-card" size="small">
-          <div className="summary-card-label">{row.label}</div>
-          <div className={`summary-card-value ${row.cls}`}>{row.value}</div>
-        </Card>
+        <Col key={i} span={12}>
+          <Card size="small">
+            <Text
+              type="secondary"
+              style={{
+                fontSize: 11,
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+              }}
+            >
+              {row.label}
+            </Text>
+            <br />
+            <Text
+              strong
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 18,
+                color:
+                  row.cls === 'positive'
+                    ? 'var(--profit-positive-color)'
+                    : row.cls === 'negative'
+                      ? 'var(--profit-negative-color)'
+                      : undefined,
+              }}
+            >
+              {row.value}
+            </Text>
+          </Card>
+        </Col>
       ))}
-    </div>
+    </Row>
   );
 }

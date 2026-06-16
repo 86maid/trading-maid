@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React from 'react';
 import { Tabs, Empty } from 'antd';
 import SummaryView from './SummaryView';
 import PositionCard from './PositionCard';
@@ -9,13 +9,22 @@ export default function HistoryPanel({ scrollToTime, activeTab, onTabChange }) {
   const { historyPositionList, historyOrderList, currentSymbol, isZh } =
     useTradingData();
 
-  // Filter by current symbol
   const filteredPositions = historyPositionList.filter(
     (v) => v.symbol === currentSymbol
   );
   const filteredOrders = historyOrderList.filter(
     (v) => v.symbol === currentSymbol
   );
+
+  const scrollContainerStyle = {
+    overflow: 'auto',
+    padding: 14,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    flex: 1,
+    minHeight: 0,
+  };
 
   const items = [
     {
@@ -35,7 +44,7 @@ export default function HistoryPanel({ scrollToTime, activeTab, onTabChange }) {
             style={{ padding: 40 }}
           />
         ) : (
-          <div id="history-position-container">
+          <div id="history-position-container" style={scrollContainerStyle}>
             {filteredPositions.map((position, i) => (
               <PositionCard
                 key={`${position.symbol}-${position.open_time}-${i}`}
@@ -59,7 +68,7 @@ export default function HistoryPanel({ scrollToTime, activeTab, onTabChange }) {
             style={{ padding: 40 }}
           />
         ) : (
-          <div id="history-order-container">
+          <div id="history-order-container" style={scrollContainerStyle}>
             {filteredOrders.map((order, i) => (
               <OrderCard
                 key={order.id || i}
@@ -73,14 +82,34 @@ export default function HistoryPanel({ scrollToTime, activeTab, onTabChange }) {
   ];
 
   return (
-    <aside className="history-panel">
-      <div className="history-panel-body">
+    <aside
+      style={{
+        flex: 1,
+        minWidth: 320,
+        maxWidth: 520,
+        minHeight: 0,
+        borderLeft: '1px solid var(--panel-border-color)',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
         <Tabs
           items={items}
           activeKey={activeTab}
           onChange={onTabChange}
           size="small"
           tabBarStyle={{ padding: '0 14px', marginBottom: 0 }}
+          style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
         />
       </div>
     </aside>

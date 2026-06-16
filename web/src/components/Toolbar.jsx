@@ -1,5 +1,5 @@
 import React from 'react';
-import { Select, Switch, Tooltip } from 'antd';
+import { Select, Switch, Tooltip, Flex, Divider } from 'antd';
 import { useTradingData } from '../context/TradingDataContext';
 
 export default function Toolbar() {
@@ -27,7 +27,15 @@ export default function Toolbar() {
   ];
 
   return (
-    <div className="toolbar">
+    <Flex
+      gap="small"
+      align="center"
+      style={{
+        padding: '8px 10px',
+        borderBottom: '1px solid var(--border-color)',
+        backgroundColor: 'var(--card-background-color)',
+      }}
+    >
       <Select
         value={currentSymbol}
         onChange={setCurrentSymbol}
@@ -36,7 +44,7 @@ export default function Toolbar() {
         size="middle"
         popupMatchSelectWidth={false}
       />
-      <div className="divider" />
+      <Divider type="vertical" />
       <Select
         value={currentLevel}
         onChange={setCurrentLevel}
@@ -45,7 +53,7 @@ export default function Toolbar() {
         size="middle"
         popupMatchSelectWidth={false}
       />
-      <div className="divider" />
+      <Divider type="vertical" />
       <Select
         value={theme}
         onChange={setTheme}
@@ -54,7 +62,7 @@ export default function Toolbar() {
         size="middle"
         popupMatchSelectWidth={false}
       />
-      <div className="divider" />
+      <Divider type="vertical" />
       <Tooltip title={isZh ? '价格磁铁' : 'Price Magnet'}>
         <Switch
           checked={magnet}
@@ -63,7 +71,7 @@ export default function Toolbar() {
           unCheckedChildren="🧲"
         />
       </Tooltip>
-      <div className="divider" />
+      <Divider type="vertical" />
       <Tooltip title={isZh ? '成交量' : 'Volume'}>
         <Switch
           checked={showVolume}
@@ -72,6 +80,6 @@ export default function Toolbar() {
           unCheckedChildren="📊"
         />
       </Tooltip>
-    </div>
+    </Flex>
   );
 }

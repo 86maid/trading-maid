@@ -48,12 +48,12 @@ export default function ChartPanel({ onChartReady }) {
       requestAnimationFrame(() => {
         // Find the card by unique open_time
         const card = document.querySelector(
-          `.position-card[data-open-time="${targetPos.open_time}"]`
+          `[data-open-time="${targetPos.open_time}"]`
         );
         if (!card) return;
 
         // Expand the card if collapsed (click it programmatically)
-        const logEl = card.querySelector('.log');
+        const logEl = card.querySelector('[data-section="trade-log"]');
         if (!logEl || logEl.children.length === 0) {
           card.click();
         }
@@ -66,7 +66,7 @@ export default function ChartPanel({ onChartReady }) {
           if (!record) return;
 
           // Show the log if hidden
-          const log = record.closest('.log');
+          const log = record.closest('[data-section="trade-log"]');
           if (log) log.style.display = 'block';
 
           const style = getComputedStyle(document.body);
