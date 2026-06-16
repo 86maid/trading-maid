@@ -7,6 +7,8 @@ use crate::{
 };
 use crate::{exchange::Exchange, strategy::Strategy};
 use anyhow::bail;
+use rust_decimal::Decimal;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Default capacity for the k-line buffer in number of k-lines.
@@ -81,6 +83,7 @@ pub struct Engine<S, const N: usize = DEFAULT_SERIES_MAX_LENGTH> {
     strategy: S,
     hook: Option<Box<dyn HookFn>>,
     on_error: Option<Box<dyn Fn(anyhow::Error) -> anyhow::Result<()>>>,
+    series: BTreeMap<(String, Level, String), Vec<Decimal>>,
 }
 
 impl<S> Engine<S, DEFAULT_SERIES_MAX_LENGTH>
@@ -107,6 +110,7 @@ where
             strategy,
             hook: None,
             on_error: None,
+            series: BTreeMap::new(),
         }
     }
 
@@ -132,11 +136,43 @@ where
         self.on_error = Some(Box::new(on_error));
     }
 
+    /// Register an auxiliary data series to be available in the strategy context.
+    ///
+    /// The series data must be pre-aligned to the same `level` as the one passed
+    /// to [`run`](Engine::run) — each element corresponds to one bar at that level.
+    /// Use [`get_or_download_funding_rate_to_series`](crate::util::get_or_download_funding_rate_to_series)
+    /// to download and align funding rate data.
+    ///
+    /// The series can be accessed inside the strategy via `cx[name]`:
+    ///
+    /// ```ignore
+    /// let fr = cx["funding_rate"][0];  // latest value
+    /// ```
+    ///
+    /// If no series is registered for the current symbol/level/name combination,
+    /// `cx[name]` returns an empty series (compare with `== []`).
+    pub fn add_series(
+        &mut self,
+        symbol: impl AsRef<str>,
+        level: Level,
+        name: impl AsRef<str>,
+        series: impl AsRef<[Decimal]>,
+    ) {
+        self.series.insert(
+            (symbol.as_ref().to_string(), level, name.as_ref().to_string()),
+            series.as_ref().to_vec(),
+        );
+    }
+
     /// Run the engine: advance through k-lines, resample, and invoke the strategy.
     ///
     /// The exchange provides data at its native level (e.g. 1m). The engine
     /// resamples to `level` (e.g. 1h) and calls the strategy on each completed
     /// bar at that target level.
+    ///
+    /// Auxiliary series registered via [`add_series`](Engine::add_series) matching
+    /// the given symbol and level are synchronised with the OHLCV data and exposed
+    /// through the [`Context`].
     ///
     /// # Arguments
     ///
@@ -165,14 +201,26 @@ where
                             max_level_buffer.extend(resample(&min_level_buffer, level)?);
                             min_level_buffer.clear();
 
+                            let len = max_level_buffer.time.len();
+
+                            let series: Vec<(&str, &[Decimal])> = self
+                                .series
+                                .iter()
+                                .filter(|((s, l, _), _)| s == symbol && *l == level)
+                                .map(|((_, _, name), data)| {
+                                    (name.as_str(), &data[..len.min(data.len())])
+                                })
+                                .collect();
+
                             let context = Context {
-                                exchange: &exchange,
                                 time: TimeSeries::new(&max_level_buffer.time),
                                 open: Series::new(&max_level_buffer.open),
                                 high: Series::new(&max_level_buffer.high),
                                 low: Series::new(&max_level_buffer.low),
                                 close: Series::new(&max_level_buffer.close),
                                 volume: Series::new(&max_level_buffer.volume),
+                                exchange: &exchange,
+                                series,
                             };
 
                             if let Err(v) = self.strategy.next(&context).await {

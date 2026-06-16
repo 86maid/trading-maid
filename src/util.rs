@@ -513,6 +513,73 @@ pub async fn get_or_download_funding_rate(
     )?)?)
 }
 
+/// Convenience wrapper around [`align_to_series`] that downloads funding rate data
+/// from Binance and forward-fills it to the target [`Level`].
+///
+/// See [`get_or_download_funding_rate`] for the underlying download, and
+/// [`align_to_series`] for the alignment logic.
+pub async fn get_or_download_funding_rate_to_series(
+    format: &str,
+    month_count: u32,
+    level: Level,
+) -> anyhow::Result<Vec<Decimal>> {
+    align_to_series(
+        &get_or_download_funding_rate(format, month_count)
+            .await?
+            .into_iter()
+            .map(|v| (v.time, v.funding_rate))
+            .collect::<Vec<_>>(),
+        level,
+    )
+}
+
+/// Forward-fill sparse time-value pairs into a `Vec<Decimal>` aligned to the given [`Level`].
+///
+/// Each bar at `level` gets the value from the latest data point whose time falls within
+/// that bar's period `[start, next)`. Bars before the first data point receive `Decimal::ZERO`.
+///
+/// # Arguments
+/// - `data` - Sorted slice of `(timestamp_ms, value)` pairs
+/// - `level` - Target level for alignment
+///
+/// # Example
+///
+/// ```ignore
+/// // Custom indicator sampled at irregular times, aligned to 1h bars
+/// let series = align_to_series(&[(t1, v1), (t2, v2)], Level::Hour1)?;
+/// engine.add_series("BTCUSDT", Level::Hour1, "custom", &series);
+/// ```
+pub fn align_to_series(
+    data: impl AsRef<[(u64, Decimal)]>,
+    level: Level,
+) -> anyhow::Result<Vec<Decimal>> {
+    let data = data.as_ref();
+
+    if data.is_empty() {
+        bail!("empty data");
+    }
+
+    let (mut current, mut next) = get_time_range(data[0].0, level)?;
+    let end = get_time_range(data[data.len() - 1].0, level)?.1;
+
+    let mut result = Vec::new();
+    let mut index = 0;
+    let mut value = Decimal::ZERO;
+
+    while current < end {
+        while index < data.len() && data[index].0 < next {
+            value = data[index].1;
+            index += 1;
+        }
+
+        result.push(value);
+        current = next;
+        next = get_time_range(current, level)?.1;
+    }
+
+    Ok(result)
+}
+
 /// Calculates the liquidation price for a given position based on leverage, maintenance margin,
 /// position side (buy or sell), the current price, position quantity, and available margin.
 ///
