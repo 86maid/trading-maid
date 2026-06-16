@@ -138,6 +138,12 @@ pub struct KLine {
     pub volume: Decimal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct FundingRate {
+    pub time: u64,
+    pub funding_rate: Decimal,
+}
+
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {

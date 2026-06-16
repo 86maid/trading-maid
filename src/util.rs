@@ -1,4 +1,4 @@
-use crate::data::{DataSource, KLine, Level};
+use crate::data::{DataSource, FundingRate, KLine, Level};
 use crate::order::{HistoryPosition, HistoryPositionSummary, OrderMessage, Side};
 use anyhow::Context;
 use anyhow::bail;
@@ -81,8 +81,6 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
             month_list.push(current_date.format("%Y-%m").to_string());
             current_date = current_date.pred_opt().unwrap().with_day(1).unwrap();
         }
-
-        month_list.reverse();
 
         month_list
     }
@@ -181,7 +179,8 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
             }
             Ok(None) => {
                 #[cfg(debug_assertions)]
-                println!("{} not available (404)", v)
+                println!("{} not available (404)", v);
+                break;
             }
             Err(error) => {
                 bail!(
@@ -273,6 +272,245 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
     merge_monthly_files(&monthly_directory, &merged_file_path, &marged_lock_path).await?;
 
     Ok(merged_file_path)
+}
+
+/// Downloads and merges funding rate data from Binance into a single bin file
+///
+/// # Arguments
+/// - `format`       - Trading symbol, e.g. `"BTCUSDT"`
+/// - `month_count`  - Number of months to download, 0 means all available data (up to 120 months)
+///
+/// # Returns
+/// - On success, returns the path to the merged bin file
+/// - Data storage location: `~/.trading-maid/<symbol>/fundingRate.bin`
+///
+/// # Data Source
+/// https://data.binance.vision
+///
+/// # Processing Pipeline
+/// 1. Generate list of months to download (defaults to last 120 months)
+/// 2. Check local cache for each month, download from Binance if missing
+/// 3. Merge all monthly CSV files, extracting only calc_time and last_funding_rate
+/// 4. Serialize as bincode and return path to merged file
+///
+/// # CSV Format
+/// Input: `calc_time,funding_interval_hours,last_funding_rate`
+/// Output: `Vec<FundingRate>` serialized with bincode (no header)
+pub async fn get_or_download_funding_rate_path(
+    format: &str,
+    month_count: u32,
+) -> anyhow::Result<PathBuf> {
+    fn parse_symbol(input: &str) -> &str {
+        // Normalize "BTC-USDT" or "BTC/USDT" -> just the base symbol part
+        // The actual symbol used by Binance has no dashes
+        input.split('/').next().unwrap_or(input)
+    }
+
+    fn generate_month_list(count: u32) -> Vec<String> {
+        let mut month_list = Vec::with_capacity(count as usize);
+
+        let mut current_date = {
+            let now = Utc::now();
+            let previous_month = if now.month() > 1 { now.month() - 1 } else { 12 };
+            let year = if now.month() == 1 {
+                now.year() - 1
+            } else {
+                now.year()
+            };
+
+            chrono::NaiveDate::from_ymd_opt(year, previous_month, 1).unwrap()
+        };
+
+        for _ in 0..count {
+            month_list.push(current_date.format("%Y-%m").to_string());
+            current_date = current_date.pred_opt().unwrap().with_day(1).unwrap();
+        }
+
+        month_list
+    }
+
+    fn build_download_url(base_url: &str, symbol: &str, year_month: &str) -> String {
+        format!(
+            "{}/futures/um/monthly/fundingRate/{}/{}-fundingRate-{}.zip",
+            base_url, symbol, symbol, year_month
+        )
+    }
+
+    async fn download_monthly_funding_rate(
+        http_client: &Client,
+        url: &str,
+    ) -> anyhow::Result<Option<String>> {
+        #[cfg(debug_assertions)]
+        println!("download: {}", url);
+
+        let response = http_client.get(url).send().await?;
+
+        if response.status() == 404 {
+            return Ok(None);
+        }
+
+        response.error_for_status_ref()?;
+
+        let response_bytes = response.bytes().await?;
+
+        let mut zip_archive = ZipArchive::new(std::io::Cursor::new(response_bytes))?;
+
+        let csv_filename = zip_archive
+            .file_names()
+            .find(|filename| filename.ends_with(".csv"))
+            .context("no csv in zip")?
+            .to_owned();
+
+        let mut csv_content = String::new();
+
+        zip_archive
+            .by_name(&csv_filename)?
+            .read_to_string(&mut csv_content)?;
+
+        Ok(Some(csv_content))
+    }
+
+    let base_symbol = parse_symbol(format);
+
+    let base_data_directory = dirs::home_dir()
+        .map(|home_directory| home_directory.join(".trading-maid"))
+        .context("can not find data dir")?;
+
+    let symbol_directory = base_data_directory.join(base_symbol);
+    let monthly_directory = symbol_directory.join("fundingRate");
+    let merged_file_path = symbol_directory.join("fundingRate.bin");
+    let marged_lock_path = symbol_directory.join("fundingRate.lock");
+
+    fs::create_dir_all(&monthly_directory).await?;
+
+    let month_list = if month_count == 0 {
+        generate_month_list(120)
+    } else {
+        generate_month_list(month_count)
+    };
+
+    let http_client = Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
+
+    const BASE_URL: &str = "https://data.binance.vision/data";
+
+    for v in &month_list {
+        let monthly_file_path =
+            monthly_directory.join(format!("{}-fundingRate-{}.csv", base_symbol, v));
+
+        if monthly_file_path.exists() {
+            continue;
+        }
+
+        let download_url = build_download_url(BASE_URL, base_symbol, v);
+
+        match download_monthly_funding_rate(&http_client, &download_url).await {
+            Ok(Some(v)) => {
+                fs::write(&monthly_file_path, v.as_bytes()).await?;
+                tokio::fs::write(&marged_lock_path, "").await?;
+            }
+            Ok(None) => {
+                #[cfg(debug_assertions)]
+                println!("{} not available (404)", v);
+                break;
+            }
+            Err(error) => {
+                bail!(
+                    "failed to download {}: {}",
+                    v,
+                    error.to_string().to_lowercase()
+                );
+            }
+        }
+    }
+
+    async fn merge_funding_rate_files(
+        monthly_directory: &Path,
+        merged_file_path: &Path,
+        marged_lock_path: &Path,
+    ) -> anyhow::Result<()> {
+        if !marged_lock_path.exists() && merged_file_path.exists() {
+            return Ok(());
+        }
+
+        let mut csv_file_list = Vec::new();
+
+        let mut directory_reader = fs::read_dir(monthly_directory).await?;
+
+        while let Some(v) = directory_reader.next_entry().await? {
+            let file_path = v.path();
+
+            if file_path
+                .extension()
+                .is_some_and(|extension| extension == "csv")
+            {
+                csv_file_list.push(file_path);
+            }
+        }
+
+        csv_file_list.sort();
+
+        if csv_file_list.is_empty() {
+            bail!(
+                "no monthly files found in {:?}",
+                monthly_directory.to_string_lossy().to_lowercase()
+            );
+        }
+
+        let mut output_file = fs::File::create(merged_file_path).await?;
+        let mut array = Vec::new();
+
+        for v in csv_file_list.iter() {
+            let file_content = fs::read_to_string(v).await?;
+
+            let mut content_lines = file_content.lines();
+
+            // Skip header: calc_time,funding_interval_hours,last_funding_rate
+            _ = content_lines.next();
+
+            for line in content_lines {
+                let mut columns = line.split(',');
+
+                let time = columns
+                    .next()
+                    .context("missing calc_time")?
+                    .parse::<u64>()?;
+
+                // Skip funding_interval_hours
+                _ = columns.next();
+
+                let value = columns.next().context("missing last_funding_rate")?;
+
+                let funding_rate = Decimal::from_scientific(value).or(Decimal::from_str(value))?;
+
+                array.push(FundingRate { time, funding_rate });
+            }
+        }
+
+        output_file.write_all(&bincode::serialize(&array)?).await?;
+
+        if marged_lock_path.exists() {
+            std::fs::remove_file(marged_lock_path)?;
+        }
+
+        Ok(())
+    }
+
+    merge_funding_rate_files(&monthly_directory, &merged_file_path, &marged_lock_path).await?;
+
+    Ok(merged_file_path)
+}
+
+/// Convenience wrapper around [`get_or_download_funding_rate_path`] that downloads,
+/// merges, and deserializes the funding rate data into a `Vec<FundingRate>`.
+pub async fn get_or_download_funding_rate(
+    format: &str,
+    month_count: u32,
+) -> anyhow::Result<Vec<FundingRate>> {
+    Ok(bincode::deserialize(&std::fs::read(
+        get_or_download_funding_rate_path(format, month_count).await?,
+    )?)?)
 }
 
 /// Calculates the liquidation price for a given position based on leverage, maintenance margin,
