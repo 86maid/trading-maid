@@ -159,7 +159,11 @@ where
         series: impl AsRef<[Decimal]>,
     ) {
         self.series.insert(
-            (symbol.as_ref().to_string(), level, name.as_ref().to_string()),
+            (
+                symbol.as_ref().to_string(),
+                level,
+                name.as_ref().to_string(),
+            ),
             series.as_ref().to_vec(),
         );
     }

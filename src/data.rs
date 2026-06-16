@@ -561,3 +561,130 @@ impl<const N: usize> KLineBuffer<N> {
         self.volume.extend(i.clone().map(|v| v.volume));
     }
 }
+
+/// A unified timeline composed of multiple data sources.
+///
+/// `Axis` merges [`DataSource`]s for multiple symbols at the same [`Level`] into a
+/// single timeline. The union of all first/last kline times defines the range,
+/// and the shortest data source determines the length. Each symbol's kline is
+/// accessed by direct index lookup.
+#[derive(Debug, Clone)]
+pub struct Axis {
+    ds: Vec<DataSource>,
+    index: usize,
+    len: usize,
+}
+
+impl Axis {
+    /// Build a timeline from the union of data source time ranges.
+    ///
+    /// Compares the first and last kline times across all sources, taking the
+    /// earliest start and latest end as the union. All sources must share the
+    /// same [`Level`]. Returns an error if the time ranges do not overlap.
+    pub fn new(ds: Vec<DataSource>) -> anyhow::Result<Self> {
+        if ds.is_empty() {
+            bail!("axis: no data sources provided");
+        }
+
+        let level = ds[0].metadata.level;
+
+        for source in &ds[1..] {
+            if source.metadata.level != level {
+                bail!(
+                    "axis: level mismatch: expected {}, got {} for {}",
+                    level,
+                    source.metadata.level,
+                    source.metadata.symbol,
+                );
+            }
+        }
+
+        let mut start_time = u64::MAX;
+        let mut end_time = u64::MIN;
+        let mut len = usize::MAX;
+
+        for source in &ds {
+            let first = source
+                .data
+                .first()
+                .map(|k| k.time)
+                .context(format!("axis: {} has no data", source.metadata.symbol))?;
+
+            let last = source
+                .data
+                .last()
+                .map(|k| k.time)
+                .context(format!("axis: {} has no data", source.metadata.symbol))?;
+
+            start_time = start_time.min(first);
+            end_time = end_time.max(last);
+            len = len.min(source.data.len());
+        }
+
+        if start_time >= end_time {
+            bail!(
+                "axis: no overlapping time range ({} - {})",
+                start_time,
+                end_time
+            );
+        }
+
+        Ok(Self { ds, index: 0, len })
+    }
+
+    /// Advance the timeline to the next step.
+    pub fn next(&mut self) {
+        self.index += 1;
+    }
+
+    /// Return the kline for `symbol` at the current time step.
+    ///
+    /// O(1) direct index lookup. Returns `None` if the symbol is not found
+    /// or the timeline is exhausted.
+    pub fn at(&self, symbol: &str) -> Option<KLine> {
+        if self.is_done() {
+            return None;
+        }
+        self.ds
+            .iter()
+            .find(|s| s.metadata.symbol == symbol)?
+            .data
+            .get(self.index)
+            .cloned()
+    }
+
+    /// Return the current timestamp.
+    pub fn current_time(&self) -> Option<u64> {
+        if self.is_done() {
+            return None;
+        }
+
+        self.ds.first()?.data.get(self.index).map(|k| k.time)
+    }
+
+    /// Return klines for all symbols at the current time step.
+    pub fn all(&self) -> Vec<(&str, Option<KLine>)> {
+        self.ds
+            .iter()
+            .map(|s| {
+                let symbol = s.metadata.symbol.as_str();
+                (symbol, self.at(symbol))
+            })
+            .collect()
+    }
+
+    /// Return a reference to all data sources.
+    pub fn inner(&self) -> &[DataSource] {
+        &self.ds
+    }
+
+    /// Check whether the timeline has been exhausted.
+    pub fn is_done(&self) -> bool {
+        self.index >= self.len
+    }
+
+    /// Return the total number of steps in the timeline.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+}
