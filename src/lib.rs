@@ -5,6 +5,7 @@ pub mod engine;
 pub mod exchange;
 pub mod indicator;
 pub mod local_exchange;
+pub mod local_exchange_ex;
 pub mod order;
 pub mod series;
 pub mod strategy;
@@ -19,6 +20,7 @@ pub mod prelude {
     pub use crate::exchange::*;
     pub use crate::indicator::*;
     pub use crate::local_exchange::*;
+    pub use crate::local_exchange_ex::*;
     pub use crate::order::*;
     pub use crate::series::*;
     pub use crate::strategy::*;

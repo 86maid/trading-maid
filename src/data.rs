@@ -565,22 +565,29 @@ impl<const N: usize> KLineBuffer<N> {
 /// A unified timeline composed of multiple data sources.
 ///
 /// `Axis` merges [`DataSource`]s for multiple symbols at the same [`Level`] into a
-/// single timeline. The union of all first/last kline times defines the range,
-/// and the shortest data source determines the length. Each symbol's kline is
-/// accessed by direct index lookup.
+/// single timeline. The **intersection** of all time ranges defines the playback
+/// window — only timestamps present in every source are included. Each symbol
+/// may start at a different offset, so per-source start indices are computed
+/// such that `all()` returns klines at the same timestamp for every symbol.
 #[derive(Debug, Clone)]
 pub struct Axis {
     ds: Vec<DataSource>,
+    /// Per-source offset: `ds[i].data[start_indices[i] + index]` yields the
+    /// kline at the current aligned time step.
+    start_indices: Vec<usize>,
     index: usize,
     len: usize,
 }
 
 impl Axis {
-    /// Build a timeline from the union of data source time ranges.
+    /// Build a timeline from the intersection of data source time ranges.
     ///
-    /// Compares the first and last kline times across all sources, taking the
-    /// earliest start and latest end as the union. All sources must share the
-    /// same [`Level`]. Returns an error if the time ranges do not overlap.
+    /// Finds the latest start time and earliest end time across all sources.
+    /// Each source's start index is set to the position of the intersection
+    /// start time within its data.  `len` is the number of overlapping steps.
+    ///
+    /// All sources must share the same [`Level`]. Returns an error if the
+    /// time ranges do not overlap or any source has no data.
     pub fn new(ds: Vec<DataSource>) -> anyhow::Result<Self> {
         if ds.is_empty() {
             bail!("axis: no data sources provided");
@@ -599,9 +606,9 @@ impl Axis {
             }
         }
 
-        let mut start_time = u64::MAX;
-        let mut end_time = u64::MIN;
-        let mut len = usize::MAX;
+        // Intersection: latest first time → earliest last time.
+        let mut start_time = u64::MIN;
+        let mut end_time = u64::MAX;
 
         for source in &ds {
             let first = source
@@ -616,9 +623,8 @@ impl Axis {
                 .map(|k| k.time)
                 .context(format!("axis: {} has no data", source.metadata.symbol))?;
 
-            start_time = start_time.min(first);
-            end_time = end_time.max(last);
-            len = len.min(source.data.len());
+            start_time = start_time.max(first);
+            end_time = end_time.min(last);
         }
 
         if start_time >= end_time {
@@ -629,7 +635,42 @@ impl Axis {
             );
         }
 
-        Ok(Self { ds, index: 0, len })
+        // Per-source start index: first kline with time >= intersection start.
+        let mut start_indices = Vec::with_capacity(ds.len());
+        let mut len = usize::MAX;
+
+        for source in &ds {
+            let si = source
+                .data
+                .iter()
+                .position(|k| k.time >= start_time)
+                .context(format!(
+                    "axis: {} has no kline at or after start_time {}",
+                    source.metadata.symbol, start_time
+                ))?;
+
+            let effective_len = source.data[si..]
+                .iter()
+                .take_while(|k| k.time <= end_time)
+                .count();
+
+            if effective_len == 0 {
+                bail!(
+                    "axis: {} has no klines within overlapping range",
+                    source.metadata.symbol
+                );
+            }
+
+            start_indices.push(si);
+            len = len.min(effective_len);
+        }
+
+        Ok(Self {
+            ds,
+            start_indices,
+            index: 0,
+            len,
+        })
     }
 
     /// Advance the timeline to the next step.
@@ -645,11 +686,13 @@ impl Axis {
         if self.is_done() {
             return None;
         }
-        self.ds
+        let pos = self
+            .ds
             .iter()
-            .find(|s| s.metadata.symbol == symbol)?
+            .position(|s| s.metadata.symbol == symbol)?;
+        self.ds[pos]
             .data
-            .get(self.index)
+            .get(self.start_indices[pos] + self.index)
             .cloned()
     }
 
@@ -659,16 +702,29 @@ impl Axis {
             return None;
         }
 
-        self.ds.first()?.data.get(self.index).map(|k| k.time)
+        self.ds
+            .first()?
+            .data
+            .get(self.start_indices[0] + self.index)
+            .map(|k| k.time)
     }
 
     /// Return klines for all symbols at the current time step.
-    pub fn all(&self) -> Vec<(&str, Option<KLine>)> {
+    ///
+    /// Returns `None` if the timeline is exhausted or any symbol is missing
+    /// data at the current index (should not happen with properly aligned sources).
+    pub fn all(&self) -> Option<Vec<(&str, KLine)>> {
+        if self.is_done() {
+            return None;
+        }
         self.ds
             .iter()
-            .map(|s| {
+            .enumerate()
+            .map(|(i, s)| {
                 let symbol = s.metadata.symbol.as_str();
-                (symbol, self.at(symbol))
+                s.data
+                    .get(self.start_indices[i] + self.index)
+                    .map(|k| (symbol, *k))
             })
             .collect()
     }

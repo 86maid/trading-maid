@@ -1,11 +1,12 @@
 use crate::{
-    context::Context,
+    context::{Context, LevelCacheEntry, MultiSlices, MultiSymbolData, SymbolSlices},
     data::{KLine, KLineBuffer, Level},
     prelude::ExchangeWrapper,
     series::{Series, TimeSeries},
     util::{get_last_time, resample},
 };
 use crate::{exchange::Exchange, strategy::Strategy};
+use std::cell::RefCell;
 use anyhow::bail;
 use rust_decimal::Decimal;
 use std::collections::BTreeMap;
@@ -15,6 +16,37 @@ use std::sync::Arc;
 ///
 /// 10,000,000 k-lines at 1-minute resolution covers ~19 years of data.
 pub const DEFAULT_SERIES_MAX_LENGTH: usize = 10000000;
+
+/// Per-symbol buffers used by [`Engine::run_multi`].
+///
+/// Maintains columnar storage at the source level (built incrementally) and
+/// strategy level (built via resample).  A [`Vec<KLine>`] of source klines is
+/// kept for on-demand resampling to arbitrary levels via [`Context::request`].
+struct SymbolBuffer<const N: usize> {
+    /// Accumulates source klines for the current strategy bar.
+    min_level_accumulator: Vec<KLine>,
+    /// All source klines received so far (for on-demand resampling).
+    source_klines: Vec<KLine>,
+    /// Columnar OHLCV at the source level (incremented each round).
+    source_level_buffer: KLineBuffer<N>,
+    /// Columnar OHLCV at the strategy level (extended on bar completion).
+    strategy_level_buffer: KLineBuffer<N>,
+    /// Lazily populated cache for levels other than source / strategy.
+    /// `RefCell` provides interior mutability because [`Context::request`] takes `&self`.
+    level_cache: RefCell<BTreeMap<Level, LevelCacheEntry>>,
+}
+
+impl<const N: usize> SymbolBuffer<N> {
+    fn new() -> Self {
+        Self {
+            min_level_accumulator: Vec::new(),
+            source_klines: Vec::new(),
+            source_level_buffer: KLineBuffer::new(),
+            strategy_level_buffer: KLineBuffer::new(),
+            level_cache: RefCell::new(BTreeMap::new()),
+        }
+    }
+}
 
 /// A hook function called after each k-line is processed by the strategy.
 ///
@@ -225,6 +257,7 @@ where
                                 volume: Series::new(&max_level_buffer.volume),
                                 exchange: &exchange,
                                 series,
+                                multi: None,
                             };
 
                             if let Err(v) = self.strategy.next(&context).await {
@@ -250,5 +283,177 @@ where
                 level
             );
         }
+    }
+
+    /// Run the engine across multiple symbols synchronised on a single timeline.
+    ///
+    /// Each symbol gets its own OHLCV buffer; when the primary symbol's bar
+    /// completes, the strategy is invoked.  Use [`Context::request`] inside
+    /// the strategy to read other symbols' data.
+    ///
+    /// The exchange must be a multi-symbol implementation (e.g.
+    /// [`LocalExchangeEx`](crate::local_exchange_ex::LocalExchangeEx)) with
+    /// A1 pacemaker semantics: the first symbol in `symbols` drives the clock.
+    ///
+    /// # Arguments
+    ///
+    /// - `symbols`: ordered list of trading pairs (e.g. `["BTCUSDT", "ETHUSDT"]`).
+    ///   The first symbol is the primary (its bars gate the strategy call).
+    /// - `level`: the strategy time frame. Must be >= the source data level.
+    pub async fn run_multi(
+        &mut self,
+        symbols: Vec<String>,
+        level: Level,
+    ) -> anyhow::Result<()> {
+        if symbols.is_empty() {
+            bail!("run_multi: symbols list is empty");
+        }
+
+        let primary = &symbols[0];
+        let metadata = self.exchange.get_metadata(primary).await?;
+        let exchange = ExchangeWrapper::new(self.exchange.clone());
+
+        if !metadata.level.is_valid_sampling_target(level) {
+            bail!(
+                "run_multi: invalid sampling target level: min_level: {}, max_level: {}",
+                metadata.level,
+                level
+            );
+        }
+
+        let mut buffers: BTreeMap<String, SymbolBuffer<N>> = symbols
+            .iter()
+            .map(|s| (s.clone(), SymbolBuffer::new()))
+            .collect();
+
+        let mut primary_bar_ready = false;
+
+        loop {
+            let mut all_done = true;
+
+            for sym in &symbols {
+                match self.exchange.next(sym.as_str(), metadata.level).await? {
+                    Some(kline) => {
+                        all_done = false;
+
+                        let buf = buffers.get_mut(sym).unwrap();
+
+                        // Keep source klines for on-demand resampling.
+                        buf.source_klines.push(kline);
+                        // Push to source-level columnar buffer.
+                        buf.source_level_buffer.push(kline);
+                        // Accumulate for strategy-level resampling.
+                        buf.min_level_accumulator.push(kline);
+
+                        if kline.time
+                            == get_last_time(kline.time, metadata.level, level)?
+                        {
+                            buf.strategy_level_buffer
+                                .extend(resample(&buf.min_level_accumulator, level)?);
+                            buf.min_level_accumulator.clear();
+                            if sym == primary {
+                                primary_bar_ready = true;
+                            }
+                        }
+
+                        if let Some(hook) = &mut self.hook {
+                            hook.next(kline, self.exchange.clone()).await?;
+                        }
+                    }
+                    None => {}
+                }
+            }
+
+            if all_done {
+                return Ok(());
+            }
+
+            if primary_bar_ready {
+                primary_bar_ready = false;
+                self.call_strategy(&buffers, primary, metadata.level, level, &exchange)
+                    .await?;
+            }
+        }
+    }
+
+    async fn call_strategy(
+        &mut self,
+        buffers: &BTreeMap<String, SymbolBuffer<N>>,
+        primary: &str,
+        source_level: Level,
+        strategy_level: Level,
+        exchange: &ExchangeWrapper,
+    ) -> anyhow::Result<()> {
+
+        // Build type-erased per-symbol data.
+        let symbol_data: BTreeMap<String, MultiSymbolData> = buffers
+            .iter()
+            .map(|(sym, buf)| {
+                (
+                    sym.clone(),
+                    MultiSymbolData {
+                        strategy: SymbolSlices {
+                            time: &buf.strategy_level_buffer.time,
+                            open: &buf.strategy_level_buffer.open,
+                            high: &buf.strategy_level_buffer.high,
+                            low: &buf.strategy_level_buffer.low,
+                            close: &buf.strategy_level_buffer.close,
+                            volume: &buf.strategy_level_buffer.volume,
+                        },
+                        source: SymbolSlices {
+                            time: &buf.source_level_buffer.time,
+                            open: &buf.source_level_buffer.open,
+                            high: &buf.source_level_buffer.high,
+                            low: &buf.source_level_buffer.low,
+                            close: &buf.source_level_buffer.close,
+                            volume: &buf.source_level_buffer.volume,
+                        },
+                        source_klines: &buf.source_klines,
+                        level_cache: &buf.level_cache,
+                    },
+                )
+            })
+            .collect();
+
+        let multi = MultiSlices {
+            symbols: symbol_data,
+            exchange,
+            strategy_level,
+            source_level,
+            series: &self.series,
+        };
+
+        let primary_data = &multi.symbols[primary];
+        let primary_slices = &primary_data.strategy;
+        let len = primary_slices.time.len();
+
+        let series: Vec<(&str, &[Decimal])> = self
+            .series
+            .iter()
+            .filter(|((s, l, _), _)| s == primary && *l == strategy_level)
+            .map(|((_, _, name), data)| (name.as_str(), &data[..len.min(data.len())]))
+            .collect();
+
+        let context = Context {
+            time: TimeSeries::new(primary_slices.time),
+            open: Series::new(primary_slices.open),
+            high: Series::new(primary_slices.high),
+            low: Series::new(primary_slices.low),
+            close: Series::new(primary_slices.close),
+            volume: Series::new(primary_slices.volume),
+            exchange,
+            series,
+            multi: Some(&multi),
+        };
+
+        if let Err(e) = self.strategy.next(&context).await {
+            if let Some(on_error) = &self.on_error {
+                on_error(e)?;
+            } else {
+                bail!(e);
+            }
+        }
+
+        Ok(())
     }
 }
