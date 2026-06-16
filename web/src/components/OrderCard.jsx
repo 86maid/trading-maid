@@ -37,19 +37,19 @@ export default function OrderCard({ order, scrollToTime }) {
       onClick={() => scrollToTime(order.update_time)}
       style={{ marginBottom: 0 }}
     >
-      <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
-        <Text strong style={{ fontFamily: 'var(--font-mono)', fontSize: 14 }}>
+      <Flex justify="space-between" align="flex-start" gap={8} style={{ marginBottom: 8 }}>
+        <Text strong style={{ fontFamily: 'var(--font-mono)', fontSize: 14, flexShrink: 0, marginTop: 2 }}>
           {enumText(order.id)}
         </Text>
-        <Flex gap="2px" wrap="wrap">
+        <Flex gap="2px 4px" wrap="wrap" style={{ justifyContent: 'flex-end' }}>
           {order.reduce_only && (
-            <Tag color={tagColor}>
+            <Tag color={tagColor} style={{ fontSize: 11, margin: 0 }}>
               {t('Reduce Only', '只减仓', isZh)}
             </Tag>
           )}
-          <Tag color={tagColor}>{statusText(order.status, order.kind, isZh)}</Tag>
-          <Tag color={tagColor}>{kindText(order.kind, isZh)}</Tag>
-          <Tag color={tagColor}>
+          <Tag color={tagColor} style={{ fontSize: 11, margin: 0 }}>{statusText(order.status, order.kind, isZh)}</Tag>
+          <Tag color={tagColor} style={{ fontSize: 11, margin: 0 }}>{kindText(order.kind, isZh)}</Tag>
+          <Tag color={tagColor} style={{ fontSize: 11, margin: 0 }}>
             {side === 'Buy'
               ? t('Buy', '买', isZh)
               : side === 'Sell'

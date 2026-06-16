@@ -96,15 +96,15 @@ export default function PositionCard({ position, scrollToTime, isFirst }) {
       style={{ marginBottom: 0 }}
     >
       {/* Head */}
-      <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
-        <Text strong style={{ fontFamily: 'var(--font-mono)', fontSize: 14 }}>
+      <Flex justify="space-between" align="flex-start" gap={8} style={{ marginBottom: 8 }}>
+        <Text strong style={{ fontFamily: 'var(--font-mono)', fontSize: 14, flexShrink: 0, marginTop: 2 }}>
           {position.symbol}
         </Text>
-        <Flex gap="2px" wrap="wrap">
-          <Tag color={tagColor}>{statusText}</Tag>
-          <Tag color={tagColor}>{position.leverage}x</Tag>
-          <Tag color={tagColor}>{t('Isolated', '逐仓', isZh)}</Tag>
-          <Tag color={tagColor}>
+        <Flex gap="2px 4px" wrap="wrap" style={{ justifyContent: 'flex-end' }}>
+          <Tag color={tagColor} style={{ fontSize: 11, margin: 0 }}>{statusText}</Tag>
+          <Tag color={tagColor} style={{ fontSize: 11, margin: 0 }}>{position.leverage}x</Tag>
+          <Tag color={tagColor} style={{ fontSize: 11, margin: 0 }}>{t('Isolated', '逐仓', isZh)}</Tag>
+          <Tag color={tagColor} style={{ fontSize: 11, margin: 0 }}>
             {isBuy ? t('Buy', '买', isZh) : t('Sell', '卖', isZh)}
           </Tag>
         </Flex>

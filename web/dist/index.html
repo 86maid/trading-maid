@@ -43873,33 +43873,53 @@ function PositionCard({ position, scrollToTime, isFirst }) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Flex, {
 				justify: "space-between",
-				align: "center",
+				align: "flex-start",
+				gap: 8,
 				style: { marginBottom: 8 },
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text$1, {
 					strong: true,
 					style: {
 						fontFamily: "var(--font-mono)",
-						fontSize: 14
+						fontSize: 14,
+						flexShrink: 0,
+						marginTop: 2
 					},
 					children: position.symbol
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Flex, {
-					gap: "2px",
+					gap: "2px 4px",
 					wrap: "wrap",
+					style: { justifyContent: "flex-end" },
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, {
 							color: tagColor,
+							style: {
+								fontSize: 11,
+								margin: 0
+							},
 							children: statusText
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Tag, {
 							color: tagColor,
+							style: {
+								fontSize: 11,
+								margin: 0
+							},
 							children: [position.leverage, "x"]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, {
 							color: tagColor,
+							style: {
+								fontSize: 11,
+								margin: 0
+							},
 							children: t("Isolated", "逐仓", isZh)
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, {
 							color: tagColor,
+							style: {
+								fontSize: 11,
+								margin: 0
+							},
 							children: isBuy ? t("Buy", "买", isZh) : t("Sell", "卖", isZh)
 						})
 					]
@@ -44052,33 +44072,53 @@ function OrderCard({ order, scrollToTime }) {
 		style: { marginBottom: 0 },
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Flex, {
 			justify: "space-between",
-			align: "center",
+			align: "flex-start",
+			gap: 8,
 			style: { marginBottom: 8 },
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, {
 				strong: true,
 				style: {
 					fontFamily: "var(--font-mono)",
-					fontSize: 14
+					fontSize: 14,
+					flexShrink: 0,
+					marginTop: 2
 				},
 				children: enumText(order.id)
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Flex, {
-				gap: "2px",
+				gap: "2px 4px",
 				wrap: "wrap",
+				style: { justifyContent: "flex-end" },
 				children: [
 					order.reduce_only && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, {
 						color: tagColor,
+						style: {
+							fontSize: 11,
+							margin: 0
+						},
 						children: t("Reduce Only", "只减仓", isZh)
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, {
 						color: tagColor,
+						style: {
+							fontSize: 11,
+							margin: 0
+						},
 						children: statusText(order.status, order.kind, isZh)
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, {
 						color: tagColor,
+						style: {
+							fontSize: 11,
+							margin: 0
+						},
 						children: kindText(order.kind, isZh)
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tag, {
 						color: tagColor,
+						style: {
+							fontSize: 11,
+							margin: 0
+						},
 						children: side === "Buy" ? t("Buy", "买", isZh) : side === "Sell" ? t("Sell", "卖", isZh) : side
 					})
 				]
@@ -44270,7 +44310,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-BfveCBEG.js.map</script>
+//# sourceMappingURL=index-CR8XevfH.js.map</script>
 </head>
 
 <body class="theme-dark">
