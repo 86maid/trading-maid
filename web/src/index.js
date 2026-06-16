@@ -1327,7 +1327,8 @@ createDropdownList("#symbol-dropdown", symbolList, (value) => {
 
   const level = document.querySelector("#level-button").innerText
 
-  window.dataSource = dataSourceList.find(v => levelText ? v.metadata.symbol == value && v.metadata.level == level : v.metadata.symbol == value)
+  window.dataSource = dataSourceList.find(v => v.metadata.symbol == value && v.metadata.level == level)
+      || dataSourceList.find(v => v.metadata.symbol == value)
   window.series.setMarkers([])
   window.series.setMarkers(window.historyPositionList.filter(v => v.symbol == value).flatMap(v => createMaker(v)))
   window.series.setData(window.dataSource.data)
