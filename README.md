@@ -25,6 +25,7 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - [🧩 Strategy as Struct](#-strategy-as-struct)
 - [🛑 Error Handling](#-error-handling)
 - [🚦 Hook Intercept](#-hook-intercept)
+- [📊 Additional Series](#-additional-series)
 - [🧪 A Complete Example](#-a-complete-example)
 
 ## ✨ Core Capabilities
@@ -309,6 +310,66 @@ if let Err(v) = engine.run("BTCUSDT", Level::Minute5).await {
     println!("{:#?}", v);
 }
 ```
+
+## 📊 Additional Series
+
+Use `add_series` to attach custom data (funding rate, on-chain metrics, sentiment, etc.) to the engine. Once registered, the series is synchronised with the OHLCV data and accessible in the strategy via `cx["name"]`.
+
+### Aligning Custom Data
+
+Custom data usually comes as sparse `(timestamp_ms, value)` pairs. Use `align_to_series` to forward-fill these into a `Vec<Decimal>` aligned to a target k-line level:
+
+```rust
+use trading_maid::prelude::*;
+
+// Sparse custom data: (timestamp_ms, value)
+let custom_data = vec![
+    (1717200000000, "1.5".parse::<Decimal>().unwrap()),
+    (1717286400000, "2.3".parse::<Decimal>().unwrap()),
+];
+
+// Forward-fill align to 1-hour bars
+let series = align_to_series(&custom_data, Level::Hour1).unwrap();
+
+// Register with the engine before calling run()
+let mut engine = Engine::new(exchange, my_strategy);
+engine.add_series("BTCUSDT", Level::Hour1, "custom_metric", &series);
+```
+
+### Funding Rate Example
+
+`get_or_download_funding_rate_to_series` downloads Binance funding rate history and aligns it automatically:
+
+```rust
+let funding_rate_series = get_or_download_funding_rate_to_series(
+    "BTCUSDT", 12, Level::Hour1,
+).await.unwrap();
+
+engine.add_series("BTCUSDT", Level::Hour1, "funding_rate", &funding_rate_series);
+```
+
+### Access in Strategy
+
+Read the additional series by name inside the strategy:
+
+```rust
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    // Current bar's funding rate
+    let fr = cx["funding_rate"][0];
+    // Previous bar
+    let fr_prev = cx["funding_rate"][1];
+
+    // Avoid longing when funding is too high
+    if fr > "0.0005".parse::<Decimal>().unwrap() {
+        return Ok(());
+    }
+
+    // ... rest of strategy
+    Ok(())
+}
+```
+
+If no series is registered for the given symbol/level/name, `cx[name]` returns an empty series (compare with `== []`).
 
 ## 🧪 A Complete Example
 

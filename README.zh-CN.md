@@ -26,6 +26,7 @@ trading-maid 是一个面向加密货币合约交易的回测与实盘框架，�
 - [🧩 策略 Struct](#-策略-struct)
 - [🛑 错误处理](#-错误处理)
 - [🚦 Hook 劫持](#-hook-劫持)
+- [📊 附加系列](#-附加系列)
 - [🧪 一个完整的例子](#-一个完整的例子)
 
 ## ✨ 核心能力
@@ -308,6 +309,66 @@ if let Err(v) = engine.run("BTCUSDT", Level::Minute5).await {
     println!("{:#?}", v);
 }
 ```
+
+## 📊 附加系列
+
+使用 `add_series` 将自定义数据（资金费率、链上指标、情绪等）附加到引擎。注册后，系列会与 OHLCV 数据同步，并可在策略中通过 `cx["name"]` 访问。
+
+### 对齐自定义数据
+
+自定义数据通常以稀疏的 `(时间戳毫秒, 值)` 形式存在。使用 `align_to_series` 将其前向填充为对齐到目标 K 线级别的 `Vec<Decimal>`：
+
+```rust
+use trading_maid::prelude::*;
+
+// 稀疏的自定义数据：(时间戳毫秒, 值)
+let custom_data = vec![
+    (1717200000000, "1.5".parse::<Decimal>().unwrap()),
+    (1717286400000, "2.3".parse::<Decimal>().unwrap()),
+];
+
+// 前向填充对齐到 1 小时 K 线
+let series = align_to_series(&custom_data, Level::Hour1).unwrap();
+
+// 在调用 run() 之前注册到引擎
+let mut engine = Engine::new(exchange, my_strategy);
+engine.add_series("BTCUSDT", Level::Hour1, "custom_metric", &series);
+```
+
+### 资金费率示例
+
+`get_or_download_funding_rate_to_series` 可下载 Binance 历史资金费率并自动对齐：
+
+```rust
+let funding_rate_series = get_or_download_funding_rate_to_series(
+    "BTCUSDT", 12, Level::Hour1,
+).await.unwrap();
+
+engine.add_series("BTCUSDT", Level::Hour1, "funding_rate", &funding_rate_series);
+```
+
+### 在策略中访问
+
+在策略中按名称读取附加系列：
+
+```rust
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    // 当前 K 线的资金费率
+    let fr = cx["funding_rate"][0];
+    // 上一根 K 线
+    let fr_prev = cx["funding_rate"][1];
+
+    // 费率过高时避免做多
+    if fr > "0.0005".parse::<Decimal>().unwrap() {
+        return Ok(());
+    }
+
+    // ... 策略其余部分
+    Ok(())
+}
+```
+
+如果给定的 symbol/level/name 没有注册系列，`cx[name]` 会返回空系列（可通过 `== []` 判断）。
 
 ## 🧪 一个完整的例子
 
