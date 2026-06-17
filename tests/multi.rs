@@ -80,9 +80,10 @@ impl Strategy for MyStrategy {
 fn entry_signal(cx: &Context<'_>) -> Option<(Decimal, Decimal)> {
     let body_size = (cx.open - cx.close).abs();
     let upper_shadow_size = (cx.high - cx.open).abs();
+    let threshold = cx.open * dec!(0.003); // 0.3% of price, works for any symbol
 
     let condition =
-        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= dec!(300);
+        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= threshold;
 
     if condition {
         Some((cx.open - upper_shadow_size, cx.open + upper_shadow_size))
@@ -152,8 +153,12 @@ async fn main() {
         println!("error: {:#?}", v);
     }
 
-    let history_position = exchange.get_history_position_list("BTCUSDT").await.unwrap();
-    let history_order = exchange.get_history_order_list("BTCUSDT").await.unwrap();
+    let mut history_position = exchange.get_history_position_list("BTCUSDT").await.unwrap();
+    let mut history_order = exchange.get_history_order_list("BTCUSDT").await.unwrap();
+
+    history_position.extend(exchange.get_history_position_list("ETHUSDT").await.unwrap());
+    history_order.extend(exchange.get_history_order_list("ETHUSDT").await.unwrap());
+
     let summary = summarize(&history_position);
 
     println!("history summary: {:#?}", summary);

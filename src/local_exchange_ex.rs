@@ -1280,8 +1280,9 @@ impl Exchange for LocalExchangeEx {
             .lock()
             .await
             .history_order_list
-            .iter()
-            .map(|v| v.1.to_order_message())
+            .values()
+            .filter(|v| v.symbol == symbol)
+            .map(|v| v.to_order_message())
             .collect())
     }
 
@@ -1351,7 +1352,15 @@ impl Exchange for LocalExchangeEx {
             .await
             .context(format!("get_history_position: {}", symbol))?;
 
-        Ok(self.inner.lock().await.history_position_list.clone())
+        Ok(self
+            .inner
+            .lock()
+            .await
+            .history_position_list
+            .iter()
+            .filter(|v| v.symbol == symbol)
+            .cloned()
+            .collect())
     }
 
     async fn append_position_margin(&self, symbol: &str, margin: Decimal) -> anyhow::Result<()> {
