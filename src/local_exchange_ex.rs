@@ -6479,4 +6479,276 @@ mod tests {
         assert!(exchange.next(BTC, Level::Minute1).await.unwrap().is_none());
         assert!(exchange.next(ETH, Level::Minute1).await.unwrap().is_none());
     }
+
+    // 验证使用错误 symbol 取消已存在订单时会报 symbol mismatch。
+    #[tokio::test]
+    async fn cancel_order_with_wrong_symbol_fails() {
+        let exchange = multi_exchange();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.next(ETH, Level::Minute1).await.unwrap();
+
+        let btc_order_id = exchange.buy_limit(BTC, 90.0, 1.0).await.unwrap();
+
+        // 用 ETH symbol 去取消 BTC 的订单应失败
+        let result = exchange.cancel_order(ETH, &btc_order_id).await.unwrap_err();
+        assert!(result.to_string().contains("symbol mismatch"));
+    }
+
+    // 验证 ETH 作为 pacemaker 时，时间线推进逻辑同样正确。
+    #[tokio::test]
+    async fn eth_as_pacemaker_advances_timeline() {
+        let exchange = multi_exchange();
+
+        // ETH 率先调用 next → 成为 pacemaker
+        let eth1 = exchange.next(ETH, Level::Minute1).await.unwrap().unwrap();
+        assert_eq!(eth1.time, 1);
+
+        // BTC 获取同一根 K 线缓存
+        let btc1 = exchange.next(BTC, Level::Minute1).await.unwrap().unwrap();
+        assert_eq!(btc1.time, 1);
+
+        // ETH 推进到第 2 轮
+        let eth2 = exchange.next(ETH, Level::Minute1).await.unwrap().unwrap();
+        assert_eq!(eth2.time, 2);
+
+        // BTC 仍能读到缓存
+        let btc2 = exchange.next(BTC, Level::Minute1).await.unwrap().unwrap();
+        assert_eq!(btc2.time, 2);
+    }
+
+    // 验证在无挂单时调用 cancel_all_order 是幂等操作。
+    #[tokio::test]
+    async fn cancel_all_order_without_pending_is_noop() {
+        let exchange = single_exchange();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let cash_before = exchange.get_cash().await.unwrap();
+        exchange.cancel_all_order(BTC).await.unwrap();
+        let cash_after = exchange.get_cash().await.unwrap();
+
+        assert_eq!(cash_after, cash_before);
+    }
+
+    // 验证减少保证金超过当前保证金总额时会失败（会先触发 initial margin 守卫）。
+    #[tokio::test]
+    async fn append_position_margin_rejects_reducing_more_than_current_margin() {
+        let exchange = single_exchange();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 1.0).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        // 先追加保证金使总额远离 initial margin 边界
+        exchange.append_position_margin(BTC, 20.0).await.unwrap();
+        let position = exchange.get_position(BTC).await.unwrap().unwrap();
+        assert_eq!(position.margin, dec!(30.5));
+
+        // 当前保证金 30.5，尝试减少 40.0 应被拒绝
+        // 由于 new_margin 为负值，会先触发 initial margin 守卫；
+        // 而 codebase 中 "cannot reduce margin more than current margin"
+        // 的检查位于其后（防御性死代码，当 init_margin 检查先触发时不可达）。
+        let result = exchange
+            .append_position_margin(BTC, -40.0)
+            .await
+            .unwrap_err();
+        assert!(
+            result.to_string().contains("initial margin")
+                || result
+                    .to_string()
+                    .contains("cannot reduce margin more than current margin")
+        );
+    }
+
+    // 验证在 test 模式下 get_order 可以查到强平订单（cfg!(test) 分支）。
+    #[tokio::test]
+    async fn get_order_includes_liquidation_orders_in_test_mode() {
+        let exchange = single_exchange();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 1.0).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let pending = exchange.get_pending_order_list(BTC).await.unwrap();
+        let liq = pending
+            .iter()
+            .find(|v| v.kind == Kind::Liquidation)
+            .unwrap();
+
+        // test 模式下 get_order 应能查到强平单
+        let order = exchange.get_order(&liq.id).await.unwrap();
+        assert!(order.is_some());
+        assert_eq!(order.unwrap().kind, Kind::Liquidation);
+    }
+
+    // 验证 set_leverage 设置为相同值可以实现无副作用通过。
+    #[tokio::test]
+    async fn set_leverage_to_same_value_is_noop() {
+        let exchange = single_exchange();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 1.0).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let cash_before = exchange.get_cash().await.unwrap();
+        let position_before = exchange.get_position(BTC).await.unwrap().unwrap();
+
+        exchange.set_leverage(BTC, 10).await.unwrap(); // 与当前杠杆一致
+
+        let cash_after = exchange.get_cash().await.unwrap();
+        let position_after = exchange.get_position(BTC).await.unwrap().unwrap();
+
+        assert_eq!(exchange.get_leverage(BTC).await.unwrap(), 10);
+        assert_eq!(cash_after, cash_before);
+        assert_eq!(position_after.margin, position_before.margin);
+        assert_eq!(
+            position_after.liquidation_price,
+            position_before.liquidation_price,
+        );
+    }
+
+    // 验证追加零保证金是无副作用操作。
+    #[tokio::test]
+    async fn append_position_margin_zero_is_noop() {
+        let exchange = single_exchange();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 1.0).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let cash_before = exchange.get_cash().await.unwrap();
+        let position_before = exchange.get_position(BTC).await.unwrap().unwrap();
+
+        exchange.append_position_margin(BTC, 0.0).await.unwrap();
+
+        let cash_after = exchange.get_cash().await.unwrap();
+        let position_after = exchange.get_position(BTC).await.unwrap().unwrap();
+
+        assert_eq!(cash_after, cash_before);
+        assert_eq!(position_after.margin, position_before.margin);
+    }
+
+    // 验证市价单带指定 price（非零）时，使用该价格加滑点成交，而非开盘价。
+    // 这是 handle_market_order 中 order.price != Decimal::ZERO 的分支。
+    #[tokio::test]
+    async fn market_order_with_specified_price_uses_that_price_not_open() {
+        let data_source = DataSource::new(
+            btc_metadata(),
+            vec![
+                gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                gen_kline(2, dec!(105.0), dec!(106.0), dec!(104.0), dec!(105.0)),
+            ],
+        );
+        let exchange = ExchangeWrapper::new(Arc::new(
+            LocalExchangeEx::new(vec![data_source])
+                .cash(10000.0)
+                .leverage(10)
+                .slippage(0.01),
+        ));
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        // 提交带指定 price 的市价单（price > 0 表示用户限定了成交参考价）
+        let id = exchange
+            .place_order(Order {
+                symbol: BTC.to_string(),
+                side: Side::Buy,
+                trigger_price: Decimal::ZERO,
+                price: dec!(106.0),
+                quantity: dec!(1.0),
+                reduce_only: false,
+            })
+            .await
+            .unwrap();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        assert_eq!(order.status, Status::Filled);
+        // 按指定价 106.0 加滑点 = 106.0 * 1.01 = 107.06，夹取到 high=106.0
+        assert_eq!(order.avg_price, 106.0);
+    }
+
+    // 验证 get_order 对不存在的订单 ID 返回 None（不报错）。
+    #[tokio::test]
+    async fn get_order_returns_none_for_nonexistent_id() {
+        let exchange = single_exchange();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let result = exchange.get_order("non-existent-id").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    // 验证双 symbol 完整往返：BTC 做多、ETH 做空，各自独立平仓且历史正确。
+    #[tokio::test]
+    async fn multi_symbol_round_trip_long_short_close_independently() {
+        // 需要 4 根 K 线：第 1 根推进、第 2 根开仓成交、第 3 根平 BTC、第 4 根平 ETH
+        let exchange = LocalExchangeEx::new(vec![
+            DataSource::new(
+                btc_metadata(),
+                vec![
+                    gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                    gen_kline(2, dec!(105.0), dec!(106.0), dec!(104.0), dec!(105.0)),
+                    gen_kline(3, dec!(110.0), dec!(111.0), dec!(109.0), dec!(110.0)),
+                    gen_kline(4, dec!(115.0), dec!(116.0), dec!(114.0), dec!(115.0)),
+                ],
+            ),
+            DataSource::new(
+                eth_metadata(),
+                vec![
+                    gen_kline(1, dec!(50.0), dec!(51.0), dec!(49.0), dec!(50.5)),
+                    gen_kline(2, dec!(52.0), dec!(53.0), dec!(51.0), dec!(52.5)),
+                    gen_kline(3, dec!(55.0), dec!(56.0), dec!(54.0), dec!(55.5)),
+                    gen_kline(4, dec!(58.0), dec!(59.0), dec!(57.0), dec!(58.5)),
+                ],
+            ),
+        ])
+        .cash(10000.0)
+        .leverage(10);
+
+        let exchange = ExchangeWrapper::new(Arc::new(exchange));
+
+        // Round 1: 各下一单
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.next(ETH, Level::Minute1).await.unwrap();
+
+        exchange.buy(BTC, 1.0).await.unwrap();
+        exchange.sell(ETH, 1.0).await.unwrap();
+
+        // Round 2: 成交
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.next(ETH, Level::Minute1).await.unwrap();
+
+        assert!(exchange.get_position(BTC).await.unwrap().is_some());
+        assert!(exchange.get_position(ETH).await.unwrap().is_some());
+
+        // 仅平 BTC（Round 3）
+        exchange.close_all_position(BTC).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.next(ETH, Level::Minute1).await.unwrap();
+
+        assert!(exchange.get_position(BTC).await.unwrap().is_none());
+        assert!(exchange.get_position(ETH).await.unwrap().is_some());
+
+        let btc_history = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(btc_history.len(), 1);
+        assert_eq!(btc_history[0].side, Side::Buy);
+
+        // 再平 ETH（Round 4）
+        exchange.close_all_position(ETH).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.next(ETH, Level::Minute1).await.unwrap();
+
+        assert!(exchange.get_position(ETH).await.unwrap().is_none());
+
+        let eth_history = exchange.get_history_position_list(ETH).await.unwrap();
+        assert_eq!(eth_history.len(), 1);
+        assert_eq!(eth_history[0].side, Side::Sell);
+
+        // BTC 历史不受影响
+        let btc_history_after = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(btc_history_after.len(), 1);
+    }
 }
