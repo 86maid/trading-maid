@@ -143,13 +143,7 @@ async fn main() {
         },
     );
 
-    if let Err(v) = engine
-        .run_multi(
-            vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()],
-            Level::Hour1,
-        )
-        .await
-    {
+    if let Err(v) = engine.run(["BTCUSDT", "ETHUSDT"], Level::Hour1).await {
         println!("error: {:#?}", v);
     }
 

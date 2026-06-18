@@ -6,9 +6,9 @@ use crate::{
     util::{get_last_time, resample},
 };
 use crate::{exchange::Exchange, strategy::Strategy};
-use std::cell::RefCell;
 use anyhow::bail;
 use rust_decimal::Decimal;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// 10,000,000 k-lines at 1-minute resolution covers ~19 years of data.
 pub const DEFAULT_SERIES_MAX_LENGTH: usize = 10000000;
 
-/// Per-symbol buffers used by [`Engine::run_multi`].
+/// Per-symbol buffers used by [`run`](Engine::run) in multi-symbol mode.
 ///
 /// Maintains columnar storage at the source level (built incrementally) and
 /// strategy level (built via resample).  A [`Vec<KLine>`] of source klines is
@@ -206,21 +206,50 @@ where
     /// resamples to `level` (e.g. 1h) and calls the strategy on each completed
     /// bar at that target level.
     ///
+    /// # Single-symbol mode
+    ///
+    /// Pass a single symbol (e.g. `"BTCUSDT"`) to run the strategy on one
+    /// trading pair.
+    ///
+    /// # Multi-symbol mode
+    ///
+    /// Pass multiple symbols (e.g. `["BTCUSDT", "ETHUSDT"]`) to run the engine
+    /// across multiple symbols synchronised on a single timeline. Each symbol
+    /// gets its own OHLCV buffer; when the primary symbol's bar completes, the
+    /// strategy is invoked. Use [`Context::request`] inside the strategy to
+    /// read other symbols' data.
+    ///
+    /// The exchange must be a multi-symbol implementation (e.g.
+    /// [`LocalExchangeEx`](crate::local_exchange_ex::LocalExchangeEx)) with
+    /// A1 pacemaker semantics: the first symbol in `symbols` drives the clock.
+    ///
     /// Auxiliary series registered via [`add_series`](Engine::add_series) matching
     /// the given symbol and level are synchronised with the OHLCV data and exposed
     /// through the [`Context`].
     ///
     /// # Arguments
     ///
-    /// - `symbol`: the trading pair (e.g. `"BTCUSDT"`).
+    /// - `symbol`: a single trading pair (e.g. `"BTCUSDT"`) or an ordered list
+    ///   of trading pairs (e.g. `["BTCUSDT", "ETHUSDT"]`). In multi-symbol mode,
+    ///   the first symbol is the primary (its bars gate the strategy call).
     /// - `level`: the strategy time frame. Must be >= the source data level.
     ///
     /// # Errors
     ///
     /// Returns an error if the target level is finer than the source level,
     /// or if the strategy/hook returns one.
-    pub async fn run(&mut self, symbol: impl AsRef<str>, level: Level) -> anyhow::Result<()> {
-        let symbol = symbol.as_ref();
+    pub async fn run(&mut self, symbol: impl ToVecString, level: Level) -> anyhow::Result<()> {
+        let symbol = symbol.into_vec();
+
+        if symbol.is_empty() {
+            bail!("run: symbol is empty");
+        }
+
+        if symbol.len() != 1 {
+            return self.run_multi(symbol, level).await;
+        }
+
+        let symbol = &symbol[0];
         let metadata = self.exchange.get_metadata(symbol).await?;
         let exchange = ExchangeWrapper::new(self.exchange.clone());
 
@@ -285,26 +314,9 @@ where
         }
     }
 
-    /// Run the engine across multiple symbols synchronised on a single timeline.
-    ///
-    /// Each symbol gets its own OHLCV buffer; when the primary symbol's bar
-    /// completes, the strategy is invoked.  Use [`Context::request`] inside
-    /// the strategy to read other symbols' data.
-    ///
-    /// The exchange must be a multi-symbol implementation (e.g.
-    /// [`LocalExchangeEx`](crate::local_exchange_ex::LocalExchangeEx)) with
-    /// A1 pacemaker semantics: the first symbol in `symbols` drives the clock.
-    ///
-    /// # Arguments
-    ///
-    /// - `symbols`: ordered list of trading pairs (e.g. `["BTCUSDT", "ETHUSDT"]`).
-    ///   The first symbol is the primary (its bars gate the strategy call).
-    /// - `level`: the strategy time frame. Must be >= the source data level.
-    pub async fn run_multi(
-        &mut self,
-        symbols: Vec<String>,
-        level: Level,
-    ) -> anyhow::Result<()> {
+    async fn run_multi(&mut self, symbol: impl ToVecString, level: Level) -> anyhow::Result<()> {
+        let symbols = symbol.into_vec();
+
         if symbols.is_empty() {
             bail!("run_multi: symbols list is empty");
         }
@@ -345,9 +357,7 @@ where
                         // Accumulate for strategy-level resampling.
                         buf.min_level_accumulator.push(kline);
 
-                        if kline.time
-                            == get_last_time(kline.time, metadata.level, level)?
-                        {
+                        if kline.time == get_last_time(kline.time, metadata.level, level)? {
                             buf.strategy_level_buffer
                                 .extend(resample(&buf.min_level_accumulator, level)?);
                             buf.min_level_accumulator.clear();
@@ -384,7 +394,6 @@ where
         strategy_level: Level,
         exchange: &ExchangeWrapper,
     ) -> anyhow::Result<()> {
-
         // Build type-erased per-symbol data.
         let symbol_data: BTreeMap<String, MultiSymbolData> = buffers
             .iter()
@@ -455,5 +464,38 @@ where
         }
 
         Ok(())
+    }
+}
+
+pub trait ToVecString {
+    fn into_vec(self) -> Vec<String>;
+}
+
+trait IsContainer {}
+
+impl<T> IsContainer for Vec<T> {}
+impl<T> IsContainer for &[T] {}
+impl<T, const N: usize> IsContainer for [T; N] {}
+impl<T, const N: usize> IsContainer for &[T; N] {}
+
+impl ToVecString for &str {
+    fn into_vec(self) -> Vec<String> {
+        vec![self.to_string()]
+    }
+}
+
+impl ToVecString for String {
+    fn into_vec(self) -> Vec<String> {
+        vec![self]
+    }
+}
+
+impl<U> ToVecString for U
+where
+    U: IsContainer + IntoIterator,
+    U::Item: ToString,
+{
+    fn into_vec(self) -> Vec<String> {
+        self.into_iter().map(|item| item.to_string()).collect()
     }
 }

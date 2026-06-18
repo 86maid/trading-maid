@@ -25,7 +25,7 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - [🧩 Strategy as Struct](#-strategy-as-struct)
 - [🛑 Error Handling](#-error-handling)
 - [🚦 Hook Intercept](#-hook-intercept)
-- [📊 Additional Series](#-additional-series)
+- [📊 Custom Series](#-custom-series)
 - [🧪 A Complete Example](#-a-complete-example)
 
 ## ✨ Core Capabilities
@@ -311,7 +311,7 @@ if let Err(v) = engine.run("BTCUSDT", Level::Minute5).await {
 }
 ```
 
-## 📊 Additional Series
+## 📊 Custom Series
 
 Use `add_series` to attach custom data (funding rate, on-chain metrics, sentiment, etc.) to the engine. Once registered, the series is synchronised with the OHLCV data and accessible in the strategy via `cx["name"]`.
 
