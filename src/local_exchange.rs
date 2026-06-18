@@ -193,10 +193,7 @@ impl LocalExchangeInner {
             Side::Sell => market_price * (1 - self.slippage),
         };
 
-        let low = self.kline.low.min(self.kline.high);
-        let high = self.kline.low.max(self.kline.high);
-
-        price.clamp(low, high)
+        price.clamp(self.kline.low, self.kline.high)
     }
 
     fn freeze_margin(&mut self, order: &mut OrderEx, leverage: u32) -> anyhow::Result<()> {
@@ -4546,7 +4543,7 @@ mod tests {
             LocalExchange::new(data_source)
                 .cash(10000.0)
                 .leverage(10)
-                .range(2, 2),
+                .range(2, 3),
         ));
 
         let first = exchange

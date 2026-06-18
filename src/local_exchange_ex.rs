@@ -150,7 +150,7 @@ where
 }
 
 impl LocalExchangeEx {
-    /// Creates a new `LocalExchangeEx` from one or more [`DataSource`]s.
+    /// Creates a new `LocalExchangeEx` from one or more [`DataSource`].
     ///
     /// Accepts a single [`DataSource`], a `Vec<DataSource>`, a slice, or an array.
     ///
@@ -279,10 +279,7 @@ impl LocalExchangeExInner {
             Side::Sell => market_price * (Decimal::ONE - self.slippage),
         };
 
-        let low = kline.low.min(kline.high);
-        let high = kline.low.max(kline.high);
-
-        price.clamp(low, high)
+        price.clamp(kline.low, kline.high)
     }
 
     fn freeze_margin(&mut self, order: &mut OrderEx, leverage: u32) -> anyhow::Result<()> {
@@ -4667,7 +4664,7 @@ mod tests {
             LocalExchangeEx::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
-                .range(2, 3),
+                .range(2, 4),
         ));
 
         let first = exchange.next(BTC, Level::Minute1).await.unwrap().unwrap();
@@ -6093,7 +6090,7 @@ mod tests {
         ])
         .cash(10000.0)
         .leverage(10)
-        .range(1, 2);
+        .range(1, 3);
 
         let exchange = ExchangeWrapper::new(Arc::new(exchange));
 
