@@ -171,7 +171,7 @@ impl LocalExchange {
     /// do not overlap.
     pub fn new(data_source: impl ToDataSourceVec) -> Self {
         let timeline = Timeline::new(data_source.into_vec())
-            .expect("LocalExchange::new: Timeline creation failed");
+            .expect("LocalExchange::new: timeline creation failed");
 
         let symbols: Vec<String> = timeline
             .inner()
@@ -259,12 +259,14 @@ impl LocalExchange {
 }
 
 impl LocalExchangeInner {
-    fn metadata(&self, symbol: &str) -> Option<&Metadata> {
-        self.timeline
+    fn metadata(&self, symbol: &str) -> &Metadata {
+        &self
+            .timeline
             .inner()
             .iter()
             .find(|v| v.metadata.symbol == symbol)
-            .map(|v| &v.metadata)
+            .unwrap()
+            .metadata
     }
 
     fn kline(&self, symbol: &str) -> &KLine {
@@ -403,7 +405,7 @@ impl LocalExchangeInner {
             .iter()
             .map(|(symbol, v)| {
                 let kline = self.kline(symbol);
-                let metadata = self.metadata(symbol).expect("metadata not found");
+                let metadata = self.metadata(symbol);
                 let profit = if v.side == Side::Buy {
                     (kline.close - v.open_avg_price) * v.quantity
                 } else {
@@ -476,13 +478,9 @@ impl LocalExchangeInner {
         };
 
         let fee_rate = if order_ref.kind == Kind::Liquidation {
-            self.metadata(&order_ref.symbol)
-                .map(|v| v.taker_fee)
-                .unwrap()
+            self.metadata(&order_ref.symbol).taker_fee
         } else {
-            self.metadata(&order_ref.symbol)
-                .map(|v| v.maker_fee)
-                .unwrap()
+            self.metadata(&order_ref.symbol).maker_fee
         };
 
         self.execute_order(order_id, order_ref, fee_rate);
@@ -537,10 +535,7 @@ impl LocalExchangeInner {
 
         order_ref.avg_price = order_ref.price;
 
-        let fee_rate = self
-            .metadata(&order_ref.symbol)
-            .map(|v| v.taker_fee)
-            .unwrap();
+        let fee_rate = self.metadata(&order_ref.symbol).taker_fee;
 
         self.execute_order(order_id, order_ref, fee_rate);
     }
@@ -595,7 +590,7 @@ impl LocalExchangeInner {
     fn handle_pre_execution_check(&mut self, order_ref: &mut OrderEx, fee_rate: Decimal) -> bool {
         let symbol = order_ref.symbol.clone();
         let leverage = self.leverage(&symbol);
-        let metadata = self.metadata(&symbol).cloned().expect("metadata not found");
+        let metadata = self.metadata(&symbol).clone();
 
         if order_ref.reduce_only {
             if self.handle_reduce_only_check(order_ref) {
@@ -786,7 +781,7 @@ impl LocalExchangeInner {
             );
         }
 
-        let metadata = self.metadata(&symbol).cloned().expect("metadata not found");
+        let metadata = self.metadata(&symbol).clone();
 
         position.liquidation_price = calc_liquidation_price(
             position.leverage,
@@ -797,10 +792,7 @@ impl LocalExchangeInner {
             position.margin,
         );
 
-        self.pending_order_list
-            .get_mut(&position.liquidation_order_id)
-            .unwrap()
-            .price = position.liquidation_price;
+        self.pending_order_list[&position.liquidation_order_id].price = position.liquidation_price;
 
         self.position.push((symbol, position));
     }
@@ -821,7 +813,7 @@ impl LocalExchangeInner {
         let leverage = self.leverage(&symbol);
         let reverse_margin = calc_initial_margin(order_ref.avg_price, reverse_quantity, leverage);
         let kline_time = self.kline(&symbol).time;
-        let metadata = self.metadata(&symbol).cloned().expect("metadata not found");
+        let metadata = self.metadata(&symbol).clone();
         let liquidation_order_id = position.liquidation_order_id.clone();
 
         self.cash += order_ref.freeze_margin - reverse_margin;
@@ -842,10 +834,7 @@ impl LocalExchangeInner {
             log: position.log,
         });
 
-        let liquidation_order = self
-            .pending_order_list
-            .get_mut(&liquidation_order_id)
-            .unwrap();
+        let liquidation_order = &mut self.pending_order_list[&liquidation_order_id];
 
         liquidation_order.side = order_ref.side.neg();
 
@@ -890,7 +879,7 @@ impl LocalExchangeInner {
     fn handle_open_position(&mut self, id: &str, order_ref: &OrderEx, fee_rate: Decimal) {
         let symbol = order_ref.symbol.clone();
         let leverage = self.leverage(&symbol);
-        let metadata = self.metadata(&symbol).cloned().expect("metadata not found");
+        let metadata = self.metadata(&symbol).clone();
         let kline_time = self.kline(&symbol).time;
 
         let liquidation_price = calc_liquidation_price(
@@ -1036,7 +1025,7 @@ impl LocalExchangeInner {
         mut position: PositionEx,
     ) {
         let symbol = order_ref.symbol.clone();
-        let metadata = self.metadata(&symbol).cloned().expect("metadata not found");
+        let metadata = self.metadata(&symbol).clone();
         let kline_time = self.kline(&symbol).time;
         let old_quantity = position.quantity;
         let new_quantity = old_quantity + order_ref.quantity;
@@ -1068,10 +1057,7 @@ impl LocalExchangeInner {
             time: kline_time,
         });
 
-        self.pending_order_list
-            .get_mut(&position.liquidation_order_id)
-            .unwrap()
-            .price = position.liquidation_price;
+        self.pending_order_list[&position.liquidation_order_id].price = position.liquidation_price;
 
         self.position.push((symbol, position));
     }
@@ -1426,7 +1412,7 @@ impl Exchange for LocalExchange {
 
         let mut inner = self.inner.lock().await;
         let cash = inner.cash;
-        let metadata = inner.metadata(symbol).cloned().expect("metadata not found");
+        let metadata = inner.metadata(symbol).clone();
 
         let (liquidation_order_id, liquidation_price, cash_delta) = match inner
             .position
@@ -1532,7 +1518,7 @@ impl Exchange for LocalExchange {
         }
 
         let mut inner = self.inner.lock().await;
-        let metadata = inner.metadata(symbol).cloned().expect("metadata not found");
+        let metadata = inner.metadata(symbol).clone();
 
         if inner
             .pending_order_list
@@ -1599,10 +1585,13 @@ impl Exchange for LocalExchange {
     async fn get_metadata(&self, symbol: &str) -> anyhow::Result<Metadata> {
         let inner = self.inner.lock().await;
 
-        match inner.metadata(symbol) {
-            Some(metadata) => Ok(metadata.clone()),
-            None => bail!("get_metadata: no symbol: {}", symbol),
-        }
+        inner
+            .timeline
+            .inner()
+            .iter()
+            .find(|v| v.metadata.symbol == symbol)
+            .map(|v| v.metadata.clone())
+            .context(format!("get_metadata: no symbol: {}", symbol))
     }
 }
 
