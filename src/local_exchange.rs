@@ -260,12 +260,7 @@ impl LocalExchangeInner {
     }
 
     fn kline(&self, symbol: &str) -> &KLine {
-        &self
-            .klines
-            .iter()
-            .find(|(s, _)| s == symbol)
-            .unwrap()
-            .1
+        &self.klines.iter().find(|(s, _)| s == symbol).unwrap().1
     }
 
     fn leverage(&self, symbol: &str) -> u32 {
@@ -331,6 +326,7 @@ impl LocalExchangeInner {
         let leverage = self.leverage(&order.symbol);
         let kline_time = self.kline(&order.symbol).time;
         let id = t2s(kline_time) + " [" + self.id.to_string().as_str() + "]";
+
         self.id += 1;
 
         let mut order = OrderEx {
@@ -356,6 +352,7 @@ impl LocalExchangeInner {
         }
 
         self.pending_order_list.insert(id.clone(), order);
+
         Ok(id)
     }
 
@@ -369,6 +366,7 @@ impl LocalExchangeInner {
                 }
             }
         }
+
         self.timeline.next();
         self.update();
     }
@@ -1078,11 +1076,16 @@ impl LocalExchangeInner {
 
 #[async_trait::async_trait]
 impl Exchange for LocalExchange {
-    async fn next(&self, symbol: &str, _level: Level) -> anyhow::Result<Option<KLine>> {
+    async fn next(&self, symbol: &str, level: Level) -> anyhow::Result<Option<KLine>> {
         let mut inner = self.inner.lock().await;
 
-        if !inner.klines.iter().any(|(s, _)| s == symbol) {
-            bail!("next: unknown symbol: {}", symbol);
+        if !inner
+            .timeline
+            .inner()
+            .iter()
+            .any(|v| v.metadata.symbol == symbol && v.metadata.level == level)
+        {
+            bail!("next: unknown symbol and level: {}, {}", symbol, level);
         }
 
         if inner.exhausted {
@@ -1110,6 +1113,16 @@ impl Exchange for LocalExchange {
             .find(|(s, _)| s == symbol)
             .map(|(_, v)| v)
             .cloned())
+    }
+
+    async fn get_kline(
+        &self,
+        _symbol: &str,
+        _level: Level,
+        _start: u64,
+        _end: u64,
+    ) -> anyhow::Result<Vec<KLine>> {
+        Ok(Vec::new())
     }
 
     async fn place_order(&self, order: Order) -> anyhow::Result<String> {
@@ -1412,9 +1425,12 @@ impl Exchange for LocalExchange {
         let cash = inner.cash;
         let metadata = inner.metadata(symbol).cloned().expect("metadata not found");
 
-        let (liquidation_order_id, liquidation_price, cash_delta) =
-            match inner.position.iter_mut().find(|(s, _)| s == symbol) {
-                Some((_, position)) => {
+        let (liquidation_order_id, liquidation_price, cash_delta) = match inner
+            .position
+            .iter_mut()
+            .find(|(s, _)| s == symbol)
+        {
+            Some((_, position)) => {
                 let new_margin = position.margin + margin;
                 let init_margin =
                     position.open_avg_price * position.quantity / Decimal::from(position.leverage);
@@ -1528,11 +1544,11 @@ impl Exchange for LocalExchange {
 
         let (append_margin, new_margin) =
             if let Some((_, v)) = inner.position.iter().find(|(s, _)| s == symbol) {
-            let new_margin = calc_initial_margin(v.open_avg_price, v.quantity, leverage);
-            (new_margin - v.margin, new_margin)
-        } else {
-            (Decimal::ZERO, Decimal::ZERO)
-        };
+                let new_margin = calc_initial_margin(v.open_avg_price, v.quantity, leverage);
+                (new_margin - v.margin, new_margin)
+            } else {
+                (Decimal::ZERO, Decimal::ZERO)
+            };
 
         if append_margin > Decimal::ZERO && inner.cash < append_margin {
             bail!(
@@ -1551,21 +1567,21 @@ impl Exchange for LocalExchange {
 
         let liquidation_update =
             if let Some((_, v)) = inner.position.iter_mut().find(|(s, _)| s == symbol) {
-            v.leverage = leverage;
-            v.margin = new_margin;
-            v.liquidation_price = calc_liquidation_price(
-                v.leverage,
-                metadata.maintenance,
-                v.side,
-                v.open_avg_price,
-                v.quantity,
-                v.margin,
-            );
+                v.leverage = leverage;
+                v.margin = new_margin;
+                v.liquidation_price = calc_liquidation_price(
+                    v.leverage,
+                    metadata.maintenance,
+                    v.side,
+                    v.open_avg_price,
+                    v.quantity,
+                    v.margin,
+                );
 
-            Some((v.liquidation_order_id.clone(), v.liquidation_price))
-        } else {
-            None
-        };
+                Some((v.liquidation_order_id.clone(), v.liquidation_price))
+            } else {
+                None
+            };
 
         if let Some((liquidation_order_id, liquidation_price)) = liquidation_update
             && let Some(liquidation_order) = inner.pending_order_list.get_mut(&liquidation_order_id)
@@ -1585,6 +1601,7 @@ impl Exchange for LocalExchange {
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

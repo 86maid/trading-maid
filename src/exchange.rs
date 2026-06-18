@@ -1,3 +1,4 @@
+use std::ops::RangeBounds;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -38,10 +39,56 @@ pub trait Exchange
 where
     Self: Send + Sync + 'static,
 {
-    /// Advance time to the next k-line for the given symbol and level.
+    /// Gets the latest K-line data for the current trading symbol.
     ///
-    /// Returns `Some(KLine)` if a new k-line is available, or `None` if the data is exhausted.
+    /// # Behavior
+    /// - This method always returns the latest K-line at the current time.
+    /// - If the current time has not yet reached the generation time of the next K-line
+    ///   (i.e., a complete `level` cycle has not elapsed),
+    ///   the call will **block** until a new K-line is generated.
+    /// - The returned K-line data should be temporally continuous with the K-line returned
+    ///   from the previous call.
+    ///
+    /// # Parameters
+    /// - `symbol`: The trading symbol, e.g., `"BTCUSDT"`.
+    /// - `level`: The K-line period level, e.g., `Level::Hour1` for 1-hour K-lines.
+    ///
+    /// # Returns
+    /// - `Ok(Some(KLine))`: Successfully retrieved the latest K-line.
+    /// - `Ok(None)`: No data available (e.g., the trading pair does not exist or the data source is unavailable).
+    /// - `Err`: An error occurred.
+    ///
+    /// # Note
+    /// If the returned K-line timestamp is not continuous with the previous K-line timestamp
+    /// (i.e., there is a time gap),
+    /// the backtesting engine will automatically call [`get_kline`] to fill in the missing data segments.
     async fn next(&self, symbol: &str, level: Level) -> anyhow::Result<Option<KLine>>;
+
+    /// Batch retrieves historical K-line data within a specified time range.
+    ///
+    /// # Behavior
+    /// - Returns all K-line data within the time range `[start, end)`, i.e., inclusive of the K-line
+    ///   at `start`, exclusive of the K-line at `end`.
+    /// - The returned list of K-lines should be sorted in **ascending** order by time.
+    /// - This method is primarily used by the backtesting engine to automatically fill in missing data
+    ///   when a discontinuity in K-line timestamps is detected.
+    ///
+    /// # Parameters
+    /// - `symbol`: The trading symbol, e.g., `"BTCUSDT"`.
+    /// - `level`: The K-line period level, e.g., `Level::Hour1` for 1-hour K-lines.
+    /// - `start`: Start timestamp (inclusive), in milliseconds or seconds (must be consistent with the data source).
+    /// - `end`: End timestamp (exclusive), in milliseconds or seconds (must be consistent with the data source).
+    ///
+    /// # Returns
+    /// - `Ok(Vec<KLine>)`: A list of K-lines within the time range, or an empty vector if no data is available.
+    /// - `Err`: An error occurred.
+    async fn get_kline(
+        &self,
+        symbol: &str,
+        level: Level,
+        start: u64,
+        end: u64,
+    ) -> anyhow::Result<Vec<KLine>>;
 
     /// Submit a raw [`Order`] to the exchange.
     ///
@@ -578,8 +625,23 @@ impl ExchangeWrapper {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn next(&self, symbol: &str, level: Level) -> anyhow::Result<Option<KLine>> {
-        self.0.next(symbol, level).await
+    pub(crate) async fn next(
+        &self,
+        symbol: impl AsRef<str>,
+        level: Level,
+    ) -> anyhow::Result<Option<KLine>> {
+        self.0.next(symbol.as_ref(), level).await
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn get_kline(
+        &self,
+        symbol: impl AsRef<str>,
+        level: Level,
+        start: u64,
+        end: u64,
+    ) -> anyhow::Result<Vec<KLine>> {
+        self.0.get_kline(symbol.as_ref(), level, start, end).await
     }
 
     /// Submit a raw [`Order`]. Prefer the convenience methods ([`buy`](ExchangeWrapper::buy), etc.)
