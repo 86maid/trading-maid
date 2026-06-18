@@ -241,8 +241,7 @@ impl LocalExchangeEx {
     }
 
     /// Restricts the replayed data for all symbols to candles whose `time`
-    /// falls in `[start_time, end_time]` (inclusive on both sides, matching
-    /// [`DataSource::range`]).
+    /// falls in `[start_time, end_time)`.
     ///
     /// Rebuilds the [`Timeline`] from the filtered data sources.
     pub fn range(self, start_time: u64, end_time: u64) -> Self {

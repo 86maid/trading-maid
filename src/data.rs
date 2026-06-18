@@ -197,12 +197,14 @@ impl DataSource {
         Ok(Self::new(metadata, data))
     }
 
+    /// Returns a new [`DataSource`] containing only candles whose `time`
+    /// falls in `[start_time, end_time)`.
     pub fn range(&self, start_time: u64, end_time: u64) -> Self {
         Self::new(
             self.metadata.clone(),
             self.data
                 .iter()
-                .filter(|v| v.time >= start_time && v.time <= end_time)
+                .filter(|v| v.time >= start_time && v.time < end_time)
                 .cloned()
                 .collect(),
         )

@@ -174,26 +174,14 @@ impl LocalExchange {
     /// Restricts the replayed data to candles whose `time` falls in `[start_time, end_time)`.
     ///
     /// After this call, [`Exchange::next`] will only yield K-lines within the range.
-    /// When `end_time` exceeds the last candle timestamp, playback stops at the end of data.
     pub fn range(self, start_time: u64, end_time: u64) -> Self {
         let mut inner = self.inner.try_lock().unwrap();
 
-        inner.start_index = inner
-            .data_source
-            .data
-            .iter()
-            .position(|v| v.time >= start_time)
-            .unwrap_or(0);
-
-        inner.end_index = inner
-            .data_source
-            .data
-            .iter()
-            .position(|v| v.time >= end_time)
-            .unwrap_or(inner.data_source.data.len().saturating_sub(1));
+        inner.data_source = inner.data_source.range(start_time, end_time);
+        inner.start_index = 0;
+        inner.end_index = inner.data_source.data.len().saturating_sub(1);
 
         drop(inner);
-
         self
     }
 }
