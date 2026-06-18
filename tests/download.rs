@@ -309,12 +309,12 @@ async fn engine_with_funding_rate() {
     use trading_maid::prelude::Engine;
     use trading_maid::util::{get_or_download, get_or_download_funding_rate_to_series, t2s};
 
-    let fr = get_or_download_funding_rate_to_series("BTCUSDT", 3, Level::Hour1)
+    let fr = get_or_download_funding_rate_to_series("BTCUSDT", 1, Level::Hour1)
         .await
         .unwrap();
 
     let data = DataSource::from_file_metadata(
-        get_or_download("BTCUSDT/1m", 12).await.unwrap(),
+        get_or_download("BTCUSDT/1m", 1).await.unwrap(),
         Metadata {
             symbol: "BTCUSDT".to_string(),
             level: Level::Minute1,

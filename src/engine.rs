@@ -288,7 +288,7 @@ where
             let mut prev_time = 0;
 
             loop {
-                match self.exchange.next(symbol, level).await? {
+                match self.exchange.next(symbol, source_level).await? {
                     Some(v) => {
                         if let Some(next_time) = next_time {
                             if v.time != next_time {
@@ -457,11 +457,6 @@ where
 
     async fn run_multi(&mut self, symbol: impl ToStringVec, level: Level) -> anyhow::Result<()> {
         let symbols = symbol.into_vec();
-
-        if symbols.is_empty() {
-            bail!("run_multi: symbols list is empty");
-        }
-
         let primary = &symbols[0];
         let metadata = self.exchange.get_metadata(primary).await?;
         let exchange = ExchangeWrapper::new(self.exchange.clone());
