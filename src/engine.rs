@@ -10,7 +10,6 @@ use crate::{exchange::Exchange, strategy::Strategy};
 use anyhow::bail;
 use rust_decimal::Decimal;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Default capacity for the k-line buffer in number of k-lines.
@@ -34,7 +33,7 @@ struct SymbolBuffer<const N: usize> {
     strategy_level_buffer: KLineBuffer<N>,
     /// Lazily populated cache for levels other than source / strategy.
     /// `RefCell` provides interior mutability because [`Context::request`] takes `&self`.
-    level_cache: RefCell<BTreeMap<Level, LevelCacheEntry>>,
+    level_cache: RefCell<Vec<(Level, LevelCacheEntry)>>,
 }
 
 impl<const N: usize> SymbolBuffer<N> {
@@ -44,7 +43,7 @@ impl<const N: usize> SymbolBuffer<N> {
             source_klines: Vec::new(),
             source_level_buffer: KLineBuffer::new(),
             strategy_level_buffer: KLineBuffer::new(),
-            level_cache: RefCell::new(BTreeMap::new()),
+            level_cache: RefCell::new(Vec::new()),
         }
     }
 }
@@ -116,7 +115,7 @@ pub struct Engine<S, const N: usize = DEFAULT_SERIES_MAX_LENGTH> {
     strategy: S,
     hook: Option<Box<dyn HookFn>>,
     on_error: Option<Box<dyn Fn(anyhow::Error) -> anyhow::Result<()>>>,
-    series: BTreeMap<(String, Level, String), Vec<Decimal>>,
+    series: Vec<((String, Level, String), Vec<Decimal>)>,
 }
 
 impl<S> Engine<S, DEFAULT_SERIES_MAX_LENGTH>
@@ -143,7 +142,7 @@ where
             strategy,
             hook: None,
             on_error: None,
-            series: BTreeMap::new(),
+            series: Vec::new(),
         }
     }
 
@@ -191,14 +190,17 @@ where
         name: impl AsRef<str>,
         series: impl AsRef<[Decimal]>,
     ) {
-        self.series.insert(
-            (
-                symbol.as_ref().to_string(),
-                level,
-                name.as_ref().to_string(),
-            ),
-            series.as_ref().to_vec(),
+        let key = (
+            symbol.as_ref().to_string(),
+            level,
+            name.as_ref().to_string(),
         );
+        let value = series.as_ref().to_vec();
+        if let Some(idx) = self.series.iter().position(|(k, _)| *k == key) {
+            self.series[idx].1 = value;
+        } else {
+            self.series.push((key, value));
+        }
     }
 
     /// Run the engine: advance through k-lines, resample, and invoke the strategy.
@@ -334,7 +336,7 @@ where
             );
         }
 
-        let mut buffers: BTreeMap<String, SymbolBuffer<N>> = symbols
+        let mut buffers: Vec<(String, SymbolBuffer<N>)> = symbols
             .iter()
             .map(|s| (s.clone(), SymbolBuffer::new()))
             .collect();
@@ -348,7 +350,11 @@ where
                 if let Some(kline) = self.exchange.next(sym.as_str(), metadata.level).await? {
                     all_done = false;
 
-                    let buf = buffers.get_mut(sym).unwrap();
+                    let buf = buffers
+                        .iter_mut()
+                        .find(|(s, _)| s == sym)
+                        .map(|(_, b)| b)
+                        .unwrap();
 
                     // Keep source klines for on-demand resampling.
                     buf.source_klines.push(kline);
@@ -386,14 +392,14 @@ where
 
     async fn call_strategy(
         &mut self,
-        buffers: &BTreeMap<String, SymbolBuffer<N>>,
+        buffers: &[(String, SymbolBuffer<N>)],
         primary: &str,
         source_level: Level,
         strategy_level: Level,
         exchange: &ExchangeWrapper,
     ) -> anyhow::Result<()> {
         // Build type-erased per-symbol data.
-        let symbol_data: BTreeMap<String, MultiSymbolData> = buffers
+        let symbol_data: Vec<(String, MultiSymbolData)> = buffers
             .iter()
             .map(|(sym, buf)| {
                 (
@@ -430,7 +436,12 @@ where
             series: &self.series,
         };
 
-        let primary_data = &multi.symbols[primary];
+        let primary_data = multi
+            .symbols
+            .iter()
+            .find(|(s, _)| s == primary)
+            .map(|(_, v)| v)
+            .unwrap();
         let primary_slices = &primary_data.strategy;
         let len = primary_slices.time.len();
 

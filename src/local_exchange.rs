@@ -3,7 +3,7 @@ use anyhow::bail;
 use indexmap::IndexMap;
 use inherits::inherits;
 use rust_decimal::Decimal;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -37,13 +37,13 @@ pub struct LocalExchange {
 
 struct LocalExchangeInner {
     timeline: Timeline,
-    klines: BTreeMap<String, KLine>,
+    klines: Vec<(String, KLine)>,
     cash: Decimal,
-    leverage: BTreeMap<String, u32>,
+    leverage: Vec<(String, u32)>,
     slippage: Decimal,
     history_order_list: IndexMap<String, OrderEx>,
     pending_order_list: IndexMap<String, OrderEx>,
-    position: BTreeMap<String, PositionEx>,
+    position: Vec<(String, PositionEx)>,
     history_position_list: Vec<HistoryPosition>,
     id: u64,
     pacemaker: Option<String>,
@@ -171,12 +171,12 @@ impl LocalExchange {
             .map(|ds| ds.metadata.symbol.clone())
             .collect();
 
-        let mut klines = BTreeMap::new();
-        let mut leverage = BTreeMap::new();
+        let mut klines = Vec::new();
+        let mut leverage = Vec::new();
 
         for symbol in &symbols {
-            klines.insert(symbol.clone(), KLine::default());
-            leverage.insert(symbol.clone(), 1);
+            klines.push((symbol.clone(), KLine::default()));
+            leverage.push((symbol.clone(), 1));
         }
 
         Self {
@@ -186,7 +186,7 @@ impl LocalExchange {
                 cash: Decimal::from(10000),
                 leverage,
                 slippage: Decimal::ZERO,
-                position: BTreeMap::new(),
+                position: Vec::new(),
                 history_order_list: IndexMap::new(),
                 pending_order_list: IndexMap::new(),
                 history_position_list: Vec::new(),
@@ -211,7 +211,7 @@ impl LocalExchange {
     pub fn leverage(self, leverage: u32) -> Self {
         let mut inner = self.inner.try_lock().unwrap();
 
-        for lev in inner.leverage.values_mut() {
+        for (_, lev) in inner.leverage.iter_mut() {
             *lev = leverage;
         }
 
@@ -260,11 +260,20 @@ impl LocalExchangeInner {
     }
 
     fn kline(&self, symbol: &str) -> &KLine {
-        self.klines.get(symbol).unwrap()
+        &self
+            .klines
+            .iter()
+            .find(|(s, _)| s == symbol)
+            .unwrap()
+            .1
     }
 
     fn leverage(&self, symbol: &str) -> u32 {
-        *self.leverage.get(symbol).unwrap()
+        self.leverage
+            .iter()
+            .find(|(s, _)| s == symbol)
+            .map(|(_, v)| *v)
+            .unwrap()
     }
 
     fn calc_market_price_slippage(
@@ -353,7 +362,11 @@ impl LocalExchangeInner {
     fn advance(&mut self) {
         if let Some(all_klines) = self.timeline.all() {
             for (symbol, kline) in all_klines {
-                self.klines.insert(symbol.to_string(), kline);
+                if let Some(idx) = self.klines.iter().position(|(s, _)| s == &symbol) {
+                    self.klines[idx].1 = kline;
+                } else {
+                    self.klines.push((symbol.to_string(), kline));
+                }
             }
         }
         self.timeline.next();
@@ -404,9 +417,9 @@ impl LocalExchangeInner {
             .collect();
 
         for (symbol, profit, liq_price) in position_pnl {
-            if let Some(pos) = self.position.get_mut(&symbol) {
-                pos.profit = profit;
-                pos.liquidation_price = liq_price;
+            if let Some(pos) = self.position.iter_mut().find(|(s, _)| s == &symbol) {
+                pos.1.profit = profit;
+                pos.1.liquidation_price = liq_price;
             }
         }
     }
@@ -558,7 +571,7 @@ impl LocalExchangeInner {
     }
 
     fn handle_reduce_only_check(&mut self, order_ref: &mut OrderEx) -> bool {
-        if let Some(v) = self.position.get(&order_ref.symbol) {
+        if let Some((_, v)) = self.position.iter().find(|(s, _)| s == &order_ref.symbol) {
             if v.side == order_ref.side {
                 order_ref.status = Status::Canceled;
                 self.history_order_list
@@ -722,7 +735,9 @@ impl LocalExchangeInner {
 
         self.pending_order_list
             .shift_remove(&position.liquidation_order_id);
-        self.position.remove(&symbol);
+        if let Some(idx) = self.position.iter().position(|(s, _)| s == &symbol) {
+            self.position.swap_remove(idx);
+        }
     }
 
     fn handle_partial_close_position(
@@ -787,7 +802,7 @@ impl LocalExchangeInner {
             .unwrap()
             .price = position.liquidation_price;
 
-        self.position.insert(symbol, position);
+        self.position.push((symbol, position));
     }
 
     fn handle_reverse_position(
@@ -843,7 +858,7 @@ impl LocalExchangeInner {
             reverse_margin,
         );
 
-        self.position.insert(
+        self.position.push((
             symbol.clone(),
             PositionEx {
                 liquidation_order_id: liquidation_order.id.clone(),
@@ -869,7 +884,7 @@ impl LocalExchangeInner {
                     open_time: kline_time,
                 },
             },
-        );
+        ));
     }
 
     fn handle_open_position(&mut self, id: &str, order_ref: &OrderEx, fee_rate: Decimal) {
@@ -901,7 +916,7 @@ impl LocalExchangeInner {
             )
             .unwrap();
 
-        self.position.insert(
+        self.position.push((
             symbol,
             PositionEx {
                 liquidation_order_id,
@@ -927,7 +942,7 @@ impl LocalExchangeInner {
                     open_time: kline_time,
                 },
             },
-        );
+        ));
     }
 
     fn execute_order(&mut self, id: &str, mut order_ref: OrderEx, fee_rate: Decimal) {
@@ -939,14 +954,15 @@ impl LocalExchangeInner {
             return;
         }
 
-        match self.position.get(&symbol) {
-            Some(v) if v.side == order_ref.side => {
-                let position = self.position.remove(&symbol).unwrap();
+        let pos_idx = self.position.iter().position(|(s, _)| s == &symbol);
+        match pos_idx {
+            Some(idx) if self.position[idx].1.side == order_ref.side => {
+                let position = self.position.swap_remove(idx).1;
 
                 self.handle_add_position(id, &order_ref, fee_rate, position);
             }
-            Some(_) => {
-                let mut position = self.position.remove(&symbol).unwrap();
+            Some(idx) => {
+                let mut position = self.position.swap_remove(idx).1;
                 let close_quantity = order_ref.quantity.min(position.quantity);
                 let remain_quantity = order_ref.quantity - position.quantity;
                 let (close_margin, close_profit) =
@@ -1056,7 +1072,7 @@ impl LocalExchangeInner {
             .unwrap()
             .price = position.liquidation_price;
 
-        self.position.insert(symbol, position);
+        self.position.push((symbol, position));
     }
 }
 
@@ -1065,7 +1081,7 @@ impl Exchange for LocalExchange {
     async fn next(&self, symbol: &str, _level: Level) -> anyhow::Result<Option<KLine>> {
         let mut inner = self.inner.lock().await;
 
-        if !inner.klines.contains_key(symbol) {
+        if !inner.klines.iter().any(|(s, _)| s == symbol) {
             bail!("next: unknown symbol: {}", symbol);
         }
 
@@ -1088,7 +1104,12 @@ impl Exchange for LocalExchange {
             inner.advance();
         }
 
-        Ok(inner.klines.get(symbol).cloned())
+        Ok(inner
+            .klines
+            .iter()
+            .find(|(s, _)| s == symbol)
+            .map(|(_, v)| v)
+            .cloned())
     }
 
     async fn place_order(&self, order: Order) -> anyhow::Result<String> {
@@ -1337,8 +1358,9 @@ impl Exchange for LocalExchange {
             .lock()
             .await
             .position
-            .get(symbol)
-            .map(|v| v.parent.clone()))
+            .iter()
+            .find(|(s, _)| s == symbol)
+            .map(|(_, v)| v.parent.clone()))
     }
 
     async fn close_all_position(&self, symbol: &str) -> anyhow::Result<()> {
@@ -1390,11 +1412,9 @@ impl Exchange for LocalExchange {
         let cash = inner.cash;
         let metadata = inner.metadata(symbol).cloned().expect("metadata not found");
 
-        let (liquidation_order_id, liquidation_price, cash_delta) = match inner
-            .position
-            .get_mut(symbol)
-        {
-            Some(position) => {
+        let (liquidation_order_id, liquidation_price, cash_delta) =
+            match inner.position.iter_mut().find(|(s, _)| s == symbol) {
+                Some((_, position)) => {
                 let new_margin = position.margin + margin;
                 let init_margin =
                     position.open_avg_price * position.quantity / Decimal::from(position.leverage);
@@ -1462,7 +1482,11 @@ impl Exchange for LocalExchange {
             .map(|order| order.freeze_margin)
             .sum::<Decimal>();
 
-        let position_equity: Decimal = inner.position.values().map(|v| v.margin + v.profit).sum();
+        let position_equity: Decimal = inner
+            .position
+            .iter()
+            .map(|(_, v)| v.margin + v.profit)
+            .sum();
 
         Ok(inner.cash + position_equity + pending_freeze_margin)
     }
@@ -1502,7 +1526,8 @@ impl Exchange for LocalExchange {
             );
         }
 
-        let (append_margin, new_margin) = if let Some(v) = inner.position.get(symbol) {
+        let (append_margin, new_margin) =
+            if let Some((_, v)) = inner.position.iter().find(|(s, _)| s == symbol) {
             let new_margin = calc_initial_margin(v.open_avg_price, v.quantity, leverage);
             (new_margin - v.margin, new_margin)
         } else {
@@ -1517,10 +1542,15 @@ impl Exchange for LocalExchange {
             );
         }
 
-        inner.leverage.insert(symbol.to_string(), leverage);
+        if let Some(idx) = inner.leverage.iter().position(|(s, _)| s == symbol) {
+            inner.leverage[idx].1 = leverage;
+        } else {
+            inner.leverage.push((symbol.to_string(), leverage));
+        }
         inner.cash -= append_margin;
 
-        let liquidation_update = if let Some(v) = inner.position.get_mut(symbol) {
+        let liquidation_update =
+            if let Some((_, v)) = inner.position.iter_mut().find(|(s, _)| s == symbol) {
             v.leverage = leverage;
             v.margin = new_margin;
             v.liquidation_price = calc_liquidation_price(

@@ -1,6 +1,4 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::collections::btree_map::Entry;
 use std::ops::{Deref, Index};
 
 use rust_decimal::Decimal;
@@ -61,7 +59,7 @@ pub(crate) struct MultiSymbolData<'a> {
     ///
     /// `RefCell` provides interior mutability because [`Context::request`]
     /// takes `&self` but needs to mutate the cache on first access.
-    pub level_cache: &'a RefCell<BTreeMap<Level, LevelCacheEntry>>,
+    pub level_cache: &'a RefCell<Vec<(Level, LevelCacheEntry)>>,
 }
 
 /// Holds data for all symbols in a multi-symbol run.
@@ -69,11 +67,11 @@ pub(crate) struct MultiSymbolData<'a> {
 /// Built by [`Engine::run_multi`](crate::engine::Engine::run_multi) before each
 /// strategy invocation and exposed via [`Context::multi`].
 pub(crate) struct MultiSlices<'a> {
-    pub symbols: BTreeMap<String, MultiSymbolData<'a>>,
+    pub symbols: Vec<(String, MultiSymbolData<'a>)>,
     pub exchange: &'a ExchangeWrapper,
     pub strategy_level: Level,
     pub source_level: Level,
-    pub series: &'a BTreeMap<(String, Level, String), Vec<Decimal>>,
+    pub series: &'a Vec<((String, Level, String), Vec<Decimal>)>,
 }
 
 pub struct Context<'a> {
@@ -123,7 +121,7 @@ impl<'a> Context<'a> {
     /// (single-symbol), the symbol is unknown, or the level is invalid.
     pub fn request(&self, symbol: &str, level: Level) -> Option<Context<'a>> {
         let multi = self.multi?;
-        let sym = multi.symbols.get(symbol)?;
+        let sym = multi.symbols.iter().find(|(s, _)| s == symbol).map(|(_, v)| v)?;
 
         let slices = if level == multi.strategy_level {
             &sym.strategy
@@ -135,16 +133,18 @@ impl<'a> Context<'a> {
                 return None;
             }
             let mut cache = sym.level_cache.borrow_mut();
-            if let Entry::Vacant(e) = cache.entry(level) {
+            let cache_idx = cache.iter().position(|(l, _)| *l == level);
+            if cache_idx.is_none() {
                 let resampled = crate::util::resample(sym.source_klines, level).ok()?;
                 let mut entry = LevelCacheEntry::default();
                 entry.extend_from_klines(&resampled);
-                e.insert(entry);
+                cache.push((level, entry));
             }
             // Extend the lifetime of the cache entry to 'a — safe because the
             // cache lives in SymbolBuffer → run_multi's stack, which outlives
             // the strategy invocation.
-            let entry: &'a LevelCacheEntry = unsafe { std::mem::transmute(&cache[&level]) };
+            let entry: &'a LevelCacheEntry =
+                unsafe { std::mem::transmute(&cache.iter().find(|(l, _)| *l == level).unwrap().1) };
 
             &SymbolSlices {
                 time: entry.time.as_slice(),
