@@ -37,7 +37,6 @@ pub struct LocalExchangeEx {
 
 struct LocalExchangeExInner {
     timeline: Timeline,
-    /// Current kline per symbol, updated each round.
     klines: BTreeMap<String, KLine>,
     cash: Decimal,
     leverages: BTreeMap<String, u32>,
@@ -47,11 +46,7 @@ struct LocalExchangeExInner {
     positions: BTreeMap<String, PositionEx>,
     history_position_list: Vec<HistoryPosition>,
     id: u64,
-    /// A1 pacemaker: the first symbol ever passed to `next()`. It drives the
-    /// timeline — only calls from the pacemaker advance the timeline.
     pacemaker: Option<String>,
-    /// Set by the pacemaker when the timeline is exhausted. All symbols check this
-    /// to return `None` uniformly.
     exhausted: bool,
 }
 
@@ -114,10 +109,6 @@ impl PositionEx {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Conversion traits (follows the same pattern as `ToVecString` in engine.rs)
-// ---------------------------------------------------------------------------
-
 /// Conversion from a single [`DataSource`] or a container of them into
 /// `Vec<DataSource>`.
 ///
@@ -157,10 +148,6 @@ where
         self.into_iter().map(|item| item.into_ds()).collect()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Builder
-// ---------------------------------------------------------------------------
 
 impl LocalExchangeEx {
     /// Creates a new `LocalExchangeEx` from one or more [`DataSource`]s.
@@ -262,10 +249,6 @@ impl LocalExchangeEx {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
-
 impl LocalExchangeExInner {
     fn metadata(&self, symbol: &str) -> Option<&Metadata> {
         self.timeline
@@ -356,6 +339,11 @@ impl LocalExchangeExInner {
         };
 
         if !order.reduce_only && order.is_limit() {
+            // 对于市价单，保证金在成交时被冻结
+            // 对于计划委托单，保证金在触发时被冻结
+            // 只有在不是只减仓订单的情况下，我们才需要冻结保证金
+            // 这里按整单先冻结，若后续仅平仓或发生反向开仓
+            // 会在成交分支按实际需要返还多冻结保证金
             self.freeze_margin(&mut order, leverage)
                 .context(format!("place_order: {}", order.symbol))?;
         }
@@ -364,21 +352,17 @@ impl LocalExchangeExInner {
         Ok(id)
     }
 
-    /// Cache klines at the current timeline index, then advance.
     fn advance(&mut self) {
-        // Read all klines at the current index BEFORE advancing.
         if let Some(all_klines) = self.timeline.all() {
             for (sym, kline) in all_klines {
                 self.klines.insert(sym.to_string(), kline);
             }
         }
-        // Advance for the next round.
         self.timeline.next();
         self.update();
     }
 
     fn update(&mut self) {
-        // ---- process pending orders ----
         let mut normal_queue = VecDeque::new();
         let mut liquidation_queue = VecDeque::new();
 
@@ -398,8 +382,6 @@ impl LocalExchangeExInner {
             self.update_order(&id, &mut normal_queue);
         }
 
-        // ---- update PnL and liquidation prices for all positions ----
-        // Pre-compute updates to avoid simultaneous mutable/immutable borrow.
         let position_pnl: Vec<(String, Decimal, Decimal)> = self
             .positions
             .iter()
@@ -492,7 +474,6 @@ impl LocalExchangeExInner {
 
     fn try_fill_limit_order(&mut self, order_id: &str) -> Option<OrderEx> {
         let order = self.pending_order_list.get(order_id)?;
-        // Copy the kline to release the immutable borrow before mutable ops below.
         let kline = *self.kline(&order.symbol);
 
         if order.kind == Kind::Liquidation {
@@ -567,8 +548,6 @@ impl LocalExchangeExInner {
             self.handle_market_order(order_id);
         }
     }
-
-    // ---- position management (mostly unchanged, but uses per-symbol lookups) ----
 
     fn handle_reduce_only_checks(&mut self, order_ref: &mut OrderEx) -> bool {
         if let Some(v) = self.positions.get(&order_ref.symbol) {
@@ -702,7 +681,6 @@ impl LocalExchangeExInner {
     ) {
         self.cash += order_ref.freeze_margin;
 
-        // Extract values before mutable borrows / partial moves.
         let kline_time = self.kline(&order_ref.symbol).time;
         let sym = position.symbol.clone();
 
@@ -746,7 +724,6 @@ impl LocalExchangeExInner {
     ) {
         self.cash += order_ref.freeze_margin;
 
-        // Extract values before mutable borrows.
         let kline_time = self.kline(&order_ref.symbol).time;
         let sym = position.symbol.clone();
 
@@ -818,7 +795,6 @@ impl LocalExchangeExInner {
         let leverage = self.leverage(&sym);
         let reverse_margin = calc_initial_margin(order_ref.avg_price, reverse_quantity, leverage);
         let kline_time = self.kline(&sym).time;
-        // Read metadata now, before the mutable borrow on pending_order_list.
         let metadata = self.metadata(&sym).cloned().expect("metadata not found");
         let liquidation_order_id = position.liquidation_order_id.clone();
 
@@ -1075,27 +1051,19 @@ impl LocalExchangeExInner {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Exchange trait implementation
-// ---------------------------------------------------------------------------
-
 #[async_trait::async_trait]
 impl Exchange for LocalExchangeEx {
     async fn next(&self, symbol: &str, _level: Level) -> anyhow::Result<Option<KLine>> {
         let mut inner = self.inner.lock().await;
 
-        // Verify this symbol is known
         if !inner.klines.contains_key(symbol) {
             bail!("next: unknown symbol: {}", symbol);
         }
 
-        // Once the shared timeline is exhausted, all symbols return None.
         if inner.exhausted {
             return Ok(None);
         }
 
-        // A1 pacemaker: the first symbol ever to call next() becomes the
-        // pacemaker. Only pacemaker calls advance the timeline.
         if inner.pacemaker.is_none() {
             inner.pacemaker = Some(symbol.to_string());
         }
@@ -1107,6 +1075,7 @@ impl Exchange for LocalExchangeEx {
                 inner.exhausted = true;
                 return Ok(None);
             }
+
             inner.advance();
         }
 
