@@ -858,7 +858,7 @@ impl LocalExchangeInner {
                     time: kline_time,
                 }],
                 parent: Position {
-                    symbol: symbol,
+                    symbol,
                     leverage,
                     side: order_ref.side,
                     open_avg_price: order_ref.avg_price,

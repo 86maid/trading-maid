@@ -531,7 +531,7 @@ pub async fn get_or_download_funding_rate_to_series(
     level: Level,
 ) -> anyhow::Result<Vec<Decimal>> {
     align_to_series(
-        &get_or_download_funding_rate(format, month_count)
+        get_or_download_funding_rate(format, month_count)
             .await?
             .into_iter()
             .map(|v| (v.time, v.funding_rate))
@@ -1295,7 +1295,6 @@ pub async fn open_in_server(
 
     let root = warp::path::end().and_then({
         let hash = hash.clone();
-        let state = state.clone();
         let data_source = data_source.clone();
         let history_position = history_position.clone();
         let history_order = history_order.clone();
@@ -1303,7 +1302,6 @@ pub async fn open_in_server(
 
         move || {
             let hash = hash.clone();
-            let state = state.clone();
             let data_source = data_source.clone();
             let history_position = history_position.clone();
             let history_order = history_order.clone();

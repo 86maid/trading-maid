@@ -94,9 +94,8 @@ pub fn macd(
         let fast = fast_ema.update(price);
         let slow = slow_ema.update(price);
 
-        if fast.is_some() && slow.is_some() {
-            let macd_val = fast.unwrap() - slow.unwrap();
-            signal_ema.update(macd_val);
+        if let (Some(fast), Some(slow)) = (fast, slow) {
+            signal_ema.update(fast - slow);
         }
     }
 

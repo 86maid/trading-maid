@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::ops::{Deref, Index};
 
 use rust_decimal::Decimal;
@@ -92,7 +93,7 @@ impl<'a> Deref for Context<'a> {
     type Target = ExchangeWrapper;
 
     fn deref(&self) -> &Self::Target {
-        &self.exchange
+        self.exchange
     }
 }
 
@@ -134,11 +135,11 @@ impl<'a> Context<'a> {
                 return None;
             }
             let mut cache = sym.level_cache.borrow_mut();
-            if !cache.contains_key(&level) {
+            if let Entry::Vacant(e) = cache.entry(level) {
                 let resampled = crate::util::resample(sym.source_klines, level).ok()?;
                 let mut entry = LevelCacheEntry::default();
                 entry.extend_from_klines(&resampled);
-                cache.insert(level, entry);
+                e.insert(entry);
             }
             // Extend the lifetime of the cache entry to 'a — safe because the
             // cache lives in SymbolBuffer → run_multi's stack, which outlives

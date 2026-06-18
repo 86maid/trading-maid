@@ -345,33 +345,30 @@ where
             let mut all_done = true;
 
             for sym in &symbols {
-                match self.exchange.next(sym.as_str(), metadata.level).await? {
-                    Some(kline) => {
-                        all_done = false;
+                if let Some(kline) = self.exchange.next(sym.as_str(), metadata.level).await? {
+                    all_done = false;
 
-                        let buf = buffers.get_mut(sym).unwrap();
+                    let buf = buffers.get_mut(sym).unwrap();
 
-                        // Keep source klines for on-demand resampling.
-                        buf.source_klines.push(kline);
-                        // Push to source-level columnar buffer.
-                        buf.source_level_buffer.push(kline);
-                        // Accumulate for strategy-level resampling.
-                        buf.min_level_accumulator.push(kline);
+                    // Keep source klines for on-demand resampling.
+                    buf.source_klines.push(kline);
+                    // Push to source-level columnar buffer.
+                    buf.source_level_buffer.push(kline);
+                    // Accumulate for strategy-level resampling.
+                    buf.min_level_accumulator.push(kline);
 
-                        if kline.time == get_last_time(kline.time, metadata.level, level)? {
-                            buf.strategy_level_buffer
-                                .extend(resample(&buf.min_level_accumulator, level)?);
-                            buf.min_level_accumulator.clear();
-                            if sym == primary {
-                                primary_bar_ready = true;
-                            }
-                        }
-
-                        if let Some(hook) = &mut self.hook {
-                            hook.next(kline, self.exchange.clone()).await?;
+                    if kline.time == get_last_time(kline.time, metadata.level, level)? {
+                        buf.strategy_level_buffer
+                            .extend(resample(&buf.min_level_accumulator, level)?);
+                        buf.min_level_accumulator.clear();
+                        if sym == primary {
+                            primary_bar_ready = true;
                         }
                     }
-                    None => {}
+
+                    if let Some(hook) = &mut self.hook {
+                        hook.next(kline, self.exchange.clone()).await?;
+                    }
                 }
             }
 
