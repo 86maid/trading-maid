@@ -1,4 +1,4 @@
-use crate::util::IsContainer;
+use crate::util::{IsContainer, get_time_range, t2s};
 use crate::{
     context::{Context, LevelCacheEntry, MultiSlices, MultiSymbolData, SymbolSlices},
     data::{KLine, KLineBuffer, Level},
@@ -7,7 +7,7 @@ use crate::{
     util::{get_last_time, resample},
 };
 use crate::{exchange::Exchange, strategy::Strategy};
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use rust_decimal::Decimal;
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -259,10 +259,106 @@ where
         if metadata.level.is_valid_sampling_target(level) {
             let mut min_level_buffer = Vec::new();
             let mut max_level_buffer = KLineBuffer::<N>::new();
+            let mut next_time = None;
+            let mut prev_time = 0;
 
             loop {
                 match self.exchange.next(symbol, level).await? {
                     Some(v) => {
+                        if let Some(next_time) = next_time {
+                            if v.time != next_time {
+                                if v.time == prev_time {
+                                    bail!(
+                                        "time discontinuity: next() should block until the next k-line is ready, but returned a mismatched time: expected {} ({}), got {} ({})",
+                                        next_time,
+                                        t2s(next_time),
+                                        v.time,
+                                        t2s(v.time),
+                                    );
+                                } else if v.time < prev_time {
+                                    bail!(
+                                        "time regression: next() should block until the next k-line is ready, but returned a mismatched time: expected {} ({}), got {} ({})",
+                                        next_time,
+                                        t2s(next_time),
+                                        v.time,
+                                        t2s(v.time),
+                                    );
+                                } else {
+                                    let gap_start = next_time;
+                                    let gap_end = v.time;
+
+                                    let filled_klines = self.exchange.get_kline(symbol, metadata.level, gap_start, gap_end).await.map_err(|e| {
+                                        anyhow!(
+                                            "time discontinuity: failed to fill time gap via get_kline(): range [start, end): start {} ({}), end {} ({}): {}",
+                                            gap_start,
+                                            t2s(gap_start),
+                                            gap_end,
+                                            t2s(gap_end),
+                                            e
+                                        )
+                                    })?;
+
+                                    match filled_klines.first() {
+                                        Some(first) if first.time != gap_start => {
+                                            bail!(
+                                                "time discontinuity: get_kline() returned unexpected first k-line: expected {} ({}), got {} ({})",
+                                                gap_start,
+                                                t2s(gap_start),
+                                                first.time,
+                                                t2s(first.time),
+                                            );
+                                        }
+                                        None => {
+                                            bail!(
+                                                "time discontinuity: get_kline() returned empty k-line: range [start, end): start {} ({}), end {} ({})",
+                                                gap_start,
+                                                t2s(gap_start),
+                                                gap_end,
+                                                t2s(gap_end),
+                                            );
+                                        }
+                                        _ => {}
+                                    }
+
+                                    if let Some(last) = filled_klines.last() {
+                                        let last_end = get_time_range(last.time, metadata.level).map_err(|e| {
+                                            anyhow!(
+                                                "time discontinuity: get_kline() returned k-line with unexpected time: {}: {}",
+                                                last.time,
+                                                e
+                                            )
+                                        })?.1;
+
+                                        if last_end != gap_end {
+                                            bail!(
+                                                "time discontinuity: get_kline() returned unexpected last k-line: expected end {} ({}), got end {} ({})",
+                                                gap_end,
+                                                t2s(gap_end),
+                                                last_end,
+                                                t2s(last_end),
+                                            );
+                                        }
+                                    }
+
+                                    min_level_buffer.extend(filled_klines);
+                                }
+                            }
+                        }
+
+                        next_time = Some(
+                            get_time_range(v.time, metadata.level)
+                                .map_err(|e| {
+                                    anyhow!(
+                                        "next(): returned k-line has unexpected time: {}: {}",
+                                        v.time,
+                                        e
+                                    )
+                                })?
+                                .1,
+                        );
+
+                        prev_time = v.time;
+
                         min_level_buffer.push(v);
 
                         if v.time == get_last_time(v.time, metadata.level, level)? {
