@@ -24,13 +24,16 @@ async fn funding_rate() {
 #[ignore]
 #[tokio::test]
 async fn funding_rate_to_series() {
-    let series = get_or_download_funding_rate_to_series("BTCUSDT", 3, Level::Hour1)
+    let aligned = get_or_download_funding_rate_to_series("BTCUSDT", 3, Level::Hour1)
         .await
         .unwrap();
 
-    println!("len: {}", series.len());
-    println!("first: {:?}", &series[..8.min(series.len())]);
-    println!("last: {:?}", &series[series.len().saturating_sub(8)..]);
+    println!("len: {}", aligned.series.len());
+    println!("first: {:?}", &aligned.series[..8.min(aligned.series.len())]);
+    println!(
+        "last: {:?}",
+        &aligned.series[aligned.series.len().saturating_sub(8)..]
+    );
 }
 
 // cargo test -r --test download engine_with_funding_rate -- --ignored
@@ -77,6 +80,6 @@ async fn engine_with_funding_rate() {
 
     let mut engine = Engine::new(LocalExchange::new(data), strategy);
 
-    engine.add_series("BTCUSDT", Level::Hour1, "funding_rate", &fr);
+    engine.add_series("BTCUSDT", "funding_rate", fr);
     engine.run("BTCUSDT", Level::Hour1).await.unwrap();
 }

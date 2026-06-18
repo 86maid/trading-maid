@@ -144,6 +144,25 @@ pub struct FundingRate {
     pub funding_rate: Decimal,
 }
 
+/// A time-aligned auxiliary data series produced by
+/// [`align_to_series`](crate::util::align_to_series).
+///
+/// Each element corresponds to one bar at `level`, starting at `start`
+/// (inclusive) and ending at `end` (exclusive, = `next` by level).
+///
+/// The time at index `i` is `start + i * level.interval_millis()`.
+/// Bars before the first input data point are forward-filled with
+/// `Decimal::ZERO`.  `series` is stored in chronological order
+/// (`series[0]` = earliest), matching the storage convention of
+/// [`Vec<KLine>`].
+#[derive(Debug, Clone)]
+pub struct AlignedSeries {
+    pub level: Level,
+    pub start: u64,
+    pub end: u64,
+    pub series: Vec<Decimal>,
+}
+
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {

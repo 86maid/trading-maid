@@ -1,4 +1,4 @@
-use crate::data::{DataSource, FundingRate, KLine, Level};
+use crate::data::{AlignedSeries, DataSource, FundingRate, KLine, Level};
 use crate::order::{HistoryPosition, HistoryPositionSummary, OrderMessage, Side};
 use anyhow::Context;
 use anyhow::bail;
@@ -529,7 +529,7 @@ pub async fn get_or_download_funding_rate_to_series(
     format: &str,
     month_count: u32,
     level: Level,
-) -> anyhow::Result<Vec<Decimal>> {
+) -> anyhow::Result<AlignedSeries> {
     align_to_series(
         get_or_download_funding_rate(format, month_count)
             .await?
@@ -540,36 +540,122 @@ pub async fn get_or_download_funding_rate_to_series(
     )
 }
 
-/// Forward-fill sparse time-value pairs into a `Vec<Decimal>` aligned to the given [`Level`].
+/// Detect the source [`Level`] of `data` by checking whether the first two
+/// timestamps align to a known level boundary.
 ///
-/// Each bar at `level` gets the value from the latest data point whose time falls within
-/// that bar's period `[start, next)`. Bars before the first data point receive `Decimal::ZERO`.
+/// Returns `Some(level)` if `get_time_range(t0, candidate).1 == t1` for one
+/// of the 14 known [`Level`] variants, `None` otherwise (e.g. 8 h funding-rate
+/// data, which has no corresponding variant).
+fn detect_level(data: &[(u64, Decimal)]) -> Option<Level> {
+    if data.len() < 2 {
+        return None;
+    }
+    let t0 = data[0].0;
+    let t1 = data[1].0;
+
+    for candidate in [
+        Level::Minute1,
+        Level::Minute3,
+        Level::Minute5,
+        Level::Minute15,
+        Level::Minute30,
+        Level::Hour1,
+        Level::Hour2,
+        Level::Hour4,
+        Level::Hour6,
+        Level::Hour12,
+        Level::Day1,
+        Level::Day3,
+        Level::Week1,
+        Level::Month1,
+    ] {
+        if get_time_range(t0, candidate).ok()?.1 == t1 {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Forward-fill sparse time-value pairs into an [`AlignedSeries`] at the
+/// target [`Level`].
+///
+/// Each bar at `level` gets the value from the latest data point whose time
+/// falls within that bar's half-open period `[start, next)`.  Bars before the
+/// first data point are filled with `Decimal::ZERO`.
+///
+/// # Level validation
+///
+/// The source level of `data` is detected automatically by examining the gap
+/// between the first two timestamps against every known [`Level`] variant
+/// (including calendar-aware levels like [`Month1`]).  When detected:
+///
+/// - **source ≥ target**: fine — forward-fill repeats coarse values onto
+///   finer bars (e.g. 8 h → 1 h).
+/// - **source < target**: **error** — a sparse scalar series cannot be
+///   aggregated the way k-line OHLCV can via [`resample`].
+///
+/// When the source level cannot be matched to any variant (e.g. 8 h funding
+/// rate), the absolute interval `data[1].0 - data[0].0` is compared against
+/// `level.interval_millis()`; only source ≥ target is accepted.
 ///
 /// # Arguments
 /// - `data` - Sorted slice of `(timestamp_ms, value)` pairs
-/// - `level` - Target level for alignment
+/// - `level` - Target [`Level`] for alignment
+///
+/// Returns an [`AlignedSeries`] whose `series` field is in chronological
+/// order (`series[0]` = earliest).
 ///
 /// # Example
 ///
 /// ```ignore
-/// // Custom indicator sampled at irregular times, aligned to 1h bars
-/// let series = align_to_series(&[(t1, v1), (t2, v2)], Level::Hour1)?;
-/// engine.add_series("BTCUSDT", Level::Hour1, "custom", &series);
+/// let aligned = align_to_series(&[(t1, v1), (t2, v2)], Level::Hour1)?;
+/// engine.add_series("BTCUSDT", "custom", aligned);
 /// ```
 pub fn align_to_series(
     data: impl AsRef<[(u64, Decimal)]>,
     level: Level,
-) -> anyhow::Result<Vec<Decimal>> {
+) -> anyhow::Result<AlignedSeries> {
     let data = data.as_ref();
 
     if data.is_empty() {
         bail!("empty data");
     }
 
-    let (mut current, mut next) = get_time_range(data[0].0, level)?;
+    // --- Level detection & validation ---
+    if data.len() >= 2 {
+        if let Some(data_level) = detect_level(data) {
+            // Known level: source must be >= target (scalar cannot aggregate).
+            if data_level < level {
+                bail!(
+                    "align_to_series: source level {} is finer than target {}, \
+                     cannot aggregate sparse scalar data",
+                    data_level,
+                    level,
+                );
+            }
+            // source >= target → forward-fill is correct.
+        } else {
+            // Unknown interval (e.g. 8 h funding rate) — only coarse→fine.
+            let data_interval_ms = data[1].0 - data[0].0;
+            let target_interval_ms = level.interval_millis();
+            if data_interval_ms < target_interval_ms {
+                bail!(
+                    "align_to_series: unknown source interval ({} ms) < target \
+                     interval ({} ms), cannot align",
+                    data_interval_ms,
+                    target_interval_ms,
+                );
+            }
+            // data_interval >= target_interval → forward-fill works.
+        }
+    }
+    // data.len() == 1: single point, skip validation; forward-fill anyway.
+
+    let (start, mut next) = get_time_range(data[0].0, level)?;
+    let mut current = start;
     let end = get_time_range(data[data.len() - 1].0, level)?.1;
 
-    let mut result = Vec::new();
+    let mut series = Vec::new();
     let mut index = 0;
     let mut value = Decimal::ZERO;
 
@@ -578,13 +664,17 @@ pub fn align_to_series(
             value = data[index].1;
             index += 1;
         }
-
-        result.push(value);
+        series.push(value);
         current = next;
         next = get_time_range(current, level)?.1;
     }
 
-    Ok(result)
+    Ok(AlignedSeries {
+        level,
+        start,
+        end,
+        series,
+    })
 }
 
 /// Calculates the liquidation price for a given position based on leverage, maintenance margin,

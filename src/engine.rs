@@ -1,7 +1,7 @@
 use crate::util::{IsContainer, get_time_range, t2s};
 use crate::{
-    context::{Context, LevelCacheEntry, MultiSlices, MultiSymbolData, SymbolSlices},
-    data::{KLine, KLineBuffer, Level},
+    context::{Context, LevelCacheEntry, MultiSlices, MultiSymbolData, SymbolSlices, slice_aligned_series},
+    data::{AlignedSeries, KLine, KLineBuffer, Level},
     prelude::ExchangeWrapper,
     series::{Series, TimeSeries},
     util::{get_last_time, resample},
@@ -115,7 +115,7 @@ pub struct Engine<S, const N: usize = DEFAULT_SERIES_MAX_LENGTH> {
     strategy: S,
     hook: Option<Box<dyn HookFn>>,
     on_error: Option<Box<dyn Fn(anyhow::Error) -> anyhow::Result<()>>>,
-    series: Vec<((String, Level, String), Vec<Decimal>)>,
+    series: Vec<((String, Level, String), AlignedSeries)>,
 }
 
 impl<S> Engine<S, DEFAULT_SERIES_MAX_LENGTH>
@@ -170,10 +170,16 @@ where
 
     /// Register an auxiliary data series to be available in the strategy context.
     ///
-    /// The series data must be pre-aligned to the same `level` as the one passed
-    /// to [`run`](Engine::run) — each element corresponds to one bar at that level.
-    /// Use [`get_or_download_funding_rate_to_series`](crate::util::get_or_download_funding_rate_to_series)
-    /// to download and align funding rate data.
+    /// The series should be produced by
+    /// [`align_to_series`](crate::util::align_to_series) or
+    /// [`get_or_download_funding_rate_to_series`](crate::util::get_or_download_funding_rate_to_series),
+    /// which embed the target level and time bounds.  At runtime the engine
+    /// slices each [`AlignedSeries`] to the time-intersection with the OHLCV
+    /// data, so a single download can be re-used across backtests that cover
+    /// different (possibly shorter) time windows.
+    ///
+    /// The [`Level`] is taken from `series.level` — you don't need to pass it
+    /// separately.
     ///
     /// The series can be accessed inside the strategy via `cx[name]`:
     ///
@@ -181,25 +187,24 @@ where
     /// let fr = cx["funding_rate"][0];  // latest value
     /// ```
     ///
-    /// If no series is registered for the current symbol/level/name combination,
-    /// `cx[name]` returns an empty series (compare with `== []`).
+    /// If no series is registered for the current symbol/level/name
+    /// combination, or the time ranges do not overlap, `cx[name]` returns
+    /// an empty series (compare with `== []`).
     pub fn add_series(
         &mut self,
         symbol: impl AsRef<str>,
-        level: Level,
         name: impl AsRef<str>,
-        series: impl AsRef<[Decimal]>,
+        series: AlignedSeries,
     ) {
         let key = (
             symbol.as_ref().to_string(),
-            level,
+            series.level,
             name.as_ref().to_string(),
         );
-        let value = series.as_ref().to_vec();
         if let Some(idx) = self.series.iter().position(|(k, _)| *k == key) {
-            self.series[idx].1 = value;
+            self.series[idx].1 = series;
         } else {
-            self.series.push((key, value));
+            self.series.push((key, series));
         }
     }
 
@@ -361,21 +366,38 @@ where
 
                         min_level_buffer.push(v);
 
+                        // 检查当前 kline 是否是当前级别周期的最后一根
+                        // 如果是，说明一根完整的策略级别 bar 已形成
                         if v.time == get_last_time(v.time, metadata.level, level)? {
+                            // 将累积的小级别 kline 重采样为策略级别 bar
                             max_level_buffer.extend(resample(&min_level_buffer, level)?);
                             min_level_buffer.clear();
 
-                            let len = max_level_buffer.time.len();
-
+                            // 构建辅助 series 列表
+                            //
+                            // 从 engine 中取出所有注册的 series，按 (symbol, level) 过滤，
+                            // 然后通过 slice_aligned_series 做时间交集切片。
+                            //
+                            // 例如：资金费率数据覆盖 1月~6月，当前回测只跑 3月~4月，
+                            // slice_aligned_series 会自动跳过 1~2 月的 bar，只返回
+                            // 3~4 月的数据。
                             let series: Vec<(&str, &[Decimal])> = self
                                 .series
                                 .iter()
+                                // 过滤：symbol 和 level 必须同时匹配
                                 .filter(|((s, l, _), _)| s == symbol && *l == level)
-                                .map(|((_, _, name), data)| {
-                                    (name.as_str(), &data[..len.min(data.len())])
+                                // 时间交集切片：让 series 和 OHLCV 数据时间对齐
+                                .map(|((_, _, name), aligned)| {
+                                    slice_aligned_series(
+                                        aligned,
+                                        name.as_str(),
+                                        &max_level_buffer.time,
+                                        level,
+                                    )
                                 })
                                 .collect();
 
+                            // 组装策略上下文
                             let context = Context {
                                 time: TimeSeries::new(&max_level_buffer.time),
                                 open: Series::new(&max_level_buffer.open),
@@ -385,7 +407,7 @@ where
                                 volume: Series::new(&max_level_buffer.volume),
                                 exchange: &exchange,
                                 series,
-                                multi: None,
+                                multi: None, // 单标模式，不支持 request()
                             };
 
                             if let Err(v) = self.strategy.next(&context).await {
@@ -494,13 +516,14 @@ where
         strategy_level: Level,
         exchange: &ExchangeWrapper,
     ) -> anyhow::Result<()> {
-        // Build type-erased per-symbol data.
+        // 步骤1：为每个标的构建 MultiSymbolData
         let symbol_data: Vec<(String, MultiSymbolData)> = buffers
             .iter()
             .map(|(sym, buf)| {
                 (
                     sym.clone(),
                     MultiSymbolData {
+                        // 策略级别的 OHLCV 切片（预构建，不涉及重采样）
                         strategy: SymbolSlices {
                             time: &buf.strategy_level_buffer.time,
                             open: &buf.strategy_level_buffer.open,
@@ -509,6 +532,7 @@ where
                             close: &buf.strategy_level_buffer.close,
                             volume: &buf.strategy_level_buffer.volume,
                         },
+                        // 源级别的 OHLCV 切片（预构建，不涉及重采样）
                         source: SymbolSlices {
                             time: &buf.source_level_buffer.time,
                             open: &buf.source_level_buffer.open,
@@ -517,21 +541,26 @@ where
                             close: &buf.source_level_buffer.close,
                             volume: &buf.source_level_buffer.volume,
                         },
+                        // 保留源 kline 原始数据，供 Context::request()
+                        // 按需重采样到其他 level
                         source_klines: &buf.source_klines,
+                        // 按需重采样的缓存，RefCell 提供内部可变性
                         level_cache: &buf.level_cache,
                     },
                 )
             })
             .collect();
 
+        // 步骤2：组装 MultiSlices（传递给 Context::request 使用）
         let multi = MultiSlices {
             symbols: symbol_data,
             exchange,
             strategy_level,
             source_level,
-            series: &self.series,
+            series: &self.series, // 所有注册的辅助 series
         };
 
+        // 步骤3：取出主标的策略级别切片
         let primary_data = multi
             .symbols
             .iter()
@@ -539,15 +568,34 @@ where
             .map(|(_, v)| v)
             .unwrap();
         let primary_slices = &primary_data.strategy;
-        let len = primary_slices.time.len();
-
+        // 步骤4：构建辅助 series 列表
+        //
+        // 过滤条件：只取 (symbol == 主标, level == 策略级别) 的 series。
+        // 这意味着辅助 series 只在注册时的 level 下可见——
+        // 例如资金费率对齐到 Hour1 后，在 Hour4 上下文中不可见。
+        // 标量数据无法像 K 线那样重采样，跨 level 暴露没有普适的
+        // 正确语义。
         let series: Vec<(&str, &[Decimal])> = self
             .series
             .iter()
+            // 过滤：symbol 和 level 必须同时匹配
             .filter(|((s, l, _), _)| s == primary && *l == strategy_level)
-            .map(|((_, _, name), data)| (name.as_str(), &data[..len.min(data.len())]))
+            // 时间交集切片：如果 series 的时间范围和当前 OHLCV 数据
+            // 没有重叠，slice_aligned_series 会返回空切片 []
+            .map(|((_, _, name), aligned)| {
+                slice_aligned_series(
+                    aligned,
+                    name.as_str(),
+                    primary_slices.time,
+                    strategy_level,
+                )
+            })
             .collect();
 
+        // 步骤5：组装 Context
+        //
+        // multi: Some(&multi) 使得策略内可以通过
+        // `cx.request("ETHUSDT", Hour1)` 访问其他标的的数据
         let context = Context {
             time: TimeSeries::new(primary_slices.time),
             open: Series::new(primary_slices.open),
