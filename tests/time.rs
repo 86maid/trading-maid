@@ -60,21 +60,6 @@ async fn main() {
 
     println!("run: {:?}", start.elapsed());
 
-    let exchange = LocalExchangeEx::new(data_source_1m.clone())
-        .cash(10000)
-        .leverage(10)
-        .slippage(0);
-
-    let mut engine = Engine::new(exchange.clone(), my_strategy);
-
-    let start = tokio::time::Instant::now();
-
-    if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
-        println!("{:#?}", v);
-    }
-
-    println!("run ex: {:?}", start.elapsed());
-
     let start = tokio::time::Instant::now();
 
     data_source_1m.resample(Level::Hour1).unwrap();

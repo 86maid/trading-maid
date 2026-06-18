@@ -221,7 +221,7 @@ where
     /// read other symbols' data.
     ///
     /// The exchange must be a multi-symbol implementation (e.g.
-    /// [`LocalExchangeEx`](crate::local_exchange_ex::LocalExchangeEx)) with
+    /// [`LocalExchange`](crate::local_exchange::LocalExchange)) with
     /// A1 pacemaker semantics: the first symbol in `symbols` drives the clock.
     ///
     /// Auxiliary series registered via [`add_series`](Engine::add_series) matching

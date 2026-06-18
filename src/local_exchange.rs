@@ -14,28 +14,28 @@ use crate::util::*;
 
 /// A multi-symbol backtesting exchange that replays historical K-line data.
 ///
-/// `LocalExchangeEx` steps through multiple [`DataSource`]s synchronised via [`Timeline`].
+/// `LocalExchange` steps through multiple [`DataSource`]s synchronised via [`Timeline`].
 /// Each call to [`Exchange::next`] returns the current K-line for the given symbol;
 /// the first call in a round advances the global timeline, and the last call
 /// (when all symbols have been queried) resets the round counter.
 ///
 /// # Builder pattern
 ///
-/// After [`LocalExchangeEx::new`], chain any of the following:
-/// - [`cash`](LocalExchangeEx::cash) — starting balance (default: 10,000).
-/// - [`leverage`](LocalExchangeEx::leverage) — default leverage for all symbols (default: 1).
-/// - [`slippage`](LocalExchangeEx::slippage) — fraction applied to market-order fill prices (default: 0).
-/// - [`range`](LocalExchangeEx::range) — restrict replayed data to `[start_time, end_time)`.
+/// After [`LocalExchange::new`], chain any of the following:
+/// - [`cash`](LocalExchange::cash) — starting balance (default: 10,000).
+/// - [`leverage`](LocalExchange::leverage) — default leverage for all symbols (default: 1).
+/// - [`slippage`](LocalExchange::slippage) — fraction applied to market-order fill prices (default: 0).
+/// - [`range`](LocalExchange::range) — restrict replayed data to `[start_time, end_time)`.
 ///
 /// # Thread safety
 ///
 /// All public methods take `&self` and lock an internal `Arc<Mutex<…>>`.
 #[derive(Clone)]
-pub struct LocalExchangeEx {
-    inner: Arc<Mutex<LocalExchangeExInner>>,
+pub struct LocalExchange {
+    inner: Arc<Mutex<LocalExchangeInner>>,
 }
 
-struct LocalExchangeExInner {
+struct LocalExchangeInner {
     timeline: Timeline,
     klines: BTreeMap<String, KLine>,
     cash: Decimal,
@@ -149,8 +149,8 @@ where
     }
 }
 
-impl LocalExchangeEx {
-    /// Creates a new `LocalExchangeEx` from one or more [`DataSource`].
+impl LocalExchange {
+    /// Creates a new `LocalExchange` from one or more [`DataSource`].
     ///
     /// Accepts a single [`DataSource`], a `Vec<DataSource>`, a slice, or an array.
     ///
@@ -163,7 +163,7 @@ impl LocalExchangeEx {
     /// do not overlap.
     pub fn new(data_source: impl ToDataSourceVec) -> Self {
         let timeline = Timeline::new(data_source.into_vec())
-            .expect("LocalExchangeEx::new: Timeline creation failed");
+            .expect("LocalExchange::new: Timeline creation failed");
 
         let symbols: Vec<String> = timeline
             .inner()
@@ -180,7 +180,7 @@ impl LocalExchangeEx {
         }
 
         Self {
-            inner: Arc::new(Mutex::new(LocalExchangeExInner {
+            inner: Arc::new(Mutex::new(LocalExchangeInner {
                 timeline,
                 klines,
                 cash: Decimal::from(10000),
@@ -250,7 +250,7 @@ impl LocalExchangeEx {
     }
 }
 
-impl LocalExchangeExInner {
+impl LocalExchangeInner {
     fn metadata(&self, symbol: &str) -> Option<&Metadata> {
         self.timeline
             .inner()
@@ -1061,7 +1061,7 @@ impl LocalExchangeExInner {
 }
 
 #[async_trait::async_trait]
-impl Exchange for LocalExchangeEx {
+impl Exchange for LocalExchange {
     async fn next(&self, symbol: &str, _level: Level) -> anyhow::Result<Option<KLine>> {
         let mut inner = self.inner.lock().await;
 
@@ -1620,7 +1620,7 @@ mod tests {
 
     fn single_exchange() -> ExchangeWrapper {
         ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+            LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
                 .cash(10000.0)
                 .leverage(10),
         ))
@@ -1628,7 +1628,7 @@ mod tests {
 
     fn single_exchange_with(metadata: Metadata, kline_list: Vec<KLine>) -> ExchangeWrapper {
         ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![DataSource::new(metadata, kline_list)])
+            LocalExchange::new(vec![DataSource::new(metadata, kline_list)])
                 .cash(10000.0)
                 .leverage(10),
         ))
@@ -1638,7 +1638,7 @@ mod tests {
 
     fn multi_exchange() -> ExchangeWrapper {
         ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![
+            LocalExchange::new(vec![
                 DataSource::new(btc_metadata(), btc_klines()),
                 DataSource::new(eth_metadata(), eth_klines()),
             ])
@@ -1944,7 +1944,7 @@ mod tests {
     // 验证 reduce-only 平仓在手续费预扣不足时会被拒绝，且不会改变现金和仓位。
     #[tokio::test]
     async fn reduce_only_close_rejected_when_fee_precharge_cash_is_insufficient() {
-        let exchange = LocalExchangeEx::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+        let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
             .cash(10.56)
             .leverage(10);
 
@@ -1978,7 +1978,7 @@ mod tests {
     // 验证浮亏场景下，手续费不足的 reduce-only 平仓会被拒绝，不会把现金打到负值。
     #[tokio::test]
     async fn reduce_only_close_with_floating_loss_and_fee_shortage_is_rejected() {
-        let exchange = LocalExchangeEx::new(vec![DataSource::new(
+        let exchange = LocalExchange::new(vec![DataSource::new(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -2720,7 +2720,7 @@ mod tests {
     // 验证调低杠杆导致需要补充保证金但现金不足时会失败。
     #[tokio::test]
     async fn set_leverage_fails_when_cash_insufficient_for_new_margin() {
-        let exchange = LocalExchangeEx::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+        let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
             .cash(11.0)
             .leverage(10);
 
@@ -2739,7 +2739,7 @@ mod tests {
     // 验证触发限价单在触发瞬间若无法冻结保证金会被拒绝。
     #[tokio::test]
     async fn trigger_limit_order_rejected_when_freeze_margin_fails() {
-        let exchange = LocalExchangeEx::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+        let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
             .cash(1.0)
             .leverage(10);
 
@@ -2892,7 +2892,7 @@ mod tests {
     // 验证调杠杆失败时，仓位保证金与强平价格不会被污染。
     #[tokio::test]
     async fn set_leverage_failure_keeps_position_and_liquidation_unchanged() {
-        let exchange = LocalExchangeEx::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+        let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
             .cash(11.0)
             .leverage(10);
 
@@ -3090,7 +3090,7 @@ mod tests {
     // 验证 1x 多仓强平价受 maintenance 约束，并在触及阈值时执行强平。
     #[tokio::test]
     async fn one_x_long_liquidation_price_respects_maintenance() {
-        let exchange = LocalExchangeEx::new(vec![DataSource::new(
+        let exchange = LocalExchange::new(vec![DataSource::new(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -3137,7 +3137,7 @@ mod tests {
     // 验证 1x 空仓强平价受 maintenance 约束，并在触及阈值时执行强平。
     #[tokio::test]
     async fn one_x_short_liquidation_price_respects_maintenance() {
-        let exchange = LocalExchangeEx::new(vec![DataSource::new(
+        let exchange = LocalExchange::new(vec![DataSource::new(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -3626,7 +3626,7 @@ mod tests {
         );
 
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(20000.0)
                 .leverage(10),
         ));
@@ -3842,7 +3842,7 @@ mod tests {
         );
 
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(30000.0)
                 .leverage(10),
         ));
@@ -4091,7 +4091,7 @@ mod tests {
     // 验证限价单成交时若手续费不足被拒绝，会返还此前冻结的保证金。
     #[tokio::test]
     async fn limit_order_rejected_on_fee_shortage_refunds_frozen_margin() {
-        let exchange = LocalExchangeEx::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+        let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
             .cash(10.51)
             .leverage(10);
 
@@ -4460,7 +4460,7 @@ mod tests {
     // 验证市价单因保证金不足被拒绝时，不会错误扣减余额。
     #[tokio::test]
     async fn market_order_rejected_on_margin_shortage_keeps_cash_unchanged() {
-        let exchange = LocalExchangeEx::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+        let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
             .cash(1.0)
             .leverage(10);
 
@@ -4661,7 +4661,7 @@ mod tests {
     async fn range_boundary_yields_expected_klines_then_none() {
         let data_source = DataSource::new(btc_metadata(), btc_klines());
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
                 .range(2, 4),
@@ -4752,7 +4752,7 @@ mod tests {
     // 验证强平单在手续费不足时仍会执行平仓，避免仓位残留。
     #[tokio::test]
     async fn liquidation_executes_even_when_fee_cash_is_insufficient() {
-        let exchange = LocalExchangeEx::new(vec![DataSource::new(
+        let exchange = LocalExchange::new(vec![DataSource::new(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -5455,7 +5455,7 @@ mod tests {
             ],
         );
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.02),
@@ -5481,7 +5481,7 @@ mod tests {
             ],
         );
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.02),
@@ -5540,7 +5540,7 @@ mod tests {
             ],
         );
         let buy_exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.005),
@@ -5560,7 +5560,7 @@ mod tests {
             ],
         );
         let sell_exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.005),
@@ -5604,7 +5604,7 @@ mod tests {
             ],
         );
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.02),
@@ -5631,7 +5631,7 @@ mod tests {
             ],
         );
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.02),
@@ -5662,7 +5662,7 @@ mod tests {
             ],
         );
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.05),
@@ -5715,7 +5715,7 @@ mod tests {
     async fn range_end_after_last_kline_still_iterates_to_end() {
         let data_source = DataSource::new(btc_metadata(), btc_klines());
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
                 .range(2, 9999999999999),
@@ -6084,7 +6084,7 @@ mod tests {
 
     #[tokio::test]
     async fn multi_symbol_range_filters_all() {
-        let exchange = LocalExchangeEx::new(vec![
+        let exchange = LocalExchange::new(vec![
             DataSource::new(btc_metadata(), btc_klines()),
             DataSource::new(eth_metadata(), eth_klines()),
         ])
@@ -6110,7 +6110,7 @@ mod tests {
     #[tokio::test]
     async fn single_symbol_works_like_original() {
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+            LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
                 .cash(10000.0)
                 .leverage(10),
         ));
@@ -6204,7 +6204,7 @@ mod tests {
     // 验证一个 symbol 爆仓不会影响另一个 symbol 的仓位。
     #[tokio::test]
     async fn cross_symbol_liquidation_is_isolated() {
-        let exchange = LocalExchangeEx::new(vec![
+        let exchange = LocalExchange::new(vec![
             DataSource::new(
                 btc_metadata(),
                 vec![
@@ -6449,7 +6449,7 @@ mod tests {
     // 验证跨 symbol 的 pacemaker 耗尽：最短数据源决定总步数，pacemaker 耗尽后所有 symbol 停止。
     #[tokio::test]
     async fn cross_symbol_pacemaker_exhaustion_affects_all() {
-        let exchange = LocalExchangeEx::new(vec![
+        let exchange = LocalExchange::new(vec![
             DataSource::new(
                 btc_metadata(),
                 vec![
@@ -6649,7 +6649,7 @@ mod tests {
             ],
         );
         let exchange = ExchangeWrapper::new(Arc::new(
-            LocalExchangeEx::new(vec![data_source])
+            LocalExchange::new(vec![data_source])
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.01),
@@ -6693,7 +6693,7 @@ mod tests {
     #[tokio::test]
     async fn multi_symbol_round_trip_long_short_close_independently() {
         // 需要 4 根 K 线：第 1 根推进、第 2 根开仓成交、第 3 根平 BTC、第 4 根平 ETH
-        let exchange = LocalExchangeEx::new(vec![
+        let exchange = LocalExchange::new(vec![
             DataSource::new(
                 btc_metadata(),
                 vec![
