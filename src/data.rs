@@ -564,22 +564,20 @@ impl<const N: usize> KLineBuffer<N> {
 
 /// A unified timeline composed of multiple data sources.
 ///
-/// `Axis` merges [`DataSource`]s for multiple symbols at the same [`Level`] into a
+/// `Timeline` merges [`DataSource`]s for multiple symbols at the same [`Level`] into a
 /// single timeline. The **intersection** of all time ranges defines the playback
 /// window — only timestamps present in every source are included. Each symbol
 /// may start at a different offset, so per-source start indices are computed
 /// such that `all()` returns klines at the same timestamp for every symbol.
 #[derive(Debug, Clone)]
-pub struct Axis {
-    ds: Vec<DataSource>,
-    /// Per-source offset: `ds[i].data[start_indices[i] + index]` yields the
-    /// kline at the current aligned time step.
-    start_indices: Vec<usize>,
+pub struct Timeline {
+    data_source: Vec<DataSource>,
+    start: Vec<usize>,
     index: usize,
     len: usize,
 }
 
-impl Axis {
+impl Timeline {
     /// Build a timeline from the intersection of data source time ranges.
     ///
     /// Finds the latest start time and earliest end time across all sources.
@@ -588,17 +586,17 @@ impl Axis {
     ///
     /// All sources must share the same [`Level`]. Returns an error if the
     /// time ranges do not overlap or any source has no data.
-    pub fn new(ds: Vec<DataSource>) -> anyhow::Result<Self> {
-        if ds.is_empty() {
-            bail!("axis: no data sources provided");
+    pub fn new(data_source: Vec<DataSource>) -> anyhow::Result<Self> {
+        if data_source.is_empty() {
+            bail!("Timeline: no data sources provided");
         }
 
-        let level = ds[0].metadata.level;
+        let level = data_source[0].metadata.level;
 
-        for source in &ds[1..] {
+        for source in &data_source[1..] {
             if source.metadata.level != level {
                 bail!(
-                    "axis: level mismatch: expected {}, got {} for {}",
+                    "Timeline: level mismatch: expected {}, got {} for {}",
                     level,
                     source.metadata.level,
                     source.metadata.symbol,
@@ -610,18 +608,18 @@ impl Axis {
         let mut start_time = u64::MIN;
         let mut end_time = u64::MAX;
 
-        for source in &ds {
+        for source in &data_source {
             let first = source
                 .data
                 .first()
                 .map(|k| k.time)
-                .context(format!("axis: {} has no data", source.metadata.symbol))?;
+                .context(format!("Timeline: {} has no data", source.metadata.symbol))?;
 
             let last = source
                 .data
                 .last()
                 .map(|k| k.time)
-                .context(format!("axis: {} has no data", source.metadata.symbol))?;
+                .context(format!("Timeline: {} has no data", source.metadata.symbol))?;
 
             start_time = start_time.max(first);
             end_time = end_time.min(last);
@@ -629,23 +627,23 @@ impl Axis {
 
         if start_time >= end_time {
             bail!(
-                "axis: no overlapping time range ({} - {})",
+                "Timeline: no overlapping time range ({} - {})",
                 start_time,
                 end_time
             );
         }
 
         // Per-source start index: first kline with time >= intersection start.
-        let mut start_indices = Vec::with_capacity(ds.len());
+        let mut start = Vec::with_capacity(data_source.len());
         let mut len = usize::MAX;
 
-        for source in &ds {
+        for source in &data_source {
             let si = source
                 .data
                 .iter()
                 .position(|k| k.time >= start_time)
                 .context(format!(
-                    "axis: {} has no kline at or after start_time {}",
+                    "Timeline: {} has no kline at or after start_time {}",
                     source.metadata.symbol, start_time
                 ))?;
 
@@ -656,18 +654,18 @@ impl Axis {
 
             if effective_len == 0 {
                 bail!(
-                    "axis: {} has no klines within overlapping range",
+                    "Timeline: {} has no klines within overlapping range",
                     source.metadata.symbol
                 );
             }
 
-            start_indices.push(si);
+            start.push(si);
             len = len.min(effective_len);
         }
 
         Ok(Self {
-            ds,
-            start_indices,
+            data_source,
+            start,
             index: 0,
             len,
         })
@@ -686,13 +684,15 @@ impl Axis {
         if self.is_done() {
             return None;
         }
+
         let pos = self
-            .ds
+            .data_source
             .iter()
             .position(|s| s.metadata.symbol == symbol)?;
-        self.ds[pos]
+
+        self.data_source[pos]
             .data
-            .get(self.start_indices[pos] + self.index)
+            .get(self.start[pos] + self.index)
             .cloned()
     }
 
@@ -702,10 +702,10 @@ impl Axis {
             return None;
         }
 
-        self.ds
+        self.data_source
             .first()?
             .data
-            .get(self.start_indices[0] + self.index)
+            .get(self.start[0] + self.index)
             .map(|k| k.time)
     }
 
@@ -717,21 +717,21 @@ impl Axis {
         if self.is_done() {
             return None;
         }
-        self.ds
+
+        self.data_source
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let symbol = s.metadata.symbol.as_str();
                 s.data
-                    .get(self.start_indices[i] + self.index)
-                    .map(|k| (symbol, *k))
+                    .get(self.start[i] + self.index)
+                    .map(|k| (s.metadata.symbol.as_str(), *k))
             })
             .collect()
     }
 
     /// Return a reference to all data sources.
     pub fn inner(&self) -> &[DataSource] {
-        &self.ds
+        &self.data_source
     }
 
     /// Check whether the timeline has been exhausted.
@@ -742,5 +742,10 @@ impl Axis {
     /// Return the total number of steps in the timeline.
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    /// Check whether the timeline is empty (no overlapping steps).
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }

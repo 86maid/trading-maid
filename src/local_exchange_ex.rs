@@ -14,7 +14,7 @@ use crate::util::*;
 
 /// A multi-symbol backtesting exchange that replays historical K-line data.
 ///
-/// `LocalExchangeEx` steps through multiple [`DataSource`]s synchronised via [`Axis`].
+/// `LocalExchangeEx` steps through multiple [`DataSource`]s synchronised via [`Timeline`].
 /// Each call to [`Exchange::next`] returns the current K-line for the given symbol;
 /// the first call in a round advances the global timeline, and the last call
 /// (when all symbols have been queried) resets the round counter.
@@ -36,12 +36,10 @@ pub struct LocalExchangeEx {
 }
 
 struct LocalExchangeExInner {
-    axis: Axis,
+    timeline: Timeline,
     /// Current kline per symbol, updated each round.
     klines: BTreeMap<String, KLine>,
     cash: Decimal,
-    /// Global default leverage. Per-symbol overrides live in `leverages`.
-    default_leverage: u32,
     leverages: BTreeMap<String, u32>,
     slippage: Decimal,
     history_order_list: IndexMap<String, OrderEx>,
@@ -50,9 +48,9 @@ struct LocalExchangeExInner {
     history_position_list: Vec<HistoryPosition>,
     id: u64,
     /// A1 pacemaker: the first symbol ever passed to `next()`. It drives the
-    /// axis — only calls from the pacemaker advance the timeline.
+    /// timeline — only calls from the pacemaker advance the timeline.
     pacemaker: Option<String>,
-    /// Set by the pacemaker when the axis is exhausted. All symbols check this
+    /// Set by the pacemaker when the timeline is exhausted. All symbols check this
     /// to return `None` uniformly.
     exhausted: bool,
 }
@@ -117,23 +115,70 @@ impl PositionEx {
 }
 
 // ---------------------------------------------------------------------------
+// Conversion traits (follows the same pattern as `ToVecString` in engine.rs)
+// ---------------------------------------------------------------------------
+
+/// Conversion from a single [`DataSource`] or a container of them into
+/// `Vec<DataSource>`.
+///
+/// Accepts a bare [`DataSource`], a `Vec<DataSource>`, a slice, or an array.
+pub trait ToDataSourceVec {
+    fn into_vec(self) -> Vec<DataSource>;
+}
+
+impl ToDataSourceVec for DataSource {
+    fn into_vec(self) -> Vec<DataSource> {
+        vec![self]
+    }
+}
+
+trait IntoDataSource {
+    fn into_ds(self) -> DataSource;
+}
+
+impl IntoDataSource for DataSource {
+    fn into_ds(self) -> DataSource {
+        self
+    }
+}
+
+impl IntoDataSource for &DataSource {
+    fn into_ds(self) -> DataSource {
+        self.clone()
+    }
+}
+
+impl<U> ToDataSourceVec for U
+where
+    U: IsContainer + IntoIterator,
+    U::Item: IntoDataSource,
+{
+    fn into_vec(self) -> Vec<DataSource> {
+        self.into_iter().map(|item| item.into_ds()).collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
 
 impl LocalExchangeEx {
-    /// Creates a new `LocalExchangeEx` from a list of [`DataSource`]s.
+    /// Creates a new `LocalExchangeEx` from one or more [`DataSource`]s.
+    ///
+    /// Accepts a single [`DataSource`], a `Vec<DataSource>`, a slice, or an array.
     ///
     /// All data sources must share the same [`Level`] and have overlapping
     /// time ranges. The shortest data source determines the total steps.
     ///
     /// # Panics
     ///
-    /// Panics if `data_sources` is empty, levels differ, or time ranges
+    /// Panics if `data_source` is empty, levels differ, or time ranges
     /// do not overlap.
-    pub fn new(data_sources: Vec<DataSource>) -> Self {
-        let axis = Axis::new(data_sources).expect("LocalExchangeEx::new: Axis creation failed");
+    pub fn new(data_source: impl ToDataSourceVec) -> Self {
+        let timeline = Timeline::new(data_source.into_vec())
+            .expect("LocalExchangeEx::new: Timeline creation failed");
 
-        let symbols: Vec<String> = axis
+        let symbols: Vec<String> = timeline
             .inner()
             .iter()
             .map(|ds| ds.metadata.symbol.clone())
@@ -148,10 +193,9 @@ impl LocalExchangeEx {
 
         Self {
             inner: Arc::new(Mutex::new(LocalExchangeExInner {
-                axis,
+                timeline,
                 klines,
                 cash: Decimal::from(10000),
-                default_leverage: 1,
                 leverages,
                 slippage: Decimal::ZERO,
                 positions: BTreeMap::new(),
@@ -178,11 +222,13 @@ impl LocalExchangeEx {
     /// [`Exchange::set_leverage`].
     pub fn leverage(self, leverage: u32) -> Self {
         let mut inner = self.inner.try_lock().unwrap();
-        inner.default_leverage = leverage;
+
         for lev in inner.leverages.values_mut() {
             *lev = leverage;
         }
+
         drop(inner);
+
         self
     }
 
@@ -198,18 +244,18 @@ impl LocalExchangeEx {
     /// falls in `[start_time, end_time]` (inclusive on both sides, matching
     /// [`DataSource::range`]).
     ///
-    /// Rebuilds the [`Axis`] from the filtered data sources.
+    /// Rebuilds the [`Timeline`] from the filtered data sources.
     pub fn range(self, start_time: u64, end_time: u64) -> Self {
         let mut inner = self.inner.try_lock().unwrap();
 
         let filtered: Vec<DataSource> = inner
-            .axis
+            .timeline
             .inner()
             .iter()
             .map(|ds| ds.range(start_time, end_time))
             .collect();
 
-        inner.axis = Axis::new(filtered).expect("range: Axis rebuild failed");
+        inner.timeline = Timeline::new(filtered).expect("range: timeline rebuild failed");
 
         drop(inner);
 
@@ -222,35 +268,20 @@ impl LocalExchangeEx {
 // ---------------------------------------------------------------------------
 
 impl LocalExchangeExInner {
-    /// Look up metadata for a symbol from the Axis.
     fn metadata(&self, symbol: &str) -> Option<&Metadata> {
-        self.axis
+        self.timeline
             .inner()
             .iter()
             .find(|ds| ds.metadata.symbol == symbol)
             .map(|ds| &ds.metadata)
     }
 
-    /// Get the current kline for a symbol.
     fn kline(&self, symbol: &str) -> &KLine {
-        // The klines map is populated during next(); if missing, return a
-        // zeroed default (should not happen in normal operation).
-        static DEFAULT: KLine = KLine {
-            time: 0,
-            open: Decimal::ZERO,
-            high: Decimal::ZERO,
-            low: Decimal::ZERO,
-            close: Decimal::ZERO,
-            volume: Decimal::ZERO,
-        };
-        self.klines.get(symbol).unwrap_or(&DEFAULT)
+        self.klines.get(symbol).unwrap()
     }
 
     fn leverage(&self, symbol: &str) -> u32 {
-        self.leverages
-            .get(symbol)
-            .copied()
-            .unwrap_or(self.default_leverage)
+        *self.leverages.get(symbol).unwrap()
     }
 
     fn calc_market_price_slippage(
@@ -334,16 +365,16 @@ impl LocalExchangeExInner {
         Ok(id)
     }
 
-    /// Cache klines at the current axis index, then advance.
+    /// Cache klines at the current timeline index, then advance.
     fn advance(&mut self) {
         // Read all klines at the current index BEFORE advancing.
-        if let Some(all_klines) = self.axis.all() {
+        if let Some(all_klines) = self.timeline.all() {
             for (sym, kline) in all_klines {
                 self.klines.insert(sym.to_string(), kline);
             }
         }
         // Advance for the next round.
-        self.axis.next();
+        self.timeline.next();
         self.update();
     }
 
@@ -1073,11 +1104,11 @@ impl Exchange for LocalExchangeEx {
         let is_pacemaker = inner.pacemaker.as_deref() == Some(symbol);
 
         if is_pacemaker {
-            if inner.axis.is_done() {
+            if inner.timeline.is_done() {
                 inner.exhausted = true;
                 return Ok(None);
             }
-            inner.advance(); // axis.all() → klines cache → axis.next() → update()
+            inner.advance();
         }
 
         Ok(inner.klines.get(symbol).cloned())

@@ -1,3 +1,4 @@
+use crate::util::IsContainer;
 use crate::{
     context::{Context, LevelCacheEntry, MultiSlices, MultiSymbolData, SymbolSlices},
     data::{KLine, KLineBuffer, Level},
@@ -238,7 +239,7 @@ where
     ///
     /// Returns an error if the target level is finer than the source level,
     /// or if the strategy/hook returns one.
-    pub async fn run(&mut self, symbol: impl ToVecString, level: Level) -> anyhow::Result<()> {
+    pub async fn run(&mut self, symbol: impl ToStringVec, level: Level) -> anyhow::Result<()> {
         let symbol = symbol.into_vec();
 
         if symbol.is_empty() {
@@ -314,7 +315,7 @@ where
         }
     }
 
-    async fn run_multi(&mut self, symbol: impl ToVecString, level: Level) -> anyhow::Result<()> {
+    async fn run_multi(&mut self, symbol: impl ToStringVec, level: Level) -> anyhow::Result<()> {
         let symbols = symbol.into_vec();
 
         if symbols.is_empty() {
@@ -467,30 +468,23 @@ where
     }
 }
 
-pub trait ToVecString {
+pub trait ToStringVec {
     fn into_vec(self) -> Vec<String>;
 }
 
-trait IsContainer {}
-
-impl<T> IsContainer for Vec<T> {}
-impl<T> IsContainer for &[T] {}
-impl<T, const N: usize> IsContainer for [T; N] {}
-impl<T, const N: usize> IsContainer for &[T; N] {}
-
-impl ToVecString for &str {
+impl ToStringVec for &str {
     fn into_vec(self) -> Vec<String> {
         vec![self.to_string()]
     }
 }
 
-impl ToVecString for String {
+impl ToStringVec for String {
     fn into_vec(self) -> Vec<String> {
         vec![self]
     }
 }
 
-impl<U> ToVecString for U
+impl<U> ToStringVec for U
 where
     U: IsContainer + IntoIterator,
     U::Item: ToString,

@@ -22,6 +22,13 @@ use warp::Filter;
 use warp::reply::Reply;
 use zip::ZipArchive;
 
+pub trait IsContainer {}
+
+impl<T> IsContainer for Vec<T> {}
+impl<T> IsContainer for &[T] {}
+impl<T, const N: usize> IsContainer for [T; N] {}
+impl<T, const N: usize> IsContainer for &[T; N] {}
+
 /// Downloads and merges K-line data from Binance into a single bin file
 ///
 /// # Arguments
