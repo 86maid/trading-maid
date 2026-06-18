@@ -810,16 +810,16 @@ pub fn t2s_utc(time: impl Into<u64>) -> String {
 /// Given `time = 1678845600000` (representing `2023/03/15 10:00:00`).
 /// The function should return `1678849599000`, which represents the timestamp for `2023/03/15 10:59:00`.
 pub fn get_last_time(time: u64, min_level: Level, max_level: Level) -> anyhow::Result<u64> {
+    if max_level == min_level {
+        return Ok(time);
+    }
+
     if !min_level.is_valid_sampling_target(max_level) {
         bail!(
             "invalid sampling target level: min_level: {}, max_level: {}",
             min_level,
             max_level
         );
-    }
-
-    if max_level == min_level {
-        return Ok(time);
     }
 
     Ok(get_time_range(get_time_range(time, max_level)?.1 - 1, min_level)?.0)

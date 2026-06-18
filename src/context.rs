@@ -156,13 +156,16 @@ pub(crate) fn slice_aligned_series<'a>(
 
     // 步骤1：计算 OHLCV 数据覆盖的时间范围 [ctx_start, ctx_end)
     //
-    // slices_time 按时间升序存储：
-    //   slices_time[0]                     = 最新 bar 的开始时间
-    //   slices_time[slices_time.len() - 1] = 最早 bar 的开始时间
+    // slices_time 是裸 &[u64]，未经过 Series::new 包装，按时间升序存储：
+    //   slices_time[0]                     = 最早 bar 的开始时间
+    //   slices_time[slices_time.len() - 1] = 最新 bar 的开始时间
     // ctx_start = 最早 bar 的开始时间（含）
     // ctx_end   = 最新 bar 的结束时间（不含）= 最新 bar 的 next
-    let ctx_start = slices_time[slices_time.len().saturating_sub(1)];
-    let ctx_end = get_time_range(slices_time[0], level).ok().map(|(_, next)| next).unwrap_or(u64::MAX);
+    let ctx_start = slices_time[0];
+    let ctx_end = get_time_range(*slices_time.last().unwrap(), level)
+        .ok()
+        .map(|(_, next)| next)
+        .unwrap_or(u64::MAX);
 
     // 步骤2：判断是否有交集
     //

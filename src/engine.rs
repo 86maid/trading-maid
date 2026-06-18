@@ -1,6 +1,8 @@
 use crate::util::{IsContainer, get_time_range, t2s};
 use crate::{
-    context::{Context, LevelCacheEntry, MultiSlices, MultiSymbolData, SymbolSlices, slice_aligned_series},
+    context::{
+        Context, LevelCacheEntry, MultiSlices, MultiSymbolData, SymbolSlices, slice_aligned_series,
+    },
     data::{AlignedSeries, KLine, KLineBuffer, Level},
     prelude::ExchangeWrapper,
     series::{Series, TimeSeries},
@@ -208,11 +210,24 @@ where
         }
     }
 
-    /// Run the engine: advance through k-lines, resample, and invoke the strategy.
+    /// Run the engine: advance through K-lines, resample, and invoke the strategy.
     ///
     /// The exchange provides data at its native level (e.g. 1m). The engine
     /// resamples to `level` (e.g. 1h) and calls the strategy on each completed
     /// bar at that target level.
+    ///
+    /// # Live vs Backtesting Mode
+    ///
+    /// The behavior of `exchange.next()` and `exchange.get_kline()` depends on
+    /// the exchange's live mode, as determined by [`is_live`](Exchange::is_live):
+    ///
+    /// - **Live mode (`is_live() == true`)**: The exchange always uses the
+    ///   strategy's `level` as the K-line period parameter when calling these methods.
+    ///
+    /// - **Backtesting mode (`is_live() == false`)**: The exchange uses
+    ///   `DataSource.metadata.level` as the K-line period parameter instead.
+    ///   If the strategy's `level` exceeds the data source's level, the engine
+    ///   automatically resamples the data before passing it to the strategy.
     ///
     /// # Single-symbol mode
     ///
@@ -260,8 +275,13 @@ where
         let symbol = &symbol[0];
         let metadata = self.exchange.get_metadata(symbol).await?;
         let exchange = ExchangeWrapper::new(self.exchange.clone());
+        let source_level = if self.exchange.is_live() {
+            level
+        } else {
+            metadata.level
+        };
 
-        if metadata.level.is_valid_sampling_target(level) {
+        if source_level.is_valid_sampling_target(level) {
             let mut min_level_buffer = Vec::new();
             let mut max_level_buffer = KLineBuffer::<N>::new();
             let mut next_time = None;
@@ -292,7 +312,7 @@ where
                                     let gap_start = next_time;
                                     let gap_end = v.time;
 
-                                    let filled_klines = self.exchange.get_kline(symbol, metadata.level, gap_start, gap_end).await.map_err(|e| {
+                                    let filled_klines = self.exchange.get_kline(symbol, source_level, gap_start, gap_end).await.map_err(|e| {
                                         anyhow!(
                                             "time discontinuity: failed to fill time gap via get_kline(): range [start, end): start {} ({}), end {} ({}): {}",
                                             gap_start,
@@ -326,7 +346,7 @@ where
                                     }
 
                                     if let Some(last) = filled_klines.last() {
-                                        let last_end = get_time_range(last.time, metadata.level).map_err(|e| {
+                                        let last_end = get_time_range(last.time, source_level).map_err(|e| {
                                             anyhow!(
                                                 "time discontinuity: get_kline() returned k-line with unexpected time: {}: {}",
                                                 last.time,
@@ -351,7 +371,7 @@ where
                         }
 
                         next_time = Some(
-                            get_time_range(v.time, metadata.level)
+                            get_time_range(v.time, source_level)
                                 .map_err(|e| {
                                     anyhow!(
                                         "next(): returned k-line has unexpected time: {}: {}",
@@ -368,7 +388,7 @@ where
 
                         // 检查当前 kline 是否是当前级别周期的最后一根
                         // 如果是，说明一根完整的策略级别 bar 已形成
-                        if v.time == get_last_time(v.time, metadata.level, level)? {
+                        if v.time == get_last_time(v.time, source_level, level)? {
                             // 将累积的小级别 kline 重采样为策略级别 bar
                             max_level_buffer.extend(resample(&min_level_buffer, level)?);
                             min_level_buffer.clear();
@@ -429,7 +449,7 @@ where
         } else {
             bail!(
                 "invalid sampling target level: min_level: {}, max_level: {}",
-                metadata.level,
+                source_level,
                 level
             );
         }
@@ -445,11 +465,16 @@ where
         let primary = &symbols[0];
         let metadata = self.exchange.get_metadata(primary).await?;
         let exchange = ExchangeWrapper::new(self.exchange.clone());
+        let source_level = if self.exchange.is_live() {
+            level
+        } else {
+            metadata.level
+        };
 
-        if !metadata.level.is_valid_sampling_target(level) {
+        if !source_level.is_valid_sampling_target(level) {
             bail!(
                 "run_multi: invalid sampling target level: min_level: {}, max_level: {}",
-                metadata.level,
+                source_level,
                 level
             );
         }
@@ -465,7 +490,7 @@ where
             let mut all_done = true;
 
             for sym in &symbols {
-                if let Some(kline) = self.exchange.next(sym.as_str(), metadata.level).await? {
+                if let Some(kline) = self.exchange.next(sym.as_str(), source_level).await? {
                     all_done = false;
 
                     let buf = buffers
@@ -481,7 +506,7 @@ where
                     // Accumulate for strategy-level resampling.
                     buf.min_level_accumulator.push(kline);
 
-                    if kline.time == get_last_time(kline.time, metadata.level, level)? {
+                    if kline.time == get_last_time(kline.time, source_level, level)? {
                         buf.strategy_level_buffer
                             .extend(resample(&buf.min_level_accumulator, level)?);
                         buf.min_level_accumulator.clear();
@@ -502,7 +527,7 @@ where
 
             if primary_bar_ready {
                 primary_bar_ready = false;
-                self.call_strategy(&buffers, primary, metadata.level, level, &exchange)
+                self.call_strategy(&buffers, primary, source_level, level, &exchange)
                     .await?;
             }
         }
@@ -583,12 +608,7 @@ where
             // 时间交集切片：如果 series 的时间范围和当前 OHLCV 数据
             // 没有重叠，slice_aligned_series 会返回空切片 []
             .map(|((_, _, name), aligned)| {
-                slice_aligned_series(
-                    aligned,
-                    name.as_str(),
-                    primary_slices.time,
-                    strategy_level,
-                )
+                slice_aligned_series(aligned, name.as_str(), primary_slices.time, strategy_level)
             })
             .collect();
 

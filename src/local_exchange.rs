@@ -1065,6 +1065,10 @@ impl LocalExchangeInner {
 
 #[async_trait::async_trait]
 impl Exchange for LocalExchange {
+    fn is_live(&self) -> bool {
+        false
+    }
+
     async fn next(&self, symbol: &str, level: Level) -> anyhow::Result<Option<KLine>> {
         let mut inner = self.inner.lock().await;
 

@@ -36,6 +36,19 @@ pub trait Exchange
 where
     Self: Send + Sync + 'static,
 {
+    /// Returns `true` if the exchange is live (i.e., not in backtesting mode).
+    ///
+    /// When `true`, the engine always calls `exchange.next()` and `exchange.get_kline()`
+    /// using the strategy's `level` as the K-line period parameter.
+    ///
+    /// When `false`, the engine calls `exchange.next()` and `exchange.get_kline()`
+    /// using `DataSource.metadata.level` as the K-line period parameter instead.
+    /// If the strategy's `level` is greater than `DataSource.metadata.level`,
+    /// the engine will automatically resample the data.
+    ///
+    /// See [`is_live`](crate::util::resample) for the resampling logic.
+    fn is_live(&self) -> bool;
+
     /// Gets the latest K-line data for the current trading symbol.
     ///
     /// # Behavior
