@@ -74,21 +74,21 @@ impl<'a> Context<'a> {
             .map(|(_, v)| v)?;
 
         let raw_context = if level == request_context.strategy_level {
-            &symbol_context.strategy_context
+            &symbol_context.strategy_level_kline_context
         } else if level == request_context.source_level {
-            &symbol_context.source_context
+            &symbol_context.source_level_kline_context
         } else {
             if !request_context.source_level.is_valid_sampling_target(level) {
                 return None;
             }
 
-            let mut level_kline = symbol_context.level_kline.borrow_mut();
+            let mut level_kline = symbol_context.level_kline_table.borrow_mut();
             let index = level_kline.iter().position(|(l, _)| *l == level);
 
             if index.is_none() {
                 let mut kline_buffer = KLineBuffer::new(0);
 
-                kline_buffer.extend(resample(symbol_context.source_kline, level).ok()?);
+                kline_buffer.extend(resample(symbol_context.source_kline_buffer, level).ok()?);
                 level_kline.push((level, kline_buffer));
             }
 
@@ -139,10 +139,10 @@ pub(crate) struct KLineContext<'a> {
 }
 
 pub(crate) struct SymbolContext<'a> {
-    pub strategy_context: KLineContext<'a>,
-    pub source_context: KLineContext<'a>,
-    pub source_kline: &'a [KLine],
-    pub level_kline: &'a RefCell<Vec<(Level, KLineBuffer)>>,
+    pub strategy_level_kline_context: KLineContext<'a>,
+    pub source_level_kline_context: KLineContext<'a>,
+    pub source_kline_buffer: &'a [KLine],
+    pub level_kline_table: &'a RefCell<Vec<(Level, KLineBuffer)>>,
 }
 
 pub(crate) struct RequestContext<'a> {

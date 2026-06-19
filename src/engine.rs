@@ -7,60 +7,6 @@ use std::sync::Arc;
 /// Default capacity for the k-line buffer in number of k-lines.
 pub const DEFAULT_SERIES_MAX_LENGTH: usize = 20000000;
 
-/// Per-symbol buffers used by [`run`](Engine::run) in multi-symbol mode.
-///
-/// Maintains columnar storage at the source level (built incrementally) and
-/// strategy level (built via resample).  A [`Vec<KLine>`] of source klines is
-/// kept for on-demand resampling to arbitrary levels via [`Context::request`].
-struct SymbolBuffer {
-    /// Accumulates source klines for the current strategy bar.
-    min_level_accumulator: Vec<KLine>,
-    /// All source klines received so far (for on-demand resampling).
-    source_klines: Vec<KLine>,
-    /// Columnar OHLCV at the source level (incremented each round).
-    source_level_buffer: KLineBuffer,
-    /// Columnar OHLCV at the strategy level (extended on bar completion).
-    strategy_level_buffer: KLineBuffer,
-    /// Lazily populated cache for levels other than source / strategy.
-    /// `RefCell` provides interior mutability because [`Context::request`] takes `&self`.
-    level_cache: RefCell<Vec<(Level, KLineBuffer)>>,
-}
-
-impl SymbolBuffer {
-    fn new(max_len: usize) -> Self {
-        Self {
-            min_level_accumulator: Vec::new(),
-            source_klines: Vec::new(),
-            source_level_buffer: KLineBuffer::new(max_len),
-            strategy_level_buffer: KLineBuffer::new(max_len),
-            level_cache: RefCell::new(Vec::new()),
-        }
-    }
-
-    fn as_context(&self) -> SymbolContext<'_> {
-        SymbolContext {
-            strategy_context: KLineContext {
-                time: &self.strategy_level_buffer.time,
-                open: &self.strategy_level_buffer.open,
-                high: &self.strategy_level_buffer.high,
-                low: &self.strategy_level_buffer.low,
-                close: &self.strategy_level_buffer.close,
-                volume: &self.strategy_level_buffer.volume,
-            },
-            source_context: KLineContext {
-                time: &self.source_level_buffer.time,
-                open: &self.source_level_buffer.open,
-                high: &self.source_level_buffer.high,
-                low: &self.source_level_buffer.low,
-                close: &self.source_level_buffer.close,
-                volume: &self.source_level_buffer.volume,
-            },
-            source_kline: &self.source_klines,
-            level_kline: &self.level_cache,
-        }
-    }
-}
-
 /// A hook function called after each k-line is processed by the strategy.
 ///
 /// Unlike [`on_error`](Engine::on_error) which only fires on strategy errors,
@@ -486,16 +432,16 @@ where
 
                     let buffer = &mut symbol_buffer[i].1;
 
-                    buffer.source_klines.push(kline);
-                    buffer.source_level_buffer.push(kline);
-                    buffer.min_level_accumulator.push(kline);
+                    buffer.source_kline_resample_buffer.push(kline);
+                    buffer.source_kline_buffer.push(kline);
+                    buffer.source_level_kline_buffer.push(kline);
 
                     if kline.time == get_last_time(kline.time, source_level, level)? {
                         buffer
-                            .strategy_level_buffer
-                            .extend(resample(&buffer.min_level_accumulator, level)?);
+                            .strategy_level_kline_buffer
+                            .extend(resample(&buffer.source_kline_resample_buffer, level)?);
 
-                        buffer.min_level_accumulator.clear();
+                        buffer.source_kline_resample_buffer.clear();
 
                         // TODO: 理论上不用判断，因为时间线是同步，这是一个问题
                         if symbol == primary {
@@ -515,6 +461,7 @@ where
 
             if primary_bar_ready {
                 primary_bar_ready = false;
+
                 self.call_strategy(&symbol_buffer, primary, source_level, level, &exchange)
                     .await?;
             }
@@ -548,7 +495,7 @@ where
             .map(|(_, v)| v)
             .unwrap();
 
-        let primary_kline_context = &primary_symbol_context.strategy_context;
+        let primary_kline_context = &primary_symbol_context.strategy_level_kline_context;
 
         let series_table = SeriesTable(
             self.series
@@ -612,5 +559,48 @@ where
 {
     fn into_vec(self) -> Vec<String> {
         self.into_iter().map(|item| item.to_string()).collect()
+    }
+}
+
+struct SymbolBuffer {
+    source_kline_resample_buffer: Vec<KLine>,
+    source_kline_buffer: Vec<KLine>,
+    source_level_kline_buffer: KLineBuffer,
+    strategy_level_kline_buffer: KLineBuffer,
+    level_kline_table: RefCell<Vec<(Level, KLineBuffer)>>,
+}
+
+impl SymbolBuffer {
+    fn new(max_len: usize) -> Self {
+        Self {
+            source_kline_resample_buffer: Vec::new(),
+            source_kline_buffer: Vec::new(),
+            source_level_kline_buffer: KLineBuffer::new(max_len),
+            strategy_level_kline_buffer: KLineBuffer::new(max_len),
+            level_kline_table: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn as_context(&self) -> SymbolContext<'_> {
+        SymbolContext {
+            strategy_level_kline_context: KLineContext {
+                time: &self.strategy_level_kline_buffer.time,
+                open: &self.strategy_level_kline_buffer.open,
+                high: &self.strategy_level_kline_buffer.high,
+                low: &self.strategy_level_kline_buffer.low,
+                close: &self.strategy_level_kline_buffer.close,
+                volume: &self.strategy_level_kline_buffer.volume,
+            },
+            source_level_kline_context: KLineContext {
+                time: &self.source_level_kline_buffer.time,
+                open: &self.source_level_kline_buffer.open,
+                high: &self.source_level_kline_buffer.high,
+                low: &self.source_level_kline_buffer.low,
+                close: &self.source_level_kline_buffer.close,
+                volume: &self.source_level_kline_buffer.volume,
+            },
+            source_kline_buffer: &self.source_kline_buffer,
+            level_kline_table: &self.level_kline_table,
+        }
     }
 }
