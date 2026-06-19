@@ -116,7 +116,7 @@ impl<'a> Context<'a> {
             exchange: self.exchange,
             series: SeriesTable(
                 request_context
-                    .series_table
+                    .series
                     .iter()
                     .filter(|((s, l, _), _)| s == symbol && *l == level)
                     .map(|((_, _, name), aligned)| {
@@ -149,7 +149,7 @@ pub(crate) struct RequestContext<'a> {
     pub symbol: Vec<(String, SymbolContext<'a>)>,
     pub strategy_level: Level,
     pub source_level: Level,
-    pub series_table: &'a Vec<((String, Level, String), AlignedSeries)>,
+    pub series: &'a Vec<((String, Level, String), AlignedSeries)>,
 }
 
 pub(crate) fn clip_series<'a>(

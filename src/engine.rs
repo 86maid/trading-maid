@@ -36,6 +36,29 @@ impl SymbolBuffer {
             level_cache: RefCell::new(Vec::new()),
         }
     }
+
+    fn as_context(&self) -> SymbolContext<'_> {
+        SymbolContext {
+            strategy_context: KLineContext {
+                time: &self.strategy_level_buffer.time,
+                open: &self.strategy_level_buffer.open,
+                high: &self.strategy_level_buffer.high,
+                low: &self.strategy_level_buffer.low,
+                close: &self.strategy_level_buffer.close,
+                volume: &self.strategy_level_buffer.volume,
+            },
+            source_context: KLineContext {
+                time: &self.source_level_buffer.time,
+                open: &self.source_level_buffer.open,
+                high: &self.source_level_buffer.high,
+                low: &self.source_level_buffer.low,
+                close: &self.source_level_buffer.close,
+                volume: &self.source_level_buffer.volume,
+            },
+            source_kline: &self.source_klines,
+            level_kline: &self.level_cache,
+        }
+    }
 }
 
 /// A hook function called after each k-line is processed by the strategy.
@@ -447,7 +470,7 @@ where
             );
         }
 
-        let mut buffers = symbols
+        let mut symbol_buffer = symbols
             .iter()
             .map(|s| (s.clone(), SymbolBuffer::new(N)))
             .collect::<Vec<_>>();
@@ -457,28 +480,25 @@ where
         loop {
             let mut all_done = true;
 
-            for sym in &symbols {
-                if let Some(kline) = self.exchange.next(sym.as_str(), source_level).await? {
+            for (i, symbol) in symbols.iter().enumerate() {
+                if let Some(kline) = self.exchange.next(symbol.as_str(), source_level).await? {
                     all_done = false;
 
-                    let buf = buffers
-                        .iter_mut()
-                        .find(|(s, _)| s == sym)
-                        .map(|(_, b)| b)
-                        .unwrap();
+                    let buffer = &mut symbol_buffer[i].1;
 
-                    // Keep source klines for on-demand resampling.
-                    buf.source_klines.push(kline);
-                    // Push to source-level columnar buffer.
-                    buf.source_level_buffer.push(kline);
-                    // Accumulate for strategy-level resampling.
-                    buf.min_level_accumulator.push(kline);
+                    buffer.source_klines.push(kline);
+                    buffer.source_level_buffer.push(kline);
+                    buffer.min_level_accumulator.push(kline);
 
                     if kline.time == get_last_time(kline.time, source_level, level)? {
-                        buf.strategy_level_buffer
-                            .extend(resample(&buf.min_level_accumulator, level)?);
-                        buf.min_level_accumulator.clear();
-                        if sym == primary {
+                        buffer
+                            .strategy_level_buffer
+                            .extend(resample(&buffer.min_level_accumulator, level)?);
+
+                        buffer.min_level_accumulator.clear();
+
+                        // TODO: 理论上不用判断，因为时间线是同步，这是一个问题
+                        if symbol == primary {
                             primary_bar_ready = true;
                         }
                     }
@@ -495,7 +515,7 @@ where
 
             if primary_bar_ready {
                 primary_bar_ready = false;
-                self.call_strategy(&buffers, primary, source_level, level, &exchange)
+                self.call_strategy(&symbol_buffer, primary, source_level, level, &exchange)
                     .await?;
             }
         }
@@ -512,68 +532,31 @@ where
         // 步骤1：为每个标的构建 MultiSymbolData
         let symbol_data: Vec<(String, SymbolContext)> = buffers
             .iter()
-            .map(|(sym, buf)| {
-                (
-                    sym.clone(),
-                    SymbolContext {
-                        // 策略级别的 OHLCV 切片（预构建，不涉及重采样）
-                        strategy_context: KLineContext {
-                            time: &buf.strategy_level_buffer.time,
-                            open: &buf.strategy_level_buffer.open,
-                            high: &buf.strategy_level_buffer.high,
-                            low: &buf.strategy_level_buffer.low,
-                            close: &buf.strategy_level_buffer.close,
-                            volume: &buf.strategy_level_buffer.volume,
-                        },
-                        // 源级别的 OHLCV 切片（预构建，不涉及重采样）
-                        source_context: KLineContext {
-                            time: &buf.source_level_buffer.time,
-                            open: &buf.source_level_buffer.open,
-                            high: &buf.source_level_buffer.high,
-                            low: &buf.source_level_buffer.low,
-                            close: &buf.source_level_buffer.close,
-                            volume: &buf.source_level_buffer.volume,
-                        },
-                        // 保留源 kline 原始数据，供 Context::request()
-                        // 按需重采样到其他 level
-                        source_kline: &buf.source_klines,
-                        // 按需重采样的缓存，RefCell 提供内部可变性
-                        level_kline: &buf.level_cache,
-                    },
-                )
-            })
+            .map(|(sym, buf)| (sym.clone(), buf.as_context()))
             .collect();
 
-        // 步骤2：组装 MultiSlices（传递给 Context::request 使用）
-        let multi = RequestContext {
+        // 步骤2：组装 RequestContext
+        let request_ctx = RequestContext {
             symbol: symbol_data,
             strategy_level,
             source_level,
-            series_table: &self.series, // 所有注册的辅助 series
+            series: &self.series,
         };
 
         // 步骤3：取出主标的策略级别切片
-        let primary_data = multi
+        let primary_data = request_ctx
             .symbol
             .iter()
             .find(|(s, _)| s == primary)
             .map(|(_, v)| v)
             .unwrap();
         let primary_slices = &primary_data.strategy_context;
+
         // 步骤4：构建辅助 series 列表
-        //
-        // 过滤条件：只取 (symbol == 主标, level == 策略级别) 的 series。
-        // 这意味着辅助 series 只在注册时的 level 下可见——
-        // 例如资金费率对齐到 Hour1 后，在 Hour4 上下文中不可见。
-        // 标量数据无法像 K 线那样重采样，跨 level 暴露没有普适的
-        // 正确语义。
         let series_table = SeriesTable(
             self.series
                 .iter()
-                // 过滤：symbol 和 level 必须同时匹配
                 .filter(|((s, l, _), _)| s == primary && *l == strategy_level)
-                // 时间交集切片：如果 series 的时间范围和当前 OHLCV 数据
-                // 没有重叠，slice_aligned_series 会返回空切片 []
                 .map(|((_, _, name), aligned)| {
                     clip_series(aligned, primary_slices.time, name.as_str(), strategy_level)
                 })
@@ -581,9 +564,6 @@ where
         );
 
         // 步骤5：组装 Context
-        //
-        // multi: Some(&multi) 使得策略内可以通过
-        // `cx.request("ETHUSDT", Hour1)` 访问其他标的的数据
         let context = Context {
             time: TimeSeries::new(primary_slices.time),
             open: Series::new(primary_slices.open),
@@ -593,7 +573,7 @@ where
             volume: Series::new(primary_slices.volume),
             exchange,
             series: series_table,
-            request_context: Some(&multi),
+            request_context: Some(&request_ctx),
         };
 
         if let Err(e) = self.strategy.next(&context).await {
