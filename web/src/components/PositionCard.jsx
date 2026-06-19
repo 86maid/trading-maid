@@ -145,7 +145,7 @@ export default function PositionCard({ position, scrollToTime, isFirst }) {
             {position.total_profit}
           </Text>
         </Descriptions.Item>
-        <Descriptions.Item label={`${t('Rate of Return', '收益率', isZh)}%`}>
+        <Descriptions.Item label={`${t('Rate of Return', '收益率', isZh)}`}>
           <Text
             strong
             style={{
