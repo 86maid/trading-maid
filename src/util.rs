@@ -578,11 +578,6 @@ pub fn align_to_series(
         bail!("empty data");
     }
 
-    /// Detect the source [`Level`] of `data` by checking whether the first two
-    /// timestamps align to a known level boundary.
-    ///
-    /// Returns `Some(level)` if `get_time_range(t0, candidate).1 == t1` for one
-    /// of the 15 known [`Level`] variants, `None` otherwise.
     fn detect_level(data: &[(u64, Decimal)]) -> Option<Level> {
         if data.len() < 2 {
             return None;
@@ -618,8 +613,7 @@ pub fn align_to_series(
         if let Some(data_level) = detect_level(data) {
             if data_level < level {
                 bail!(
-                    "align_to_series: source level {} is finer than target {}, \
-                     cannot aggregate sparse scalar data",
+                    "align_to_series: source level {} is finer than target {}, cannot aggregate sparse scalar data",
                     data_level,
                     level,
                 );
@@ -650,6 +644,12 @@ pub fn align_to_series(
     let mut index = 0;
     let mut value = Decimal::ZERO;
 
+    let advance: fn(u64, Level) -> anyhow::Result<u64> = if level == Level::Month1 {
+        |current, level| get_time_range(current, level).map(|r| r.1)
+    } else {
+        |current, level| Ok(current + level.interval_millis())
+    };
+
     while current < end {
         while index < data.len() && data[index].0 < next {
             value = data[index].1;
@@ -658,7 +658,7 @@ pub fn align_to_series(
 
         series.push(value);
         current = next;
-        next = get_time_range(current, level)?.1;
+        next = advance(current, level)?;
     }
 
     Ok(AlignedSeries {
