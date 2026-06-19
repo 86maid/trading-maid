@@ -2,6 +2,27 @@ use crate::prelude::*;
 use std::cell::RefCell;
 use std::ops::{Deref, Index};
 
+pub struct SeriesTable<'a>(pub(crate) Vec<(&'a str, &'a [Decimal])>);
+
+impl<'a> Deref for SeriesTable<'a> {
+    type Target = Vec<(&'a str, &'a [Decimal])>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> Index<&str> for SeriesTable<'a> {
+    type Output = Series;
+
+    fn index(&self, key: &str) -> &Self::Output {
+        self.iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, data)| Series::new(data))
+            .unwrap_or_else(|| Series::new(&[]))
+    }
+}
+
 pub struct Context<'a> {
     pub time: &'a TimeSeries,
     pub open: &'a Series,
@@ -10,7 +31,7 @@ pub struct Context<'a> {
     pub close: &'a Series,
     pub volume: &'a Series,
     pub exchange: &'a ExchangeWrapper,
-    pub series: Vec<(&'a str, &'a [Decimal])>,
+    pub series: SeriesTable<'a>,
     pub(crate) request_context: Option<&'a RequestContext<'a>>,
 }
 
@@ -93,14 +114,16 @@ impl<'a> Context<'a> {
             close: Series::new(raw_context.close),
             volume: Series::new(raw_context.volume),
             exchange: self.exchange,
-            series: request_context
-                .series
-                .iter()
-                .filter(|((s, l, _), _)| s == symbol && *l == level)
-                .map(|((_, _, name), aligned)| {
-                    clip_series(aligned, name.as_str(), raw_context.time, level)
-                })
-                .collect(),
+            series: SeriesTable(
+                request_context
+                    .series_table
+                    .iter()
+                    .filter(|((s, l, _), _)| s == symbol && *l == level)
+                    .map(|((_, _, name), aligned)| {
+                        clip_series(aligned, raw_context.time, name.as_str(), level)
+                    })
+                    .collect(),
+            ),
             request_context: Some(request_context),
         })
     }
@@ -126,71 +149,53 @@ pub(crate) struct RequestContext<'a> {
     pub symbol: Vec<(String, SymbolContext<'a>)>,
     pub strategy_level: Level,
     pub source_level: Level,
-    pub series: &'a Vec<((String, Level, String), AlignedSeries)>,
-}
-
-pub(crate) fn bar_offset_by_level(start: u64, end: u64, level: Level) -> usize {
-    if level == Level::Month1 {
-        // 月级别：逐月迭代，chrono 自动处理 28/29/30/31 天的差异
-        let mut count = 0;
-        let mut cur = start;
-        while cur < end {
-            if let Ok((_, next)) = get_time_range(cur, level) {
-                cur = next;
-                count += 1;
-            } else {
-                break;
-            }
-        }
-        return count;
-    }
-    // 非月级别：间隔固定，直接做除法
-    ((end - start) / level.interval_millis()) as usize
+    pub series_table: &'a Vec<((String, Level, String), AlignedSeries)>,
 }
 
 pub(crate) fn clip_series<'a>(
-    aligned: &'a AlignedSeries,
+    aligned_series: &'a AlignedSeries,
+    strategy_time_slice: &[u64],
     name: &'a str,
-    time_slice: &[u64],
     level: Level,
 ) -> (&'a str, &'a [Decimal]) {
-    // 前置检查：level 不匹配 / 时间列为空 → 返回空
-    if aligned.level != level || time_slice.is_empty() {
+    if aligned_series.level != level || strategy_time_slice.is_empty() {
         return (name, &[]);
     }
 
-    // 步骤1：计算 OHLCV 数据覆盖的时间范围 [ctx_start, ctx_end)
-    //
-    // time_slice 是裸 &[u64]，未经过 Series::new 包装，按时间升序存储：
-    //   time_slice[0]                     = 最早 bar 的开始时间
-    //   time_slice[time_slice.len() - 1] = 最新 bar 的开始时间
-    // ctx_start = 最早 bar 的开始时间（含）
-    // ctx_end   = 最新 bar 的结束时间（不含）= 最新 bar 的 next
-    let ctx_start = time_slice[0];
-    let ctx_end = get_time_range(*time_slice.last().unwrap(), level)
+    let strategy_start = strategy_time_slice[0];
+    let strategy_end = get_time_range(*strategy_time_slice.last().unwrap(), level)
         .ok()
         .map(|(_, next)| next)
         .unwrap_or(u64::MAX);
 
-    // 步骤2：判断是否有交集
-    //
-    // 两个区间都是 [start, end) 左闭右开。
-    // 有交集的充要条件：ctx_end > aligned.start && ctx_start < aligned.end
-    if !(ctx_end > aligned.start && ctx_start < aligned.end) {
+    if !(strategy_end > aligned_series.start && strategy_start < aligned_series.end) {
         return (name, &[]);
     }
 
-    // 步骤3：只限制右边界，不限制左边界。
-    //
-    // 右边界必须对齐到 OHLCV 当前时间，不能看到"未来"的 bar。
-    // 左边界不切——aligned.series 从 aligned.start 开始全保留，
-    // 这样 cx[name][n] 可以回溯到交集之前的历史数据。
-    //
-    // 例如 aligned 覆盖 1月~6月，OHLCV 覆盖 3月~5月：
-    //   cx[name][0] = 5月，cx[name][1] = 4月，...，一路拿到 1月
-    let inter_end = ctx_end.min(aligned.end);
-    let take = bar_offset_by_level(aligned.start, inter_end, level);
+    // 只限制右边界，不限制左边界
+    // 右边界必须对齐到策略的当前时间，不能看到未来的 bar
+    let end = strategy_end.min(aligned_series.end);
+    let take = bar_offset_by_level(aligned_series.start, end, level);
 
-    // 步骤4：返回切片，从 aligned.series 开头取 take 个值
-    (name, &aligned.series[..take])
+    pub(crate) fn bar_offset_by_level(start: u64, end: u64, level: Level) -> usize {
+        if level == Level::Month1 {
+            let mut count = 0;
+            let mut current = start;
+
+            while current < end {
+                if let Ok((_, next)) = get_time_range(current, level) {
+                    current = next;
+                    count += 1;
+                } else {
+                    break;
+                }
+            }
+
+            return count;
+        }
+
+        ((end - start) / level.interval_millis()) as usize
+    }
+
+    (name, &aligned_series.series[..take])
 }

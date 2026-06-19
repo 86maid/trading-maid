@@ -386,19 +386,20 @@ where
                                 close: Series::new(&max_level_buffer.close),
                                 volume: Series::new(&max_level_buffer.volume),
                                 exchange: &exchange,
-                                series: self
-                                    .series
-                                    .iter()
-                                    .filter(|((s, l, _), _)| s == symbol && *l == level)
-                                    .map(|((_, _, name), aligned)| {
-                                        clip_series(
-                                            aligned,
-                                            name.as_str(),
-                                            &max_level_buffer.time,
-                                            level,
-                                        )
-                                    })
-                                    .collect(),
+                                series: SeriesTable(
+                                    self.series
+                                        .iter()
+                                        .filter(|((s, l, _), _)| s == symbol && *l == level)
+                                        .map(|((_, _, name), aligned)| {
+                                            clip_series(
+                                                aligned,
+                                                &max_level_buffer.time,
+                                                name.as_str(),
+                                                level,
+                                            )
+                                        })
+                                        .collect(),
+                                ),
                                 request_context: None,
                             };
 
@@ -548,7 +549,7 @@ where
             symbol: symbol_data,
             strategy_level,
             source_level,
-            series: &self.series, // 所有注册的辅助 series
+            series_table: &self.series, // 所有注册的辅助 series
         };
 
         // 步骤3：取出主标的策略级别切片
@@ -566,17 +567,18 @@ where
         // 例如资金费率对齐到 Hour1 后，在 Hour4 上下文中不可见。
         // 标量数据无法像 K 线那样重采样，跨 level 暴露没有普适的
         // 正确语义。
-        let series: Vec<(&str, &[Decimal])> = self
-            .series
-            .iter()
-            // 过滤：symbol 和 level 必须同时匹配
-            .filter(|((s, l, _), _)| s == primary && *l == strategy_level)
-            // 时间交集切片：如果 series 的时间范围和当前 OHLCV 数据
-            // 没有重叠，slice_aligned_series 会返回空切片 []
-            .map(|((_, _, name), aligned)| {
-                clip_series(aligned, name.as_str(), primary_slices.time, strategy_level)
-            })
-            .collect();
+        let series_table = SeriesTable(
+            self.series
+                .iter()
+                // 过滤：symbol 和 level 必须同时匹配
+                .filter(|((s, l, _), _)| s == primary && *l == strategy_level)
+                // 时间交集切片：如果 series 的时间范围和当前 OHLCV 数据
+                // 没有重叠，slice_aligned_series 会返回空切片 []
+                .map(|((_, _, name), aligned)| {
+                    clip_series(aligned, primary_slices.time, name.as_str(), strategy_level)
+                })
+                .collect(),
+        );
 
         // 步骤5：组装 Context
         //
@@ -590,7 +592,7 @@ where
             close: Series::new(primary_slices.close),
             volume: Series::new(primary_slices.volume),
             exchange,
-            series,
+            series: series_table,
             request_context: Some(&multi),
         };
 
