@@ -11,7 +11,7 @@ pub struct Context<'a> {
     pub volume: &'a Series,
     pub exchange: &'a ExchangeWrapper,
     pub series: Vec<(&'a str, &'a [Decimal])>,
-    pub(crate) multi: Option<&'a MultiSlices<'a>>,
+    pub(crate) multi: Option<&'a RequestContext<'a>>,
 }
 
 impl<'a> Deref for Context<'a> {
@@ -49,7 +49,7 @@ impl<'a> Context<'a> {
         let multi = self.multi?;
         // 查找目标标的的数据
         let sym = multi
-            .symbols
+            .symbol
             .iter()
             .find(|(s, _)| s == symbol)
             .map(|(_, v)| v)?;
@@ -68,18 +68,18 @@ impl<'a> Context<'a> {
                 return None;
             }
 
-            let mut cache = sym.level_cache.borrow_mut();
+            let mut cache = sym.level_kline.borrow_mut();
             let cache_idx = cache.iter().position(|(l, _)| *l == level);
             if cache_idx.is_none() {
                 // 缓存未命中：重采样并存入缓存
                 let resampled = resample(sym.source_kline, level).ok()?;
-                let mut entry = LevelCacheEntry::default();
+                let mut entry = LevelKLine::default();
                 entry.extend_from_klines(&resampled);
                 cache.push((level, entry));
             }
             // 生命周期延长：缓存存在 SymbolBuffer → run_multi 的栈上，
             // 比策略调用活得久，这里 transmute 到 'a 是安全的
-            let entry: &'a LevelCacheEntry =
+            let entry: &'a LevelKLine =
                 unsafe { std::mem::transmute(&cache.iter().find(|(l, _)| *l == level).unwrap().1) };
 
             &RawContext {
@@ -109,7 +109,7 @@ impl<'a> Context<'a> {
             low: Series::new(slices.low),
             close: Series::new(slices.close),
             volume: Series::new(slices.volume),
-            exchange: multi.exchange,
+            exchange: self.exchange,
             series,
             multi: Some(multi),
         })
@@ -126,7 +126,7 @@ pub(crate) struct RawContext<'a> {
 }
 
 #[derive(Default)]
-pub(crate) struct LevelCacheEntry {
+pub(crate) struct LevelKLine {
     pub time: Vec<u64>,
     pub open: Vec<Decimal>,
     pub high: Vec<Decimal>,
@@ -135,7 +135,7 @@ pub(crate) struct LevelCacheEntry {
     pub volume: Vec<Decimal>,
 }
 
-impl LevelCacheEntry {
+impl LevelKLine {
     fn extend_from_klines(&mut self, klines: &[KLine]) {
         for k in klines {
             self.time.push(k.time);
@@ -148,16 +148,15 @@ impl LevelCacheEntry {
     }
 }
 
-pub(crate) struct MultiSymbolData<'a> {
+pub(crate) struct SymbolContext<'a> {
     pub strategy: RawContext<'a>,
     pub source: RawContext<'a>,
     pub source_kline: &'a [KLine],
-    pub level_cache: &'a RefCell<Vec<(Level, LevelCacheEntry)>>,
+    pub level_kline: &'a RefCell<Vec<(Level, LevelKLine)>>,
 }
 
-pub(crate) struct MultiSlices<'a> {
-    pub symbols: Vec<(String, MultiSymbolData<'a>)>,
-    pub exchange: &'a ExchangeWrapper,
+pub(crate) struct RequestContext<'a> {
+    pub symbol: Vec<(String, SymbolContext<'a>)>,
     pub strategy_level: Level,
     pub source_level: Level,
     pub series: &'a Vec<((String, Level, String), AlignedSeries)>,

@@ -25,7 +25,7 @@ struct SymbolBuffer<const N: usize> {
     strategy_level_buffer: KLineBuffer<N>,
     /// Lazily populated cache for levels other than source / strategy.
     /// `RefCell` provides interior mutability because [`Context::request`] takes `&self`.
-    level_cache: RefCell<Vec<(Level, LevelCacheEntry)>>,
+    level_cache: RefCell<Vec<(Level, LevelKLine)>>,
 }
 
 impl<const N: usize> SymbolBuffer<N> {
@@ -513,12 +513,12 @@ where
         exchange: &ExchangeWrapper,
     ) -> anyhow::Result<()> {
         // 步骤1：为每个标的构建 MultiSymbolData
-        let symbol_data: Vec<(String, MultiSymbolData)> = buffers
+        let symbol_data: Vec<(String, SymbolContext)> = buffers
             .iter()
             .map(|(sym, buf)| {
                 (
                     sym.clone(),
-                    MultiSymbolData {
+                    SymbolContext {
                         // 策略级别的 OHLCV 切片（预构建，不涉及重采样）
                         strategy: RawContext {
                             time: &buf.strategy_level_buffer.time,
@@ -541,16 +541,15 @@ where
                         // 按需重采样到其他 level
                         source_kline: &buf.source_klines,
                         // 按需重采样的缓存，RefCell 提供内部可变性
-                        level_cache: &buf.level_cache,
+                        level_kline: &buf.level_cache,
                     },
                 )
             })
             .collect();
 
         // 步骤2：组装 MultiSlices（传递给 Context::request 使用）
-        let multi = MultiSlices {
-            symbols: symbol_data,
-            exchange,
+        let multi = RequestContext {
+            symbol: symbol_data,
             strategy_level,
             source_level,
             series: &self.series, // 所有注册的辅助 series
@@ -558,7 +557,7 @@ where
 
         // 步骤3：取出主标的策略级别切片
         let primary_data = multi
-            .symbols
+            .symbol
             .iter()
             .find(|(s, _)| s == primary)
             .map(|(_, v)| v)
