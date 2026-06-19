@@ -56,7 +56,7 @@ impl<T, const N: usize> IsContainer for &[T; N] {}
 /// During merging, only the first 6 columns are kept (timestamp, open, high, low, close, volume)
 pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<PathBuf> {
     fn parse_symbol(input: &str) -> anyhow::Result<(&str, &str, &str)> {
-        let part_list: Vec<&str> = input.split('/').collect();
+        let part_list = input.split('/').collect::<Vec<_>>();
 
         match part_list.as_slice() {
             [symbol, interval] => Ok((symbol, interval, "futures")),
@@ -205,11 +205,11 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
         marged_lock_path: &Path,
         month_list: &[String],
     ) -> anyhow::Result<()> {
-        let mut csv_file_list: Vec<PathBuf> = month_list
+        let mut csv_file_list = month_list
             .iter()
             .map(|v| monthly_directory.join(format!("{}.csv", v)))
             .filter(|p| p.exists())
-            .collect();
+            .collect::<Vec<_>>();
 
         csv_file_list.sort();
 
@@ -436,11 +436,11 @@ pub async fn get_or_download_funding_rate_path(
         // Only merge the months we actually requested, not everything in the
         // directory (which may contain data from previous calls with a larger
         // month_count).
-        let mut csv_file_list: Vec<PathBuf> = month_list
+        let mut csv_file_list = month_list
             .iter()
             .map(|v| monthly_directory.join(format!("{}-fundingRate-{}.csv", base_symbol, v)))
             .filter(|p| p.exists())
-            .collect();
+            .collect::<Vec<_>>();
 
         csv_file_list.sort();
 

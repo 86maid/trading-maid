@@ -492,7 +492,8 @@ impl<'de> Deserialize<'de> for DataSource {
 }
 
 #[derive(Debug, Clone)]
-pub struct KLineBuffer<const N: usize> {
+pub struct KLineBuffer {
+    pub max_size: usize,
     pub time: Vec<u64>,
     pub open: Vec<Decimal>,
     pub high: Vec<Decimal>,
@@ -501,15 +502,10 @@ pub struct KLineBuffer<const N: usize> {
     pub volume: Vec<Decimal>,
 }
 
-impl<const N: usize> Default for KLineBuffer<N> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<const N: usize> KLineBuffer<N> {
-    pub fn new() -> Self {
+impl KLineBuffer {
+    pub fn new(max_len: usize) -> Self {
         Self {
+            max_size: max_len,
             time: Vec::new(),
             open: Vec::new(),
             high: Vec::new(),
@@ -520,8 +516,8 @@ impl<const N: usize> KLineBuffer<N> {
     }
 
     pub fn push(&mut self, k: KLine) {
-        if N > 0 && self.time.len() >= N {
-            let remove = self.time.len() + 1 - N;
+        if self.max_size > 0 && self.time.len() >= self.max_size {
+            let remove = self.time.len() + 1 - self.max_size;
 
             self.time.drain(0..remove);
             self.open.drain(0..remove);
@@ -544,7 +540,7 @@ impl<const N: usize> KLineBuffer<N> {
             return;
         }
 
-        if N == 0 {
+        if self.max_size == 0 {
             let i = k.iter();
 
             self.time.extend(i.clone().map(|v| v.time));
@@ -553,11 +549,12 @@ impl<const N: usize> KLineBuffer<N> {
             self.low.extend(i.clone().map(|v| v.low));
             self.close.extend(i.clone().map(|v| v.close));
             self.volume.extend(i.clone().map(|v| v.volume));
+
             return;
         }
 
-        let incoming = if k.len() > N {
-            &k[k.len() - N..]
+        let incoming = if k.len() > self.max_size {
+            &k[k.len() - self.max_size..]
         } else {
             &k[..]
         };
@@ -566,7 +563,7 @@ impl<const N: usize> KLineBuffer<N> {
             .time
             .len()
             .saturating_add(incoming.len())
-            .saturating_sub(N);
+            .saturating_sub(self.max_size);
 
         if need_remove > 0 {
             self.time.drain(0..need_remove);

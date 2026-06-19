@@ -173,24 +173,16 @@ impl LocalExchange {
         let timeline = Timeline::new(data_source.into_vec())
             .expect("LocalExchange::new: timeline creation failed");
 
-        let symbols: Vec<String> = timeline
+        let leverage = timeline
             .inner()
             .iter()
-            .map(|v| v.metadata.symbol.clone())
+            .map(|v| (v.metadata.symbol.clone(), 1))
             .collect();
-
-        let mut klines = Vec::new();
-        let mut leverage = Vec::new();
-
-        for symbol in &symbols {
-            klines.push((symbol.clone(), KLine::default()));
-            leverage.push((symbol.clone(), 1));
-        }
 
         Self {
             inner: Arc::new(Mutex::new(LocalExchangeInner {
                 timeline,
-                klines,
+                klines: Vec::new(),
                 cash: Decimal::from(10000),
                 leverage,
                 slippage: Decimal::ZERO,
@@ -332,7 +324,9 @@ impl LocalExchangeInner {
         if !need.is_zero() && self.cash < need {
             bail!("cash shortage, need {}, balance {}", need, self.cash);
         }
+        
         self.cash -= need;
+
         Ok(())
     }
 
@@ -405,7 +399,7 @@ impl LocalExchangeInner {
             self.update_order(&id, &mut normal_queue);
         }
 
-        let position_update: Vec<(String, Decimal, Decimal)> = self
+        let position_update = self
             .position
             .iter()
             .map(|(symbol, v)| {
@@ -428,7 +422,7 @@ impl LocalExchangeInner {
 
                 (symbol.clone(), profit, liquidation_price)
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         for (symbol, profit, liquidation_price) in position_update {
             if let Some(position) = self.position.iter_mut().find(|(v, _)| v == &symbol) {

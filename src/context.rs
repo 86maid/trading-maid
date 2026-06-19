@@ -11,7 +11,7 @@ pub struct Context<'a> {
     pub volume: &'a Series,
     pub exchange: &'a ExchangeWrapper,
     pub series: Vec<(&'a str, &'a [Decimal])>,
-    pub(crate) multi: Option<&'a RequestContext<'a>>,
+    pub(crate) request_context: Option<&'a RequestContext<'a>>,
 }
 
 impl<'a> Deref for Context<'a> {
@@ -45,44 +45,37 @@ impl<'a> Context<'a> {
     ///
     /// Returns `None` if the symbol is unknown, or the level is invalid.
     pub fn request(&self, symbol: &str, level: Level) -> Option<Context<'a>> {
-        // 只在多标的模式下可用
-        let multi = self.multi?;
-        // 查找目标标的的数据
-        let sym = multi
+        let request_context = self.request_context?;
+        let symbol_context = request_context
             .symbol
             .iter()
             .find(|(s, _)| s == symbol)
             .map(|(_, v)| v)?;
 
-        // 步骤1：获取 OHLCV 切片（三种来源）
-        let slices = if level == multi.strategy_level {
-            // 情况A：请求的 level 就是策略级别 → 直接用预构建数据
-            &sym.strategy
-        } else if level == multi.source_level {
-            // 情况B：请求的 level 就是源数据级别 → 直接用预构建数据
-            &sym.source
+        let raw_context = if level == request_context.strategy_level {
+            &symbol_context.strategy_context
+        } else if level == request_context.source_level {
+            &symbol_context.source_context
         } else {
-            // 情况C：其他 level → 从源数据按需重采样
-            // 先校验 level 是否可以由 source_level 重采样得到
-            if !multi.source_level.is_valid_sampling_target(level) {
+            if !request_context.source_level.is_valid_sampling_target(level) {
                 return None;
             }
 
-            let mut cache = sym.level_kline.borrow_mut();
-            let cache_idx = cache.iter().position(|(l, _)| *l == level);
-            if cache_idx.is_none() {
-                // 缓存未命中：重采样并存入缓存
-                let resampled = resample(sym.source_kline, level).ok()?;
-                let mut entry = LevelKLine::default();
-                entry.extend_from_klines(&resampled);
-                cache.push((level, entry));
-            }
-            // 生命周期延长：缓存存在 SymbolBuffer → run_multi 的栈上，
-            // 比策略调用活得久，这里 transmute 到 'a 是安全的
-            let entry: &'a LevelKLine =
-                unsafe { std::mem::transmute(&cache.iter().find(|(l, _)| *l == level).unwrap().1) };
+            let mut level_kline = symbol_context.level_kline.borrow_mut();
+            let index = level_kline.iter().position(|(l, _)| *l == level);
 
-            &RawContext {
+            if index.is_none() {
+                let mut kline_buffer = KLineBuffer::new(0);
+
+                kline_buffer.extend(resample(symbol_context.source_kline, level).ok()?);
+                level_kline.push((level, kline_buffer));
+            }
+
+            let entry: &'a KLineBuffer = unsafe {
+                std::mem::transmute(&level_kline[index.unwrap_or(level_kline.len() - 1)].1)
+            };
+
+            &KLineContext {
                 time: entry.time.as_slice(),
                 open: entry.open.as_slice(),
                 high: entry.high.as_slice(),
@@ -92,31 +85,28 @@ impl<'a> Context<'a> {
             }
         };
 
-        // 步骤2：过滤并切片辅助 series
-        // 只取 (symbol, level) 完全匹配的 series，然后按时间交集切片
-        let series: Vec<(&str, &[Decimal])> = multi
-            .series
-            .iter()
-            .filter(|((s, l, _), _)| s == symbol && *l == level)
-            .map(|((_, _, name), aligned)| clip_series(aligned, name.as_str(), slices.time, level))
-            .collect();
-
-        // 步骤3：组装新的 Context 并返回
         Some(Context {
-            time: TimeSeries::new(slices.time),
-            open: Series::new(slices.open),
-            high: Series::new(slices.high),
-            low: Series::new(slices.low),
-            close: Series::new(slices.close),
-            volume: Series::new(slices.volume),
+            time: TimeSeries::new(raw_context.time),
+            open: Series::new(raw_context.open),
+            high: Series::new(raw_context.high),
+            low: Series::new(raw_context.low),
+            close: Series::new(raw_context.close),
+            volume: Series::new(raw_context.volume),
             exchange: self.exchange,
-            series,
-            multi: Some(multi),
+            series: request_context
+                .series
+                .iter()
+                .filter(|((s, l, _), _)| s == symbol && *l == level)
+                .map(|((_, _, name), aligned)| {
+                    clip_series(aligned, name.as_str(), raw_context.time, level)
+                })
+                .collect(),
+            request_context: Some(request_context),
         })
     }
 }
 
-pub(crate) struct RawContext<'a> {
+pub(crate) struct KLineContext<'a> {
     pub time: &'a [u64],
     pub open: &'a [Decimal],
     pub high: &'a [Decimal],
@@ -125,34 +115,11 @@ pub(crate) struct RawContext<'a> {
     pub volume: &'a [Decimal],
 }
 
-#[derive(Default)]
-pub(crate) struct LevelKLine {
-    pub time: Vec<u64>,
-    pub open: Vec<Decimal>,
-    pub high: Vec<Decimal>,
-    pub low: Vec<Decimal>,
-    pub close: Vec<Decimal>,
-    pub volume: Vec<Decimal>,
-}
-
-impl LevelKLine {
-    fn extend_from_klines(&mut self, klines: &[KLine]) {
-        for k in klines {
-            self.time.push(k.time);
-            self.open.push(k.open);
-            self.high.push(k.high);
-            self.low.push(k.low);
-            self.close.push(k.close);
-            self.volume.push(k.volume);
-        }
-    }
-}
-
 pub(crate) struct SymbolContext<'a> {
-    pub strategy: RawContext<'a>,
-    pub source: RawContext<'a>,
+    pub strategy_context: KLineContext<'a>,
+    pub source_context: KLineContext<'a>,
     pub source_kline: &'a [KLine],
-    pub level_kline: &'a RefCell<Vec<(Level, LevelKLine)>>,
+    pub level_kline: &'a RefCell<Vec<(Level, KLineBuffer)>>,
 }
 
 pub(crate) struct RequestContext<'a> {

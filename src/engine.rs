@@ -5,36 +5,34 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 /// Default capacity for the k-line buffer in number of k-lines.
-///
-/// 10,000,000 k-lines at 1-minute resolution covers ~19 years of data.
-pub const DEFAULT_SERIES_MAX_LENGTH: usize = 10000000;
+pub const DEFAULT_SERIES_MAX_LENGTH: usize = 20000000;
 
 /// Per-symbol buffers used by [`run`](Engine::run) in multi-symbol mode.
 ///
 /// Maintains columnar storage at the source level (built incrementally) and
 /// strategy level (built via resample).  A [`Vec<KLine>`] of source klines is
 /// kept for on-demand resampling to arbitrary levels via [`Context::request`].
-struct SymbolBuffer<const N: usize> {
+struct SymbolBuffer {
     /// Accumulates source klines for the current strategy bar.
     min_level_accumulator: Vec<KLine>,
     /// All source klines received so far (for on-demand resampling).
     source_klines: Vec<KLine>,
     /// Columnar OHLCV at the source level (incremented each round).
-    source_level_buffer: KLineBuffer<N>,
+    source_level_buffer: KLineBuffer,
     /// Columnar OHLCV at the strategy level (extended on bar completion).
-    strategy_level_buffer: KLineBuffer<N>,
+    strategy_level_buffer: KLineBuffer,
     /// Lazily populated cache for levels other than source / strategy.
     /// `RefCell` provides interior mutability because [`Context::request`] takes `&self`.
-    level_cache: RefCell<Vec<(Level, LevelKLine)>>,
+    level_cache: RefCell<Vec<(Level, KLineBuffer)>>,
 }
 
-impl<const N: usize> SymbolBuffer<N> {
-    fn new() -> Self {
+impl SymbolBuffer {
+    fn new(max_len: usize) -> Self {
         Self {
             min_level_accumulator: Vec::new(),
             source_klines: Vec::new(),
-            source_level_buffer: KLineBuffer::new(),
-            strategy_level_buffer: KLineBuffer::new(),
+            source_level_buffer: KLineBuffer::new(max_len),
+            strategy_level_buffer: KLineBuffer::new(max_len),
             level_cache: RefCell::new(Vec::new()),
         }
     }
@@ -273,7 +271,7 @@ where
 
         if source_level.is_valid_sampling_target(level) {
             let mut min_level_buffer = Vec::new();
-            let mut max_level_buffer = KLineBuffer::<N>::new();
+            let mut max_level_buffer = KLineBuffer::new(N);
             let mut next_time = None;
             let mut prev_time = 0;
 
@@ -380,20 +378,6 @@ where
                             min_level_buffer.clear();
 
                             // 自定义系列必须与 OHLCV 数据在时间上有交集才能在策略中访问到，否则返回空切片 []
-                            let series: Vec<(&str, &[Decimal])> = self
-                                .series
-                                .iter()
-                                .filter(|((s, l, _), _)| s == symbol && *l == level)
-                                .map(|((_, _, name), aligned)| {
-                                    clip_series(
-                                        aligned,
-                                        name.as_str(),
-                                        &max_level_buffer.time,
-                                        level,
-                                    )
-                                })
-                                .collect();
-
                             let context = Context {
                                 time: TimeSeries::new(&max_level_buffer.time),
                                 open: Series::new(&max_level_buffer.open),
@@ -402,8 +386,20 @@ where
                                 close: Series::new(&max_level_buffer.close),
                                 volume: Series::new(&max_level_buffer.volume),
                                 exchange: &exchange,
-                                series,
-                                multi: None,
+                                series: self
+                                    .series
+                                    .iter()
+                                    .filter(|((s, l, _), _)| s == symbol && *l == level)
+                                    .map(|((_, _, name), aligned)| {
+                                        clip_series(
+                                            aligned,
+                                            name.as_str(),
+                                            &max_level_buffer.time,
+                                            level,
+                                        )
+                                    })
+                                    .collect(),
+                                request_context: None,
                             };
 
                             if let Err(v) = self.strategy.next(&context).await {
@@ -450,10 +446,10 @@ where
             );
         }
 
-        let mut buffers: Vec<(String, SymbolBuffer<N>)> = symbols
+        let mut buffers = symbols
             .iter()
-            .map(|s| (s.clone(), SymbolBuffer::new()))
-            .collect();
+            .map(|s| (s.clone(), SymbolBuffer::new(N)))
+            .collect::<Vec<_>>();
 
         let mut primary_bar_ready = false;
 
@@ -506,7 +502,7 @@ where
 
     async fn call_strategy(
         &mut self,
-        buffers: &[(String, SymbolBuffer<N>)],
+        buffers: &[(String, SymbolBuffer)],
         primary: &str,
         source_level: Level,
         strategy_level: Level,
@@ -520,7 +516,7 @@ where
                     sym.clone(),
                     SymbolContext {
                         // 策略级别的 OHLCV 切片（预构建，不涉及重采样）
-                        strategy: RawContext {
+                        strategy_context: KLineContext {
                             time: &buf.strategy_level_buffer.time,
                             open: &buf.strategy_level_buffer.open,
                             high: &buf.strategy_level_buffer.high,
@@ -529,7 +525,7 @@ where
                             volume: &buf.strategy_level_buffer.volume,
                         },
                         // 源级别的 OHLCV 切片（预构建，不涉及重采样）
-                        source: RawContext {
+                        source_context: KLineContext {
                             time: &buf.source_level_buffer.time,
                             open: &buf.source_level_buffer.open,
                             high: &buf.source_level_buffer.high,
@@ -562,7 +558,7 @@ where
             .find(|(s, _)| s == primary)
             .map(|(_, v)| v)
             .unwrap();
-        let primary_slices = &primary_data.strategy;
+        let primary_slices = &primary_data.strategy_context;
         // 步骤4：构建辅助 series 列表
         //
         // 过滤条件：只取 (symbol == 主标, level == 策略级别) 的 series。
@@ -595,7 +591,7 @@ where
             volume: Series::new(primary_slices.volume),
             exchange,
             series,
-            multi: Some(&multi),
+            request_context: Some(&multi),
         };
 
         if let Err(e) = self.strategy.next(&context).await {
