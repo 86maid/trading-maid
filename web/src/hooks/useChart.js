@@ -348,7 +348,7 @@ export function useChart(
       .filter((v) => v.symbol === markerSymbol)
       .flatMap((v) => createMaker(v, locale, currentDataSource.metadata.level, buyColor, sellColor));
     series.setMarkers(markers);
-  }, [historyPositionList, currentDataSource, locale]);
+  }, [historyPositionList, currentDataSource, locale, theme]);
 
   // --- Show/hide volume series ---
   useEffect(() => {
@@ -362,7 +362,7 @@ export function useChart(
     } else {
       volumeSeries.applyOptions({ visible: false });
     }
-  }, [showVolume, currentDataSource]);
+  }, [showVolume, currentDataSource, theme]);
 
   // --- Clear flash line on unmount ---
   useEffect(() => {

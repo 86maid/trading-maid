@@ -43496,7 +43496,8 @@ function useChart(containerRef, currentDataSource, theme, magnet, showVolume, lo
 	}, [
 		historyPositionList,
 		currentDataSource,
-		locale
+		locale,
+		theme
 	]);
 	(0, import_react.useEffect)(() => {
 		const volumeSeries = volumeSeriesRef.current;
@@ -43506,7 +43507,11 @@ function useChart(containerRef, currentDataSource, theme, magnet, showVolume, lo
 			updateVolume(volumeSeries, currentDataSource, true, bodyStyle);
 			volumeSeries.applyOptions({ visible: true });
 		} else volumeSeries.applyOptions({ visible: false });
-	}, [showVolume, currentDataSource]);
+	}, [
+		showVolume,
+		currentDataSource,
+		theme
+	]);
 	(0, import_react.useEffect)(() => {
 		return () => {
 			if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
@@ -44320,7 +44325,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-BP9eDUWM.js.map</script>
+//# sourceMappingURL=index-CpXckGoe.js.map</script>
 </head>
 
 <body class="theme-dark">
