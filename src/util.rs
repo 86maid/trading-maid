@@ -1230,7 +1230,17 @@ pub fn to_html(
 /// Summarizes a list of history positions into a single summary object containing aggregated statistics and metrics.
 pub fn summarize(list: impl AsRef<[HistoryPosition]>) -> HistoryPositionSummary {
     let list = list.as_ref();
-    let symbol = list.first().map(|v| v.symbol.clone()).unwrap_or_default();
+
+    let mut symbol = list
+        .iter()
+        .map(|v| v.symbol.clone())
+        .collect::<std::collections::HashSet<_>>() // Deduplicate
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    symbol.sort();
+
+    let symbol = symbol.join(",");
     let leverage = list.first().map(|v| v.leverage).unwrap_or_default();
 
     let total_trades = list.len();

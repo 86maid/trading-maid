@@ -155,7 +155,7 @@ async fn main() {
 
     let summary = summarize(&history_position);
 
-    println!("history summary: {:#?}", summary);
+    println!("btc history summary: {:#?}", summary);
 
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
     let data_source_1h_eth = data_source_1m_eth.resample(Level::Hour1).unwrap();
