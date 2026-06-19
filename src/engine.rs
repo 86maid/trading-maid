@@ -523,57 +523,58 @@ where
 
     async fn call_strategy(
         &mut self,
-        buffers: &[(String, SymbolBuffer)],
+        symbol_buffer: &[(String, SymbolBuffer)],
         primary: &str,
         source_level: Level,
         strategy_level: Level,
         exchange: &ExchangeWrapper,
     ) -> anyhow::Result<()> {
-        // 步骤1：为每个标的构建 MultiSymbolData
-        let symbol_data: Vec<(String, SymbolContext)> = buffers
+        let symbol: Vec<(String, SymbolContext)> = symbol_buffer
             .iter()
             .map(|(sym, buf)| (sym.clone(), buf.as_context()))
             .collect();
 
-        // 步骤2：组装 RequestContext
-        let request_ctx = RequestContext {
-            symbol: symbol_data,
+        let request_context = RequestContext {
+            symbol,
             strategy_level,
             source_level,
             series: &self.series,
         };
 
-        // 步骤3：取出主标的策略级别切片
-        let primary_data = request_ctx
+        let primary_symbol_context = request_context
             .symbol
             .iter()
             .find(|(s, _)| s == primary)
             .map(|(_, v)| v)
             .unwrap();
-        let primary_slices = &primary_data.strategy_context;
 
-        // 步骤4：构建辅助 series 列表
+        let primary_kline_context = &primary_symbol_context.strategy_context;
+
         let series_table = SeriesTable(
             self.series
                 .iter()
                 .filter(|((s, l, _), _)| s == primary && *l == strategy_level)
                 .map(|((_, _, name), aligned)| {
-                    clip_series(aligned, primary_slices.time, name.as_str(), strategy_level)
+                    clip_series(
+                        aligned,
+                        primary_kline_context.time,
+                        name.as_str(),
+                        strategy_level,
+                    )
                 })
                 .collect(),
         );
 
-        // 步骤5：组装 Context
         let context = Context {
-            time: TimeSeries::new(primary_slices.time),
-            open: Series::new(primary_slices.open),
-            high: Series::new(primary_slices.high),
-            low: Series::new(primary_slices.low),
-            close: Series::new(primary_slices.close),
-            volume: Series::new(primary_slices.volume),
+            time: TimeSeries::new(primary_kline_context.time),
+            open: Series::new(primary_kline_context.open),
+            high: Series::new(primary_kline_context.high),
+            low: Series::new(primary_kline_context.low),
+            close: Series::new(primary_kline_context.close),
+            volume: Series::new(primary_kline_context.volume),
             exchange,
             series: series_table,
-            request_context: Some(&request_ctx),
+            request_context: Some(&request_context),
         };
 
         if let Err(e) = self.strategy.next(&context).await {
