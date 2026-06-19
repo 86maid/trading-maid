@@ -316,7 +316,7 @@ if let Err(v) = engine.run("BTCUSDT", Level::Minute5).await {
 
 ### 对齐自定义数据
 
-自定义数据通常以稀疏的 `(时间戳毫秒, 值)` 形式存在。使用 `align_to_series` 将其前向填充为对齐到目标 K 线级别的 `Vec<Decimal>`：
+自定义数据通常以稀疏的 `(时间戳毫秒, 值)` 形式存在。使用 `align_to_series` 将其前向填充为对齐到目标 K 线级别的 `AlignedSeries`：
 
 ```rust
 use trading_maid::prelude::*;
@@ -332,7 +332,7 @@ let series = align_to_series(&custom_data, Level::Hour1).unwrap();
 
 // 在调用 run() 之前注册到引擎
 let mut engine = Engine::new(exchange, my_strategy);
-engine.add_series("BTCUSDT", Level::Hour1, "custom_metric", &series);
+engine.add_series("BTCUSDT", "custom_metric", series);
 ```
 
 ### 资金费率示例
@@ -344,7 +344,7 @@ let funding_rate_series = get_or_download_funding_rate_to_series(
     "BTCUSDT", 12, Level::Hour1,
 ).await.unwrap();
 
-engine.add_series("BTCUSDT", Level::Hour1, "funding_rate", &funding_rate_series);
+engine.add_series("BTCUSDT", "funding_rate", funding_rate_series);
 ```
 
 ### 在策略中访问

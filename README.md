@@ -317,7 +317,7 @@ Use `add_series` to attach custom data (funding rate, on-chain metrics, sentimen
 
 ### Aligning Custom Data
 
-Custom data usually comes as sparse `(timestamp_ms, value)` pairs. Use `align_to_series` to forward-fill these into a `Vec<Decimal>` aligned to a target k-line level:
+Custom data usually comes as sparse `(timestamp_ms, value)` pairs. Use `align_to_series` to forward-fill these into an `AlignedSeries` at a target k-line level:
 
 ```rust
 use trading_maid::prelude::*;
@@ -333,7 +333,7 @@ let series = align_to_series(&custom_data, Level::Hour1).unwrap();
 
 // Register with the engine before calling run()
 let mut engine = Engine::new(exchange, my_strategy);
-engine.add_series("BTCUSDT", Level::Hour1, "custom_metric", &series);
+engine.add_series("BTCUSDT", "custom_metric", series);
 ```
 
 ### Funding Rate Example
@@ -345,7 +345,7 @@ let funding_rate_series = get_or_download_funding_rate_to_series(
     "BTCUSDT", 12, Level::Hour1,
 ).await.unwrap();
 
-engine.add_series("BTCUSDT", Level::Hour1, "funding_rate", &funding_rate_series);
+engine.add_series("BTCUSDT", "funding_rate", funding_rate_series);
 ```
 
 ### Access in Strategy
