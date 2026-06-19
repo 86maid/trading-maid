@@ -218,7 +218,11 @@ where
     ///
     /// Returns an error if the target level is finer than the source level,
     /// or if the strategy/hook returns one.
-    pub async fn run(&mut self, symbol: impl ToStringVec, level: Level) -> anyhow::Result<()> {
+    pub async fn run(
+        &mut self,
+        symbol: impl ToStringVec,
+        strategy_level: Level,
+    ) -> anyhow::Result<()> {
         let symbol = symbol.into_vec();
 
         if symbol.is_empty() {
@@ -226,21 +230,21 @@ where
         }
 
         if symbol.len() != 1 {
-            return self.run_multi(symbol, level).await;
+            return self.run_multi(symbol, strategy_level).await;
         }
 
         let symbol = &symbol[0];
         let metadata = self.exchange.get_metadata(symbol).await?;
         let exchange = ExchangeWrapper::new(self.exchange.clone());
         let source_level = if self.exchange.is_live() {
-            level
+            strategy_level
         } else {
             metadata.level
         };
 
-        if source_level.is_valid_sampling_target(level) {
-            let mut min_level_buffer = Vec::new();
-            let mut max_level_buffer = KLineBuffer::new(N);
+        if source_level.is_valid_sampling_target(strategy_level) {
+            let mut source_level_kline_buffer = Vec::new();
+            let mut strategy_level_kline_buffer = KLineBuffer::new(N);
             let mut next_time = None;
             let mut prev_time = 0;
 
@@ -322,7 +326,7 @@ where
                                         }
                                     }
 
-                                    min_level_buffer.extend(filled_klines);
+                                    source_level_kline_buffer.extend(filled_klines);
                                 }
                             }
                         }
@@ -340,31 +344,34 @@ where
                         );
 
                         prev_time = v.time;
-                        min_level_buffer.push(v);
+                        source_level_kline_buffer.push(v);
 
-                        if v.time == get_last_time(v.time, source_level, level)? {
-                            max_level_buffer.extend(resample(&min_level_buffer, level)?);
-                            min_level_buffer.clear();
+                        if v.time == get_last_time(v.time, source_level, strategy_level)? {
+                            strategy_level_kline_buffer
+                                .extend(resample(&source_level_kline_buffer, strategy_level)?);
+                            source_level_kline_buffer.clear();
 
                             // 自定义系列必须与 OHLCV 数据在时间上有交集才能在策略中访问到，否则返回空切片 []
                             let context = Context {
-                                time: TimeSeries::new(&max_level_buffer.time),
-                                open: Series::new(&max_level_buffer.open),
-                                high: Series::new(&max_level_buffer.high),
-                                low: Series::new(&max_level_buffer.low),
-                                close: Series::new(&max_level_buffer.close),
-                                volume: Series::new(&max_level_buffer.volume),
+                                time: TimeSeries::new(&strategy_level_kline_buffer.time),
+                                open: Series::new(&strategy_level_kline_buffer.open),
+                                high: Series::new(&strategy_level_kline_buffer.high),
+                                low: Series::new(&strategy_level_kline_buffer.low),
+                                close: Series::new(&strategy_level_kline_buffer.close),
+                                volume: Series::new(&strategy_level_kline_buffer.volume),
                                 exchange: &exchange,
                                 series: SeriesTable(
                                     self.series
                                         .iter()
-                                        .filter(|((s, l, _), _)| s == symbol && *l == level)
+                                        .filter(|((s, l, _), _)| {
+                                            s == symbol && *l == strategy_level
+                                        })
                                         .map(|((_, _, name), aligned)| {
                                             clip_series(
                                                 aligned,
-                                                &max_level_buffer.time,
+                                                &strategy_level_kline_buffer.time,
                                                 name.as_str(),
-                                                level,
+                                                strategy_level,
                                             )
                                         })
                                         .collect(),
@@ -390,29 +397,33 @@ where
             }
         } else {
             bail!(
-                "invalid sampling target level: min_level: {}, max_level: {}",
+                "invalid sampling target level: source level: {}, strategy level: {}",
                 source_level,
-                level
+                strategy_level
             );
         }
     }
 
-    async fn run_multi(&mut self, symbol: impl ToStringVec, level: Level) -> anyhow::Result<()> {
+    async fn run_multi(
+        &mut self,
+        symbol: impl ToStringVec,
+        strategy_level: Level,
+    ) -> anyhow::Result<()> {
         let symbols = symbol.into_vec();
         let primary = &symbols[0];
         let metadata = self.exchange.get_metadata(primary).await?;
         let exchange = ExchangeWrapper::new(self.exchange.clone());
         let source_level = if self.exchange.is_live() {
-            level
+            strategy_level
         } else {
             metadata.level
         };
 
-        if !source_level.is_valid_sampling_target(level) {
+        if !source_level.is_valid_sampling_target(strategy_level) {
             bail!(
-                "run_multi: invalid sampling target level: min_level: {}, max_level: {}",
+                "run_multi: invalid sampling target level: source level: {}, strategy level: {}",
                 source_level,
-                level
+                strategy_level
             );
         }
 
@@ -436,10 +447,11 @@ where
                     buffer.source_kline_buffer.push(kline);
                     buffer.source_level_kline_buffer.push(kline);
 
-                    if kline.time == get_last_time(kline.time, source_level, level)? {
-                        buffer
-                            .strategy_level_kline_buffer
-                            .extend(resample(&buffer.source_kline_resample_buffer, level)?);
+                    if kline.time == get_last_time(kline.time, source_level, strategy_level)? {
+                        buffer.strategy_level_kline_buffer.extend(resample(
+                            &buffer.source_kline_resample_buffer,
+                            strategy_level,
+                        )?);
 
                         buffer.source_kline_resample_buffer.clear();
 
@@ -462,8 +474,14 @@ where
             if primary_bar_ready {
                 primary_bar_ready = false;
 
-                self.call_strategy(&symbol_buffer, primary, source_level, level, &exchange)
-                    .await?;
+                self.call_strategy(
+                    &symbol_buffer,
+                    primary,
+                    source_level,
+                    strategy_level,
+                    &exchange,
+                )
+                .await?;
             }
         }
     }

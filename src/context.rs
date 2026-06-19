@@ -156,14 +156,14 @@ pub(crate) fn clip_series<'a>(
     aligned_series: &'a AlignedSeries,
     strategy_time_slice: &[u64],
     name: &'a str,
-    level: Level,
+    strategy_level: Level,
 ) -> (&'a str, &'a [Decimal]) {
-    if aligned_series.level != level || strategy_time_slice.is_empty() {
+    if aligned_series.level != strategy_level || strategy_time_slice.is_empty() {
         return (name, &[]);
     }
 
     let strategy_start = strategy_time_slice[0];
-    let strategy_end = get_time_range(*strategy_time_slice.last().unwrap(), level)
+    let strategy_end = get_time_range(*strategy_time_slice.last().unwrap(), strategy_level)
         .ok()
         .map(|(_, next)| next)
         .unwrap_or(u64::MAX);
@@ -175,7 +175,7 @@ pub(crate) fn clip_series<'a>(
     // 只限制右边界，不限制左边界
     // 右边界必须对齐到策略的当前时间，不能看到未来的 bar
     let end = strategy_end.min(aligned_series.end);
-    let take = bar_offset_by_level(aligned_series.start, end, level);
+    let take = bar_offset_by_level(aligned_series.start, end, strategy_level);
 
     pub(crate) fn bar_offset_by_level(start: u64, end: u64, level: Level) -> usize {
         if level == Level::Month1 {
