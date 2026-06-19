@@ -1,16 +1,6 @@
-use crate::util::{IsContainer, get_time_range, t2s};
-use crate::{
-    context::{
-        Context, LevelCacheEntry, MultiSlices, MultiSymbolData, SymbolSlices, slice_aligned_series,
-    },
-    data::{AlignedSeries, KLine, KLineBuffer, Level},
-    prelude::ExchangeWrapper,
-    series::{Series, TimeSeries},
-    util::{get_last_time, resample},
-};
-use crate::{exchange::Exchange, strategy::Strategy};
-use anyhow::{anyhow, bail};
-use rust_decimal::Decimal;
+use crate::prelude::*;
+use anyhow::anyhow;
+use anyhow::bail;
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -383,32 +373,19 @@ where
                         );
 
                         prev_time = v.time;
-
                         min_level_buffer.push(v);
 
-                        // 检查当前 kline 是否是当前级别周期的最后一根
-                        // 如果是，说明一根完整的策略级别 bar 已形成
                         if v.time == get_last_time(v.time, source_level, level)? {
-                            // 将累积的小级别 kline 重采样为策略级别 bar
                             max_level_buffer.extend(resample(&min_level_buffer, level)?);
                             min_level_buffer.clear();
 
-                            // 构建辅助 series 列表
-                            //
-                            // 从 engine 中取出所有注册的 series，按 (symbol, level) 过滤，
-                            // 然后通过 slice_aligned_series 做时间交集切片。
-                            //
-                            // 例如：资金费率数据覆盖 1月~6月，当前回测只跑 3月~4月，
-                            // slice_aligned_series 会自动跳过 1~2 月的 bar，只返回
-                            // 3~4 月的数据。
+                            // 自定义系列必须与 OHLCV 数据在时间上有交集才能在策略中访问到，否则返回空切片 []
                             let series: Vec<(&str, &[Decimal])> = self
                                 .series
                                 .iter()
-                                // 过滤：symbol 和 level 必须同时匹配
                                 .filter(|((s, l, _), _)| s == symbol && *l == level)
-                                // 时间交集切片：让 series 和 OHLCV 数据时间对齐
                                 .map(|((_, _, name), aligned)| {
-                                    slice_aligned_series(
+                                    clip_series(
                                         aligned,
                                         name.as_str(),
                                         &max_level_buffer.time,
@@ -417,7 +394,6 @@ where
                                 })
                                 .collect();
 
-                            // 组装策略上下文
                             let context = Context {
                                 time: TimeSeries::new(&max_level_buffer.time),
                                 open: Series::new(&max_level_buffer.open),
@@ -427,7 +403,7 @@ where
                                 volume: Series::new(&max_level_buffer.volume),
                                 exchange: &exchange,
                                 series,
-                                multi: None, // 单标模式，不支持 request()
+                                multi: None,
                             };
 
                             if let Err(v) = self.strategy.next(&context).await {
@@ -544,7 +520,7 @@ where
                     sym.clone(),
                     MultiSymbolData {
                         // 策略级别的 OHLCV 切片（预构建，不涉及重采样）
-                        strategy: SymbolSlices {
+                        strategy: RawContext {
                             time: &buf.strategy_level_buffer.time,
                             open: &buf.strategy_level_buffer.open,
                             high: &buf.strategy_level_buffer.high,
@@ -553,7 +529,7 @@ where
                             volume: &buf.strategy_level_buffer.volume,
                         },
                         // 源级别的 OHLCV 切片（预构建，不涉及重采样）
-                        source: SymbolSlices {
+                        source: RawContext {
                             time: &buf.source_level_buffer.time,
                             open: &buf.source_level_buffer.open,
                             high: &buf.source_level_buffer.high,
@@ -563,7 +539,7 @@ where
                         },
                         // 保留源 kline 原始数据，供 Context::request()
                         // 按需重采样到其他 level
-                        source_klines: &buf.source_klines,
+                        source_kline: &buf.source_klines,
                         // 按需重采样的缓存，RefCell 提供内部可变性
                         level_cache: &buf.level_cache,
                     },
@@ -603,7 +579,7 @@ where
             // 时间交集切片：如果 series 的时间范围和当前 OHLCV 数据
             // 没有重叠，slice_aligned_series 会返回空切片 []
             .map(|((_, _, name), aligned)| {
-                slice_aligned_series(aligned, name.as_str(), primary_slices.time, strategy_level)
+                clip_series(aligned, name.as_str(), primary_slices.time, strategy_level)
             })
             .collect();
 
