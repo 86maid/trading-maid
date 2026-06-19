@@ -250,7 +250,12 @@ impl LocalExchange {
             .map(|v| v.range(start_time, end_time))
             .collect();
 
-        inner.timeline = Timeline::new(filtered).expect("range: timeline rebuild failed");
+        inner.timeline = Timeline::new(filtered)
+            .context(format!(
+                "LocalExchange::range: timeline creation failed for range [{}, {})",
+                start_time, end_time
+            ))
+            .unwrap();
 
         drop(inner);
 

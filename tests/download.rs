@@ -1,3 +1,4 @@
+use anyhow::bail;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::cell::RefCell;
@@ -6,7 +7,7 @@ use trading_maid::data::{AlignedSeries, DataSource, KLine, Level, Metadata};
 use trading_maid::local_exchange::LocalExchange;
 use trading_maid::prelude::Engine;
 use trading_maid::strategy::Strategy;
-use trading_maid::util::s2t_utc;
+use trading_maid::util::{get_or_download_funding_rate, s2t};
 
 // ============================================================
 // 辅助函数
@@ -17,8 +18,8 @@ use trading_maid::util::s2t_utc;
 /// `start_hour`..`end_hour` 按 1 小时粒度生成，值 = 小时序号，
 /// 方便断言。
 fn make_aligned_hourly(start_hour: i64, end_hour: i64) -> AlignedSeries {
-    let start = s2t_utc(&format!("2024/01/01 {:02}:00:00", start_hour));
-    let end = s2t_utc(&format!("2024/01/01 {:02}:00:00", end_hour));
+    let start = s2t(&format!("2024/01/01 {:02}:00:00", start_hour));
+    let end = s2t(&format!("2024/01/01 {:02}:00:00", end_hour));
     let series: Vec<Decimal> = (start_hour..end_hour).map(|i| Decimal::from(i)).collect();
 
     AlignedSeries {
@@ -33,7 +34,7 @@ fn make_aligned_hourly(start_hour: i64, end_hour: i64) -> AlignedSeries {
 fn make_klines(start_hour: i64, end_hour: i64) -> Vec<KLine> {
     (start_hour..end_hour)
         .map(|h| {
-            let time = s2t_utc(&format!("2024/01/01 {:02}:00:00", h));
+            let time = s2t(&format!("2024/01/01 {:02}:00:00", h));
             KLine {
                 time,
                 open: Decimal::from(h),
@@ -56,7 +57,7 @@ async fn run_and_capture(
     klines: Vec<KLine>,
     target_hour: i64,
 ) -> Vec<Decimal> {
-    let target = s2t_utc(&format!("2024/01/01 {:02}:00:00", target_hour));
+    let target = s2t(&format!("2024/01/01 {:02}:00:00", target_hour));
     let captured: RefCell<Vec<Decimal>> = RefCell::new(Vec::new());
 
     struct CaptureStrategy<'a> {
@@ -345,4 +346,64 @@ async fn engine_with_funding_rate() {
 
     engine.add_series("BTCUSDT", "funding_rate", fr);
     engine.run("BTCUSDT", Level::Hour1).await.unwrap();
+}
+
+// cargo test -r --test download range -- --ignored
+#[ignore]
+#[tokio::test]
+async fn range() {
+    use trading_maid::data::{DataSource, Level, Metadata};
+    use trading_maid::local_exchange::LocalExchange;
+    use trading_maid::prelude::Engine;
+    use trading_maid::util::{get_or_download, get_or_download_funding_rate_to_series, t2s};
+
+    let a = get_or_download_funding_rate("BTCUSDT", 1).await.unwrap();
+
+    println!("fr start: {}", t2s(a[0].time));
+    println!("fr end: {}", t2s(a.last().unwrap().time));
+
+    let fr = get_or_download_funding_rate_to_series("BTCUSDT", 1, Level::Hour4)
+        .await
+        .unwrap();
+
+    println!("funding_rate start: {}", t2s(fr.start));
+    println!("funding_rate end: {}", t2s(fr.end));
+
+    let data = DataSource::from_file_metadata(
+        get_or_download("BTCUSDT/1m", 12).await.unwrap(),
+        Metadata {
+            symbol: "BTCUSDT".to_string(),
+            level: Level::Minute1,
+            min_size: "0.01".parse().unwrap(),
+            min_notional: "0".parse().unwrap(),
+            tick_size: "0.1".parse().unwrap(),
+            maker_fee: "0.0002".parse().unwrap(),
+            taker_fee: "0.0005".parse().unwrap(),
+            maintenance: "0.004".parse().unwrap(),
+        },
+    )
+    .unwrap();
+
+    println!("data start: {}", t2s(data.data[0].time));
+    println!("data end: {}", t2s(data.data.last().unwrap().time));
+
+    return;
+
+    async fn strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+        if cx["funding_rate"] != [] {
+            println!(
+                "{}: funding_rate[0]: {}, funding_rate[1..]: {:?}",
+                t2s(cx.time[0]),
+                cx["funding_rate"][0],
+                cx["funding_rate"][1..9].to_vec(),
+            );
+        }
+
+        Ok(())
+    }
+
+    let mut engine = Engine::new(LocalExchange::new(data), strategy);
+
+    engine.add_series("BTCUSDT", "funding_rate", fr);
+    engine.run("BTCUSDT", Level::Hour4).await.unwrap();
 }

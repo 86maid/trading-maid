@@ -436,25 +436,17 @@ pub async fn get_or_download_funding_rate_path(
         monthly_directory: &Path,
         merged_file_path: &Path,
         marged_lock_path: &Path,
+        month_list: &[String],
+        base_symbol: &str,
     ) -> anyhow::Result<()> {
-        if !marged_lock_path.exists() && merged_file_path.exists() {
-            return Ok(());
-        }
-
-        let mut csv_file_list = Vec::new();
-
-        let mut directory_reader = fs::read_dir(monthly_directory).await?;
-
-        while let Some(v) = directory_reader.next_entry().await? {
-            let file_path = v.path();
-
-            if file_path
-                .extension()
-                .is_some_and(|extension| extension == "csv")
-            {
-                csv_file_list.push(file_path);
-            }
-        }
+        // Only merge the months we actually requested, not everything in the
+        // directory (which may contain data from previous calls with a larger
+        // month_count).
+        let mut csv_file_list: Vec<PathBuf> = month_list
+            .iter()
+            .map(|v| monthly_directory.join(format!("{}-fundingRate-{}.csv", base_symbol, v)))
+            .filter(|p| p.exists())
+            .collect();
 
         csv_file_list.sort();
 
@@ -504,7 +496,14 @@ pub async fn get_or_download_funding_rate_path(
         Ok(())
     }
 
-    merge_funding_rate_files(&monthly_directory, &merged_file_path, &marged_lock_path).await?;
+    merge_funding_rate_files(
+        &monthly_directory,
+        &merged_file_path,
+        &marged_lock_path,
+        &month_list,
+        base_symbol,
+    )
+    .await?;
 
     Ok(merged_file_path)
 }
