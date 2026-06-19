@@ -349,6 +349,7 @@ where
                         if v.time == get_last_time(v.time, source_level, strategy_level)? {
                             strategy_level_kline_buffer
                                 .extend(resample(&source_level_kline_buffer, strategy_level)?);
+
                             source_level_kline_buffer.clear();
 
                             // 自定义系列必须与 OHLCV 数据在时间上有交集才能在策略中访问到，否则返回空切片 []
