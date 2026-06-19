@@ -581,9 +581,6 @@ struct SymbolBuffer {
     source_level_kline_buffer: KLineBuffer,
     strategy_level_kline_buffer: KLineBuffer,
     level_kline_table: RefCell<Vec<(Level, KLineBuffer)>>,
-    /// Set to `true` when this symbol's data feed returns EOF.
-    /// Exhausted symbols are excluded from [`RequestContext`] so that
-    /// [`Context::request`] returns `None` for them.
     eof: bool,
 }
 
