@@ -160,8 +160,9 @@ where
             series.level,
             name.as_ref().to_string(),
         );
-        if let Some(idx) = self.series.iter().position(|(k, _)| *k == key) {
-            self.series[idx].1 = series;
+
+        if let Some(v) = self.series.iter().position(|(v, _)| *v == key) {
+            self.series[v].1 = series;
         } else {
             self.series.push((key, series));
         }
