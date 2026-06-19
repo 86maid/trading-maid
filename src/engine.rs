@@ -251,99 +251,23 @@ where
             loop {
                 match self.exchange.next(symbol, source_level).await? {
                     Some(v) => {
-                        if let Some(next_time) = next_time {
-                            if v.time != next_time {
-                                if v.time == prev_time {
-                                    bail!(
-                                        "time discontinuity: next() should block until the next k-line is ready, but returned a mismatched time: expected {} ({}), got {} ({})",
-                                        next_time,
-                                        t2s(next_time),
-                                        v.time,
-                                        t2s(v.time),
-                                    );
-                                } else if v.time < prev_time {
-                                    bail!(
-                                        "time regression: next() should block until the next k-line is ready, but returned a mismatched time: expected {} ({}), got {} ({})",
-                                        next_time,
-                                        t2s(next_time),
-                                        v.time,
-                                        t2s(v.time),
-                                    );
-                                } else {
-                                    let gap_start = next_time;
-                                    let gap_end = v.time;
+                        let (filled, new_next_time) = check_kline(
+                            self.exchange.clone(),
+                            symbol,
+                            source_level,
+                            v,
+                            next_time,
+                            prev_time,
+                        )
+                        .await?;
 
-                                    let filled_klines = self.exchange.get_kline(symbol, source_level, gap_start, gap_end).await.map_err(|e| {
-                                        anyhow!(
-                                            "time discontinuity: failed to fill time gap via get_kline(): range [start, end): start {} ({}), end {} ({}): {}",
-                                            gap_start,
-                                            t2s(gap_start),
-                                            gap_end,
-                                            t2s(gap_end),
-                                            e
-                                        )
-                                    })?;
+                        next_time = Some(new_next_time);
+                        prev_time = v.time;
 
-                                    match filled_klines.first() {
-                                        Some(first) if first.time != gap_start => {
-                                            bail!(
-                                                "time discontinuity: get_kline() returned unexpected first k-line: expected {} ({}), got {} ({})",
-                                                gap_start,
-                                                t2s(gap_start),
-                                                first.time,
-                                                t2s(first.time),
-                                            );
-                                        }
-                                        None => {
-                                            bail!(
-                                                "time discontinuity: get_kline() returned empty k-line: range [start, end): start {} ({}), end {} ({})",
-                                                gap_start,
-                                                t2s(gap_start),
-                                                gap_end,
-                                                t2s(gap_end),
-                                            );
-                                        }
-                                        _ => {}
-                                    }
-
-                                    if let Some(last) = filled_klines.last() {
-                                        let last_end = get_time_range(last.time, source_level).map_err(|e| {
-                                            anyhow!(
-                                                "time discontinuity: get_kline() returned k-line with unexpected time: {}: {}",
-                                                last.time,
-                                                e
-                                            )
-                                        })?.1;
-
-                                        if last_end != gap_end {
-                                            bail!(
-                                                "time discontinuity: get_kline() returned unexpected last k-line: expected end {} ({}), got end {} ({})",
-                                                gap_end,
-                                                t2s(gap_end),
-                                                last_end,
-                                                t2s(last_end),
-                                            );
-                                        }
-                                    }
-
-                                    source_level_kline_buffer.extend(filled_klines);
-                                }
-                            }
+                        if let Some(filled) = filled {
+                            source_level_kline_buffer.extend(filled);
                         }
 
-                        next_time = Some(
-                            get_time_range(v.time, source_level)
-                                .map_err(|e| {
-                                    anyhow!(
-                                        "next(): returned k-line has unexpected time: {}: {}",
-                                        v.time,
-                                        e
-                                    )
-                                })?
-                                .1,
-                        );
-
-                        prev_time = v.time;
                         source_level_kline_buffer.push(v);
 
                         if v.time == get_last_time(v.time, source_level, strategy_level)? {
@@ -410,8 +334,8 @@ where
         symbol: impl ToStringVec,
         strategy_level: Level,
     ) -> anyhow::Result<()> {
-        let symbols = symbol.into_vec();
-        let primary = &symbols[0];
+        let symbol_list = symbol.into_vec();
+        let primary = &symbol_list[0];
         let metadata = self.exchange.get_metadata(primary).await?;
         let exchange = ExchangeWrapper::new(self.exchange.clone());
         let source_level = if self.exchange.is_live() {
@@ -428,52 +352,125 @@ where
             );
         }
 
-        let mut symbol_buffer = symbols
+        struct RunState {
+            next_time: Option<u64>,
+            prev_time: u64,
+            eof: bool,
+        }
+
+        /// (symbol_index, Option<(kline, filled, new_next_time)>).
+        type TaskOutput = (usize, Option<(KLine, Option<Vec<KLine>>, u64)>);
+
+        let mut symbol_buffer: Vec<(String, SymbolBuffer)> = symbol_list
             .iter()
             .map(|s| (s.clone(), SymbolBuffer::new(N)))
+            .collect();
+
+        let mut states = symbol_list
+            .iter()
+            .map(|_| RunState {
+                next_time: None,
+                prev_time: 0,
+                eof: false,
+            })
             .collect::<Vec<_>>();
 
-        let mut primary_bar_ready = false;
+        let mut ready = false;
 
         loop {
-            let mut all_done = true;
+            let mut handle_list = Vec::with_capacity(symbol_list.len());
 
-            for (i, symbol) in symbols.iter().enumerate() {
-                if let Some(kline) = self.exchange.next(symbol.as_str(), source_level).await? {
-                    all_done = false;
+            for (i, symbol) in symbol_list.iter().enumerate() {
+                if states[i].eof {
+                    continue;
+                }
 
-                    let buffer = &mut symbol_buffer[i].1;
+                let symbol = symbol.clone();
+                let ex = self.exchange.clone();
+                let next_time = states[i].next_time;
+                let prev_time = states[i].prev_time;
 
-                    buffer.source_kline_resample_buffer.push(kline);
-                    buffer.source_kline_buffer.push(kline);
-                    buffer.source_level_kline_buffer.push(kline);
+                handle_list.push(tokio::spawn(async move {
+                    let v = match ex.next(&symbol, source_level).await? {
+                        Some(v) => v,
+                        None => return Ok::<_, anyhow::Error>((i, None)),
+                    };
 
-                    if kline.time == get_last_time(kline.time, source_level, strategy_level)? {
-                        buffer.strategy_level_kline_buffer.extend(resample(
-                            &buffer.source_kline_resample_buffer,
-                            strategy_level,
-                        )?);
+                    let (filled, new_next_time) =
+                        check_kline(ex.clone(), &symbol, source_level, v, next_time, prev_time)
+                            .await?;
 
-                        buffer.source_kline_resample_buffer.clear();
+                    Ok((i, Some((v, filled, new_next_time))))
+                }));
+            }
 
-                        // TODO: 理论上不用判断，因为时间线是同步，这是一个问题
-                        if symbol == primary {
-                            primary_bar_ready = true;
+            if handle_list.is_empty() {
+                return Ok(());
+            }
+
+            let mut all_eof = true;
+
+            for handle in handle_list {
+                let (symbol_index, result): TaskOutput = handle.await??;
+
+                match result {
+                    Some((current, filled, new_next_time)) => {
+                        all_eof = false;
+
+                        let state = &mut states[symbol_index];
+                        let buffer = &mut symbol_buffer[symbol_index].1;
+
+                        state.next_time = Some(new_next_time);
+                        state.prev_time = current.time;
+
+                        if let Some(filled) = filled {
+                            for k in &filled {
+                                buffer.source_kline_resample_buffer.push(*k);
+                                buffer.source_kline_buffer.push(*k);
+                            }
+                            buffer.source_level_kline_buffer.extend(filled);
+                        }
+
+                        buffer.source_kline_resample_buffer.push(current);
+                        buffer.source_kline_buffer.push(current);
+                        buffer.source_level_kline_buffer.push(current);
+
+                        if current.time
+                            == get_last_time(current.time, source_level, strategy_level)?
+                        {
+                            buffer.strategy_level_kline_buffer.extend(resample(
+                                &buffer.source_kline_resample_buffer,
+                                strategy_level,
+                            )?);
+
+                            buffer.source_kline_resample_buffer.clear();
+
+                            if symbol_list[symbol_index] == *primary {
+                                ready = true;
+                            }
+                        }
+
+                        if let Some(hook) = &mut self.hook {
+                            hook.next(current, self.exchange.clone()).await?;
                         }
                     }
+                    None => {
+                        states[symbol_index].eof = true;
+                        symbol_buffer[symbol_index].1.eof = true;
 
-                    if let Some(hook) = &mut self.hook {
-                        hook.next(kline, self.exchange.clone()).await?;
+                        if symbol_list[symbol_index] == *primary {
+                            return Ok(());
+                        }
                     }
                 }
             }
 
-            if all_done {
+            if all_eof {
                 return Ok(());
             }
 
-            if primary_bar_ready {
-                primary_bar_ready = false;
+            if ready {
+                ready = false;
 
                 self.call_strategy(
                     &symbol_buffer,
@@ -495,42 +492,26 @@ where
         strategy_level: Level,
         exchange: &ExchangeWrapper,
     ) -> anyhow::Result<()> {
-        let symbol: Vec<(String, SymbolContext)> = symbol_buffer
-            .iter()
-            .map(|(sym, buf)| (sym.clone(), buf.as_context()))
-            .collect();
-
         let request_context = RequestContext {
-            symbol,
+            symbol: symbol_buffer
+                .iter()
+                .filter(|(_, v)| !v.eof)
+                .map(|(s, v)| (s.clone(), v.as_context()))
+                .collect(),
             strategy_level,
             source_level,
             series: &self.series,
         };
 
-        let primary_symbol_context = request_context
+        let primary_kline_context = &request_context
             .symbol
             .iter()
             .find(|(s, _)| s == primary)
             .map(|(_, v)| v)
-            .unwrap();
+            .unwrap()
+            .strategy_level_kline_context;
 
-        let primary_kline_context = &primary_symbol_context.strategy_level_kline_context;
-
-        let series_table = SeriesTable(
-            self.series
-                .iter()
-                .filter(|((s, l, _), _)| s == primary && *l == strategy_level)
-                .map(|((_, _, name), aligned)| {
-                    clip_series(
-                        aligned,
-                        primary_kline_context.time,
-                        name.as_str(),
-                        strategy_level,
-                    )
-                })
-                .collect(),
-        );
-
+        // 自定义系列必须与 OHLCV 数据在时间上有交集才能在策略中访问到，否则返回空切片 []
         let context = Context {
             time: TimeSeries::new(primary_kline_context.time),
             open: Series::new(primary_kline_context.open),
@@ -539,7 +520,20 @@ where
             close: Series::new(primary_kline_context.close),
             volume: Series::new(primary_kline_context.volume),
             exchange,
-            series: series_table,
+            series: SeriesTable(
+                self.series
+                    .iter()
+                    .filter(|((s, l, _), _)| s == primary && *l == strategy_level)
+                    .map(|((_, _, name), aligned)| {
+                        clip_series(
+                            aligned,
+                            primary_kline_context.time,
+                            name.as_str(),
+                            strategy_level,
+                        )
+                    })
+                    .collect(),
+            ),
             request_context: Some(&request_context),
         };
 
@@ -587,6 +581,10 @@ struct SymbolBuffer {
     source_level_kline_buffer: KLineBuffer,
     strategy_level_kline_buffer: KLineBuffer,
     level_kline_table: RefCell<Vec<(Level, KLineBuffer)>>,
+    /// Set to `true` when this symbol's data feed returns EOF.
+    /// Exhausted symbols are excluded from [`RequestContext`] so that
+    /// [`Context::request`] returns `None` for them.
+    eof: bool,
 }
 
 impl SymbolBuffer {
@@ -597,6 +595,7 @@ impl SymbolBuffer {
             source_level_kline_buffer: KLineBuffer::new(max_len),
             strategy_level_kline_buffer: KLineBuffer::new(max_len),
             level_kline_table: RefCell::new(Vec::new()),
+            eof: false,
         }
     }
 
@@ -622,4 +621,115 @@ impl SymbolBuffer {
             level_kline_table: &self.level_kline_table,
         }
     }
+}
+
+async fn check_kline(
+    exchange: Arc<dyn Exchange + 'static>,
+    symbol: &str,
+    source_level: Level,
+    kline: KLine,
+    next_time: Option<u64>,
+    prev_time: u64,
+) -> anyhow::Result<(Option<Vec<KLine>>, u64)> {
+    let filled = if let Some(nt) = next_time {
+        if kline.time != nt {
+            if kline.time == prev_time {
+                bail!(
+                    "time discontinuity: next() should block until the next k-line is ready, but returned a mismatched time: expected {} ({}), got {} ({})",
+                    nt,
+                    t2s(nt),
+                    kline.time,
+                    t2s(kline.time),
+                );
+            } else if kline.time < prev_time {
+                bail!(
+                    "time regression: next() should block until the next k-line is ready, but returned a mismatched time: expected {} ({}), got {} ({})",
+                    nt,
+                    t2s(nt),
+                    kline.time,
+                    t2s(kline.time),
+                );
+            }
+
+            // Gap detected — fill via get_kline.
+            let gap_start = nt;
+            let gap_end = kline.time;
+
+            let filled_klines = exchange
+                .get_kline(symbol, source_level, gap_start, gap_end)
+                .await
+                .map_err(|e| {
+                    anyhow!(
+                        "time discontinuity: failed to fill time gap via get_kline(): range [start, end): start {} ({}), end {} ({}): {}",
+                        gap_start,
+                        t2s(gap_start),
+                        gap_end,
+                        t2s(gap_end),
+                        e
+                    )
+                })?;
+
+            match filled_klines.first() {
+                Some(first) if first.time != gap_start => {
+                    bail!(
+                        "time discontinuity: get_kline() returned unexpected first k-line: expected {} ({}), got {} ({})",
+                        gap_start,
+                        t2s(gap_start),
+                        first.time,
+                        t2s(first.time),
+                    );
+                }
+                None => {
+                    bail!(
+                        "time discontinuity: get_kline() returned empty k-line: range [start, end): start {} ({}), end {} ({})",
+                        gap_start,
+                        t2s(gap_start),
+                        gap_end,
+                        t2s(gap_end),
+                    );
+                }
+                _ => {}
+            }
+
+            if let Some(last) = filled_klines.last() {
+                let last_end = get_time_range(last.time, source_level)
+                    .map_err(|e| {
+                        anyhow!(
+                            "time discontinuity: get_kline() returned k-line with unexpected time: {}: {}",
+                            last.time,
+                            e
+                        )
+                    })?
+                    .1;
+
+                if last_end != gap_end {
+                    bail!(
+                        "time discontinuity: get_kline() returned unexpected last k-line: expected end {} ({}), got end {} ({})",
+                        gap_end,
+                        t2s(gap_end),
+                        last_end,
+                        t2s(last_end),
+                    );
+                }
+            }
+
+            Some(filled_klines)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let new_next_time = get_time_range(kline.time, source_level)
+        .map_err(|e| {
+            anyhow!(
+                "next(): returned k-line has unexpected time: {}: {}",
+                kline.time,
+                e
+            )
+        })?
+        .1;
+
+    Ok((filled, new_next_time))
 }
