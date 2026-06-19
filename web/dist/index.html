@@ -43064,6 +43064,16 @@ function getTimeRange(time, level) {
 			const next = new Date(start.getTime() + 216e5);
 			return [start.getTime(), next.getTime()];
 		}
+		case "8h": {
+			const temp = new Date(dt);
+			temp.setUTCMinutes(0);
+			temp.setUTCSeconds(0);
+			temp.setUTCMilliseconds(0);
+			const hrs = temp.getUTCHours();
+			const start = /* @__PURE__ */ new Date(temp.getTime() - hrs % 8 * 36e5);
+			const next = new Date(start.getTime() + 288e5);
+			return [start.getTime(), next.getTime()];
+		}
 		case "12h": {
 			const temp = new Date(dt);
 			temp.setUTCMinutes(0);
@@ -44310,7 +44320,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-CR8XevfH.js.map</script>
+//# sourceMappingURL=index-BP9eDUWM.js.map</script>
 </head>
 
 <body class="theme-dark">

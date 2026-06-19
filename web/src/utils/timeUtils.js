@@ -156,6 +156,16 @@ export function getTimeRange(time, level) {
       const next = new Date(start.getTime() + 21600000);
       return [start.getTime(), next.getTime()];
     }
+    case '8h': {
+      const temp = new Date(dt);
+      temp.setUTCMinutes(0);
+      temp.setUTCSeconds(0);
+      temp.setUTCMilliseconds(0);
+      const hrs = temp.getUTCHours();
+      const start = new Date(temp.getTime() - (hrs % 8) * 3600000);
+      const next = new Date(start.getTime() + 28800000);
+      return [start.getTime(), next.getTime()];
+    }
     case '12h': {
       const temp = new Date(dt);
       temp.setUTCMinutes(0);
