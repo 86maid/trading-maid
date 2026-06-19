@@ -1,7 +1,4 @@
-use trading_maid::context::Context;
-use trading_maid::util::get_or_download_funding_rate;
-use trading_maid::util::t2s;
-use trading_maid::util::t2s_utc;
+use trading_maid::prelude::*;
 
 // cargo test -r --test download funding_rate -- --ignored
 #[ignore]
@@ -129,15 +126,10 @@ async fn range() {
     println!("kline end: {}", t2s_utc(data.data.last().unwrap().time));
 }
 
-// cargo test -r --test download range -- --ignored
+// cargo test -r --test download run -- --ignored
 #[ignore]
 #[tokio::test]
 async fn run() {
-    use trading_maid::data::{DataSource, Level, Metadata};
-    use trading_maid::local_exchange::LocalExchange;
-    use trading_maid::prelude::Engine;
-    use trading_maid::util::{get_or_download, get_or_download_funding_rate_to_series, t2s};
-
     let fr = get_or_download_funding_rate_to_series("BTCUSDT", 3, Level::Hour4)
         .await
         .unwrap();
@@ -157,20 +149,34 @@ async fn run() {
     )
     .unwrap();
 
-    async fn strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-        if cx["funding_rate"] != [] {
-            println!(
-                "{}: funding_rate[0]: {}, funding_rate[1..]: {:?}",
-                t2s(cx.time[0]),
-                cx["funding_rate"][0],
-                cx["funding_rate"][1..9].to_vec(),
-            );
-        }
-
-        Ok(())
+    struct RunTest {
+        history: Vec<Decimal>,
     }
 
-    let mut engine = Engine::new(LocalExchange::new(data), strategy);
+    #[async_trait(?Send)]
+    impl Strategy for RunTest {
+        async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
+            if cx["funding_rate"] != [] {
+                if !self.history.is_empty() && self.history.len() % 8 == 0 {
+                    assert_eq!(
+                        self.history[self.history.len() - 8..self.history.len()].to_vec(),
+                        cx["funding_rate"][1..9].to_vec(),
+                    );
+                }
+
+                self.history.push(cx["funding_rate"][0]);
+            }
+
+            Ok(())
+        }
+    }
+
+    let mut engine = Engine::new(
+        LocalExchange::new(data),
+        RunTest {
+            history: Vec::new(),
+        },
+    );
 
     engine.add_series("BTCUSDT", "funding_rate", fr);
     engine.run("BTCUSDT", Level::Hour4).await.unwrap();
