@@ -7,7 +7,7 @@ use trading_maid::data::{AlignedSeries, DataSource, KLine, Level, Metadata};
 use trading_maid::local_exchange::LocalExchange;
 use trading_maid::prelude::Engine;
 use trading_maid::strategy::Strategy;
-use trading_maid::util::{get_or_download_funding_rate, s2t};
+use trading_maid::util::{get_or_download_funding_rate, s2t, t2s_utc};
 
 // ============================================================
 // 辅助函数
@@ -357,20 +357,20 @@ async fn range() {
     use trading_maid::prelude::Engine;
     use trading_maid::util::{get_or_download, get_or_download_funding_rate_to_series, t2s};
 
-    let a = get_or_download_funding_rate("BTCUSDT", 1).await.unwrap();
+    let a = get_or_download_funding_rate("BTCUSDT", 2).await.unwrap();
 
-    println!("fr start: {}", t2s(a[0].time));
-    println!("fr end: {}", t2s(a.last().unwrap().time));
+    println!("fr start: {}", t2s_utc(a[0].time));
+    println!("fr end: {}", t2s_utc(a.last().unwrap().time));
 
-    let fr = get_or_download_funding_rate_to_series("BTCUSDT", 1, Level::Hour4)
+    let fr = get_or_download_funding_rate_to_series("BTCUSDT", 2, Level::Minute1)
         .await
         .unwrap();
 
-    println!("funding_rate start: {}", t2s(fr.start));
-    println!("funding_rate end: {}", t2s(fr.end));
+    println!("funding_rate start: {}", t2s_utc(fr.start));
+    println!("funding_rate end: {}", t2s_utc(fr.end));
 
     let data = DataSource::from_file_metadata(
-        get_or_download("BTCUSDT/1m", 12).await.unwrap(),
+        get_or_download("BTCUSDT/1m", 2).await.unwrap(),
         Metadata {
             symbol: "BTCUSDT".to_string(),
             level: Level::Minute1,
@@ -384,10 +384,13 @@ async fn range() {
     )
     .unwrap();
 
-    println!("data start: {}", t2s(data.data[0].time));
-    println!("data end: {}", t2s(data.data.last().unwrap().time));
+    println!("data start: {}", t2s_utc(data.data[0].time));
+    println!("data end: {}", t2s_utc(data.data.last().unwrap().time));
 
     return;
+
+    assert!(data.data[0].time == fr.start);
+    assert!(data.data.last().unwrap().time == fr.end);
 
     async fn strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         if cx["funding_rate"] != [] {

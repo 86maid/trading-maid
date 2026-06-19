@@ -203,25 +203,13 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
         monthly_directory: &Path,
         merged_file_path: &Path,
         marged_lock_path: &Path,
+        month_list: &[String],
     ) -> anyhow::Result<()> {
-        if !marged_lock_path.exists() && merged_file_path.exists() {
-            return Ok(());
-        }
-
-        let mut csv_file_list = Vec::new();
-
-        let mut directory_reader = fs::read_dir(monthly_directory).await?;
-
-        while let Some(v) = directory_reader.next_entry().await? {
-            let file_path = v.path();
-
-            if file_path
-                .extension()
-                .is_some_and(|extension| extension == "csv")
-            {
-                csv_file_list.push(file_path);
-            }
-        }
+        let mut csv_file_list: Vec<PathBuf> = month_list
+            .iter()
+            .map(|v| monthly_directory.join(format!("{}.csv", v)))
+            .filter(|p| p.exists())
+            .collect();
 
         csv_file_list.sort();
 
@@ -276,7 +264,13 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
         Ok(())
     }
 
-    merge_monthly_files(&monthly_directory, &merged_file_path, &marged_lock_path).await?;
+    merge_monthly_files(
+        &monthly_directory,
+        &merged_file_path,
+        &marged_lock_path,
+        &month_list,
+    )
+    .await?;
 
     Ok(merged_file_path)
 }
@@ -539,42 +533,6 @@ pub async fn get_or_download_funding_rate_to_series(
     )
 }
 
-/// Detect the source [`Level`] of `data` by checking whether the first two
-/// timestamps align to a known level boundary.
-///
-/// Returns `Some(level)` if `get_time_range(t0, candidate).1 == t1` for one
-/// of the 14 known [`Level`] variants, `None` otherwise (e.g. 8 h funding-rate
-/// data, which has no corresponding variant).
-fn detect_level(data: &[(u64, Decimal)]) -> Option<Level> {
-    if data.len() < 2 {
-        return None;
-    }
-    let t0 = data[0].0;
-    let t1 = data[1].0;
-
-    for candidate in [
-        Level::Minute1,
-        Level::Minute3,
-        Level::Minute5,
-        Level::Minute15,
-        Level::Minute30,
-        Level::Hour1,
-        Level::Hour2,
-        Level::Hour4,
-        Level::Hour6,
-        Level::Hour12,
-        Level::Day1,
-        Level::Day3,
-        Level::Week1,
-        Level::Month1,
-    ] {
-        if get_time_range(t0, candidate).ok()?.1 == t1 {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
 /// Forward-fill sparse time-value pairs into an [`AlignedSeries`] at the
 /// target [`Level`].
 ///
@@ -620,10 +578,44 @@ pub fn align_to_series(
         bail!("empty data");
     }
 
-    // --- Level detection & validation ---
-    if data.len() >= 2 {
+    /// Detect the source [`Level`] of `data` by checking whether the first two
+    /// timestamps align to a known level boundary.
+    ///
+    /// Returns `Some(level)` if `get_time_range(t0, candidate).1 == t1` for one
+    /// of the 15 known [`Level`] variants, `None` otherwise.
+    fn detect_level(data: &[(u64, Decimal)]) -> Option<Level> {
+        if data.len() < 2 {
+            return None;
+        }
+        let t0 = data[0].0;
+        let t1 = data[1].0;
+
+        for candidate in [
+            Level::Minute1,
+            Level::Minute3,
+            Level::Minute5,
+            Level::Minute15,
+            Level::Minute30,
+            Level::Hour1,
+            Level::Hour2,
+            Level::Hour4,
+            Level::Hour6,
+            Level::Hour8,
+            Level::Hour12,
+            Level::Day1,
+            Level::Day3,
+            Level::Week1,
+            Level::Month1,
+        ] {
+            if get_time_range(t0, candidate).ok()?.1 == t1 {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    let end = if data.len() >= 2 {
         if let Some(data_level) = detect_level(data) {
-            // Known level: source must be >= target (scalar cannot aggregate).
             if data_level < level {
                 bail!(
                     "align_to_series: source level {} is finer than target {}, \
@@ -632,28 +624,28 @@ pub fn align_to_series(
                     level,
                 );
             }
-            // source >= target → forward-fill is correct.
+
+            get_time_range(data[data.len() - 1].0, data_level)?.1
         } else {
-            // Unknown interval (e.g. 8 h funding rate) — only coarse→fine.
             let data_interval_ms = data[1].0 - data[0].0;
             let target_interval_ms = level.interval_millis();
+
             if data_interval_ms < target_interval_ms {
                 bail!(
-                    "align_to_series: unknown source interval ({} ms) < target \
-                     interval ({} ms), cannot align",
+                    "align_to_series: unknown source interval ({} ms) < target interval ({} ms), cannot align",
                     data_interval_ms,
                     target_interval_ms,
                 );
             }
-            // data_interval >= target_interval → forward-fill works.
+
+            get_time_range(data[data.len() - 1].0 + data_interval_ms - 1, level)?.1
         }
-    }
-    // data.len() == 1: single point, skip validation; forward-fill anyway.
+    } else {
+        get_time_range(data[data.len() - 1].0, level)?.1
+    };
 
     let (start, mut next) = get_time_range(data[0].0, level)?;
     let mut current = start;
-    let end = get_time_range(data[data.len() - 1].0, level)?.1;
-
     let mut series = Vec::new();
     let mut index = 0;
     let mut value = Decimal::ZERO;
@@ -663,6 +655,7 @@ pub fn align_to_series(
             value = data[index].1;
             index += 1;
         }
+
         series.push(value);
         current = next;
         next = get_time_range(current, level)?.1;
@@ -987,6 +980,24 @@ pub fn get_time_range(time: u64, level: Level) -> anyhow::Result<(u64, u64)> {
                 next.timestamp_millis() as u64,
             ))
         }
+        Level::Hour8 => {
+            let dt = DateTime::from_timestamp_millis(time as i64)
+                .context("get_time_range")?
+                .with_minute(0)
+                .context("get_time_range")?
+                .with_second(0)
+                .context("get_time_range")?
+                .with_nanosecond(0)
+                .context("get_time_range")?;
+
+            let start = dt - Duration::hours((dt.hour() as i32 % 8) as i64);
+            let next = start + Duration::hours(8);
+
+            Ok((
+                start.timestamp_millis() as u64,
+                next.timestamp_millis() as u64,
+            ))
+        }
         Level::Hour12 => {
             let dt = DateTime::from_timestamp_millis(time as i64)
                 .context("get_time_range")?
@@ -1184,6 +1195,7 @@ pub fn resample_file(path: impl AsRef<Path>) -> anyhow::Result<()> {
         Level::Hour2,
         Level::Hour4,
         Level::Hour6,
+        Level::Hour8,
         Level::Hour12,
         Level::Day1,
         Level::Day3,

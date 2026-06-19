@@ -25,6 +25,7 @@ pub enum Level {
     Hour2,
     Hour4,
     Hour6,
+    Hour8,
     Hour12,
     Day1,
     Day3,
@@ -44,6 +45,7 @@ impl Level {
             120 => Some(Level::Hour2),
             240 => Some(Level::Hour4),
             360 => Some(Level::Hour6),
+            480 => Some(Level::Hour8),
             720 => Some(Level::Hour12),
             1440 => Some(Level::Day1),
             4320 => Some(Level::Day3),
@@ -64,6 +66,7 @@ impl Level {
             Level::Hour2 => 120,
             Level::Hour4 => 240,
             Level::Hour6 => 360,
+            Level::Hour8 => 480,
             Level::Hour12 => 720,
             Level::Day1 => 1440,
             Level::Day3 => 4320,
@@ -95,6 +98,7 @@ impl Display for Level {
             Level::Hour2 => "2h",
             Level::Hour4 => "4h",
             Level::Hour6 => "6h",
+            Level::Hour8 => "8h",
             Level::Hour12 => "12h",
             Level::Day1 => "1d",
             Level::Day3 => "3d",
@@ -118,6 +122,7 @@ impl FromStr for Level {
             "2h" => Ok(Level::Hour2),
             "4h" => Ok(Level::Hour4),
             "6h" => Ok(Level::Hour6),
+            "8h" => Ok(Level::Hour8),
             "12h" => Ok(Level::Hour12),
             "1d" => Ok(Level::Day1),
             "3d" => Ok(Level::Day3),
@@ -253,9 +258,10 @@ impl DataSource {
             serde_json::from_reader::<_, DataSourceInner>(BufReader::new(File::open(path)?))?;
 
         if let [first, second, ..] = &inner.data[..]
-            && first.time > second.time {
-                inner.data.sort_by_key(|v| v.time);
-            }
+            && first.time > second.time
+        {
+            inner.data.sort_by_key(|v| v.time);
+        }
 
         Ok(DataSource(Arc::new(inner)))
     }
@@ -264,9 +270,10 @@ impl DataSource {
         let mut inner = serde_json::from_str::<DataSourceInner>(text.as_ref())?;
 
         if let [first, second, ..] = &inner.data[..]
-            && first.time > second.time {
-                inner.data.sort_by_key(|v| v.time);
-            }
+            && first.time > second.time
+        {
+            inner.data.sort_by_key(|v| v.time);
+        }
 
         Ok(DataSource(Arc::new(inner)))
     }
@@ -284,9 +291,10 @@ impl DataSource {
         let mut inner = DataSourceInner { metadata, data };
 
         if let [first, second, ..] = &inner.data[..]
-            && first.time > second.time {
-                inner.data.sort_by_key(|v| v.time);
-            }
+            && first.time > second.time
+        {
+            inner.data.sort_by_key(|v| v.time);
+        }
 
         Ok(DataSource(Arc::new(inner)))
     }
@@ -304,9 +312,10 @@ impl DataSource {
         let mut inner = DataSourceInner { metadata, data };
 
         if let [first, second, ..] = &inner.data[..]
-            && first.time > second.time {
-                inner.data.sort_by_key(|v| v.time);
-            }
+            && first.time > second.time
+        {
+            inner.data.sort_by_key(|v| v.time);
+        }
 
         Ok(DataSource(Arc::new(inner)))
     }
@@ -315,9 +324,10 @@ impl DataSource {
         let mut inner = bincode::deserialize::<DataSourceInner>(&fs::read(path)?)?;
 
         if let [first, second, ..] = &inner.data[..]
-            && first.time > second.time {
-                inner.data.sort_by_key(|v| v.time);
-            }
+            && first.time > second.time
+        {
+            inner.data.sort_by_key(|v| v.time);
+        }
 
         Ok(DataSource(Arc::new(inner)))
     }
@@ -342,9 +352,10 @@ impl DataSource {
         let mut inner = DataSourceInner { metadata, data };
 
         if let [first, second, ..] = &inner.data[..]
-            && first.time > second.time {
-                inner.data.sort_by_key(|v| v.time);
-            }
+            && first.time > second.time
+        {
+            inner.data.sort_by_key(|v| v.time);
+        }
 
         Ok(DataSource(Arc::new(inner)))
     }
@@ -357,9 +368,10 @@ impl DataSource {
         let mut inner = DataSourceInner { metadata, data };
 
         if let [first, second, ..] = &inner.data[..]
-            && first.time > second.time {
-                inner.data.sort_by_key(|v| v.time);
-            }
+            && first.time > second.time
+        {
+            inner.data.sort_by_key(|v| v.time);
+        }
 
         Ok(DataSource(Arc::new(inner)))
     }
@@ -374,9 +386,10 @@ impl DataSource {
         let mut inner = DataSourceInner { metadata, data };
 
         if let [first, second, ..] = &inner.data[..]
-            && first.time > second.time {
-                inner.data.sort_by_key(|v| v.time);
-            }
+            && first.time > second.time
+        {
+            inner.data.sort_by_key(|v| v.time);
+        }
 
         Ok(DataSource(Arc::new(inner)))
     }
@@ -394,9 +407,10 @@ impl DataSource {
         let mut inner = DataSourceInner { metadata, data };
 
         if let [first, second, ..] = &inner.data[..]
-            && first.time > second.time {
-                inner.data.sort_by_key(|v| v.time);
-            }
+            && first.time > second.time
+        {
+            inner.data.sort_by_key(|v| v.time);
+        }
 
         Ok(DataSource(Arc::new(inner)))
     }
@@ -406,9 +420,10 @@ impl DataSource {
         let mut inner = DataSourceInner { metadata, data };
 
         if let [first, second, ..] = &inner.data[..]
-            && first.time > second.time {
-                inner.data.sort_by_key(|v| v.time);
-            }
+            && first.time > second.time
+        {
+            inner.data.sort_by_key(|v| v.time);
+        }
 
         Ok(DataSource(Arc::new(inner)))
     }
