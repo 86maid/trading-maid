@@ -43668,43 +43668,25 @@ function ChartPanel({ onChartReady, historyPanelRef }) {
 			if (!recordId) return;
 			const record = document.getElementById("record_" + recordId);
 			if (!record) return;
+			const logContainer = record.closest("[data-section=\"trade-log\"]");
+			if (logContainer) {
+				const containerH = logContainer.clientHeight;
+				const recordTop = record.offsetTop;
+				logContainer.scrollTop = Math.max(0, recordTop - containerH / 2);
+			}
 			const color = getComputedStyle(document.body).getPropertyValue("--highlight-color").trim();
-			record.scrollIntoView({
-				behavior: "smooth",
-				block: "center"
-			});
-			const scrollContainer = record.closest("[data-section=\"trade-log\"]");
-			let settled = false;
-			const startBlink = () => {
-				if (settled) return;
-				settled = true;
-				if (blinkRef.current.interval) return;
-				let flag = false;
-				blinkRef.current.interval = setInterval(() => {
-					record.style.backgroundColor = flag ? color : "";
-					flag = !flag;
-				}, 100);
-				blinkRef.current.timeout = setTimeout(() => {
-					clearInterval(blinkRef.current.interval);
-					blinkRef.current.interval = null;
-					blinkRef.current.timeout = null;
-					record.style.backgroundColor = "";
-				}, 1e3);
-			};
-			if (scrollContainer) {
-				const onScroll = () => {
-					if (blinkRef.current.scrollTimer) clearTimeout(blinkRef.current.scrollTimer);
-					blinkRef.current.scrollTimer = setTimeout(() => {
-						scrollContainer.removeEventListener("scroll", onScroll);
-						startBlink();
-					}, 150);
-				};
-				scrollContainer.addEventListener("scroll", onScroll, { passive: true });
-				blinkRef.current.scrollTimer = setTimeout(() => {
-					scrollContainer.removeEventListener("scroll", onScroll);
-					startBlink();
-				}, 2e3);
-			} else startBlink();
+			if (blinkRef.current.interval) return;
+			let flag = false;
+			blinkRef.current.interval = setInterval(() => {
+				record.style.backgroundColor = flag ? color : "";
+				flag = !flag;
+			}, 100);
+			blinkRef.current.timeout = setTimeout(() => {
+				clearInterval(blinkRef.current.interval);
+				blinkRef.current.interval = null;
+				blinkRef.current.timeout = null;
+				record.style.backgroundColor = "";
+			}, 1e3);
 		});
 	}, [historyPanelRef]));
 	import_react.useEffect(() => {
@@ -45105,7 +45087,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-CbjdPxPK.js.map</script>
+//# sourceMappingURL=index-BXTs2LuI.js.map</script>
 </head>
 
 <body class="theme-dark">

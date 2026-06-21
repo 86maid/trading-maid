@@ -49,54 +49,35 @@ export default function ChartPanel({ onChartReady, historyPanelRef }) {
       historyPanel.scrollToRecord(hoveredObjectId, (recordId) => {
         if (!recordId) return;
 
-        // Record is now in view — blink it
         const record = document.getElementById('record_' + recordId);
         if (!record) return;
 
+        // Manually scroll the trade-log inner container so the record
+        // is centered — avoids scrollIntoView() which targets a random
+        // scrollable ancestor and breaks our scroll-event listening.
+        const logContainer = record.closest('[data-section="trade-log"]');
+        if (logContainer) {
+          const containerH = logContainer.clientHeight;
+          const recordTop = record.offsetTop;
+          logContainer.scrollTop = Math.max(0, recordTop - containerH / 2);
+        }
+
+        // Blink immediately — no waiting for scroll events
         const style = getComputedStyle(document.body);
         const color = style.getPropertyValue('--highlight-color').trim();
 
-        // Scroll the record into view within its inner log container
-        record.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-        // Wait for inner scroll to settle, then blink
-        const scrollContainer = record.closest('[data-section="trade-log"]');
-        let settled = false;
-
-        const startBlink = () => {
-          if (settled) return;
-          settled = true;
-          if (blinkRef.current.interval) return;
-          let flag = false;
-          blinkRef.current.interval = setInterval(() => {
-            record.style.backgroundColor = flag ? color : '';
-            flag = !flag;
-          }, 100);
-          blinkRef.current.timeout = setTimeout(() => {
-            clearInterval(blinkRef.current.interval);
-            blinkRef.current.interval = null;
-            blinkRef.current.timeout = null;
-            record.style.backgroundColor = '';
-          }, 1000);
-        };
-
-        if (scrollContainer) {
-          const onScroll = () => {
-            if (blinkRef.current.scrollTimer)
-              clearTimeout(blinkRef.current.scrollTimer);
-            blinkRef.current.scrollTimer = setTimeout(() => {
-              scrollContainer.removeEventListener('scroll', onScroll);
-              startBlink();
-            }, 150);
-          };
-          scrollContainer.addEventListener('scroll', onScroll, { passive: true });
-          blinkRef.current.scrollTimer = setTimeout(() => {
-            scrollContainer.removeEventListener('scroll', onScroll);
-            startBlink();
-          }, 2000);
-        } else {
-          startBlink();
-        }
+        if (blinkRef.current.interval) return; // already blinking
+        let flag = false;
+        blinkRef.current.interval = setInterval(() => {
+          record.style.backgroundColor = flag ? color : '';
+          flag = !flag;
+        }, 100);
+        blinkRef.current.timeout = setTimeout(() => {
+          clearInterval(blinkRef.current.interval);
+          blinkRef.current.interval = null;
+          blinkRef.current.timeout = null;
+          record.style.backgroundColor = '';
+        }, 1000);
       });
     },
     [historyPanelRef]
