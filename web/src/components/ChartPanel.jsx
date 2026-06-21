@@ -2,7 +2,7 @@ import React, { useRef } from 'react';
 import { useChart } from '../hooks/useChart';
 import { useTradingData } from '../context/TradingDataContext';
 
-export default function ChartPanel({ onChartReady }) {
+export default function ChartPanel({ onChartReady, historyPanelRef }) {
   const containerRef = useRef(null);
   const {
     currentDataSource,
@@ -42,126 +42,64 @@ export default function ChartPanel({ onChartReady }) {
         blinkRef.current.scrollCleanup = null;
       }
 
-      // 2. Switch to positions tab
-      const posTab = document.querySelector('[data-node-key="positions"]');
-      if (posTab) posTab.click();
+      // 2. Delegate scroll + expand to HistoryPanel's virtual list
+      const historyPanel = historyPanelRef?.current;
+      if (!historyPanel) return;
 
-      // 3. Find which position contains this log id
-      const posList = window.historyPositionList || [];
-      let targetPos = null;
-      for (const pos of posList) {
-        if (pos.log && pos.log.some((l) => l.id === hoveredObjectId)) {
-          targetPos = pos;
-          break;
-        }
-      }
-      if (!targetPos) return;
+      historyPanel.scrollToRecord(hoveredObjectId, (recordId) => {
+        if (!recordId) return;
 
-      // 4. Wait for React to re-render the positions tab content
-      requestAnimationFrame(() => {
-        // Find the card by unique open_time
-        const card = document.querySelector(
-          `[data-open-time="${targetPos.open_time}"]`
-        );
-        if (!card) return;
+        // Record is now in view — blink it
+        const record = document.getElementById('record_' + recordId);
+        if (!record) return;
 
-        // Expand the card if collapsed (click it programmatically)
-        const logEl = card.querySelector('[data-section="trade-log"]');
-        if (!logEl || logEl.children.length === 0) {
-          card.click();
-        }
+        const style = getComputedStyle(document.body);
+        const color = style.getPropertyValue('--highlight-color').trim();
 
-        // 5. Wait for React re-render + scroll, then blink
-        requestAnimationFrame(() => {
-          card.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+        // Scroll the record into view within its inner log container
+        record.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-          const record = document.getElementById('record_' + hoveredObjectId);
-          if (!record) return;
+        // Wait for inner scroll to settle, then blink
+        const scrollContainer = record.closest('[data-section="trade-log"]');
+        let settled = false;
 
-          // Show the log if hidden
-          const log = record.closest('[data-section="trade-log"]');
-          if (log) log.style.display = 'block';
+        const startBlink = () => {
+          if (settled) return;
+          settled = true;
+          if (blinkRef.current.interval) return;
+          let flag = false;
+          blinkRef.current.interval = setInterval(() => {
+            record.style.backgroundColor = flag ? color : '';
+            flag = !flag;
+          }, 100);
+          blinkRef.current.timeout = setTimeout(() => {
+            clearInterval(blinkRef.current.interval);
+            blinkRef.current.interval = null;
+            blinkRef.current.timeout = null;
+            record.style.backgroundColor = '';
+          }, 1000);
+        };
 
-          const style = getComputedStyle(document.body);
-          const color = style.getPropertyValue('--highlight-color').trim();
-
-          // Start the blink animation
-          const startBlink = () => {
-            if (blinkRef.current.interval) return; // already blinking
-            let flag = false;
-            blinkRef.current.interval = setInterval(() => {
-              record.style.backgroundColor = flag ? color : '';
-              flag = !flag;
-            }, 100);
-            blinkRef.current.timeout = setTimeout(() => {
-              clearInterval(blinkRef.current.interval);
-              blinkRef.current.interval = null;
-              blinkRef.current.timeout = null;
-              record.style.backgroundColor = '';
-            }, 1000);
-          };
-
-          // Find the scrollable container that scrollIntoView will use
-          let scrollContainer = card.parentElement;
-          while (
-            scrollContainer &&
-            scrollContainer.scrollHeight <= scrollContainer.clientHeight
-          ) {
-            scrollContainer = scrollContainer.parentElement;
-          }
-          const scrollTarget =
-            scrollContainer && scrollContainer !== document.documentElement
-              ? scrollContainer
-              : window;
-
-          // Check if target is already in view (no scroll needed)
-          const rect = record.getBoundingClientRect();
-          const isInView =
-            rect.top >= 0 &&
-            rect.bottom <= window.innerHeight;
-
-          if (isInView) {
-            // Already visible, blink immediately
-            startBlink();
-          } else {
-            // Wait for smooth scroll to actually finish, then blink
-            const cleanupScrollWatch = () => {
-              if (blinkRef.current.scrollTimer) {
-                clearTimeout(blinkRef.current.scrollTimer);
-                blinkRef.current.scrollTimer = null;
-              }
-              scrollTarget.removeEventListener('scroll', onScroll, {
-                passive: true,
-              });
-            };
-            blinkRef.current.scrollCleanup = cleanupScrollWatch;
-
-            const onScroll = () => {
-              // Debounce: restart the timer every time a scroll event fires
-              if (blinkRef.current.scrollTimer)
-                clearTimeout(blinkRef.current.scrollTimer);
-              blinkRef.current.scrollTimer = setTimeout(() => {
-                cleanupScrollWatch();
-                blinkRef.current.scrollCleanup = null;
-                startBlink();
-              }, 150); // 150ms of no scrolling = scroll has ended
-            };
-
-            scrollTarget.addEventListener('scroll', onScroll, {
-              passive: true,
-            });
-
-            // Safety fallback: if scroll events never settle, blink anyway
+        if (scrollContainer) {
+          const onScroll = () => {
+            if (blinkRef.current.scrollTimer)
+              clearTimeout(blinkRef.current.scrollTimer);
             blinkRef.current.scrollTimer = setTimeout(() => {
-              cleanupScrollWatch();
-              blinkRef.current.scrollCleanup = null;
+              scrollContainer.removeEventListener('scroll', onScroll);
               startBlink();
-            }, 2000);
-          }
-        });
+            }, 150);
+          };
+          scrollContainer.addEventListener('scroll', onScroll, { passive: true });
+          blinkRef.current.scrollTimer = setTimeout(() => {
+            scrollContainer.removeEventListener('scroll', onScroll);
+            startBlink();
+          }, 2000);
+        } else {
+          startBlink();
+        }
       });
     },
-    []
+    [historyPanelRef]
   );
 
   const { scrollToTime } = useChart(

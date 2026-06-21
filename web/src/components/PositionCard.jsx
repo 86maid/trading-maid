@@ -7,11 +7,11 @@ import { t } from '../utils/i18n';
 
 const { Text } = Typography;
 
-export default function PositionCard({ position, scrollToTime, isFirst }) {
+export default function PositionCard({ position, scrollToTime, isFirst, expanded, onToggleExpand }) {
   const { isZh, currentDataSource } = useTradingData();
-  const [logExpanded, setLogExpanded] = useState(false);
   const [flashId, setFlashId] = useState(null);
   const flashTimerRef = useRef(null);
+  const logContainerRef = useRef(null);
 
   const isBuy = position.side === 'Buy';
   const isLiquidation =
@@ -26,8 +26,8 @@ export default function PositionCard({ position, scrollToTime, isFirst }) {
       : t('Partial Close', '部分平仓', isZh);
 
   useEffect(() => {
-    if (isFirst) setLogExpanded(true);
-  }, [isFirst]);
+    if (isFirst && onToggleExpand) onToggleExpand(true);
+  }, [isFirst]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const priceFormatter = currentDataSource
     ? makePriceFormatter(currentDataSource.metadata.tick_size)
@@ -41,18 +41,18 @@ export default function PositionCard({ position, scrollToTime, isFirst }) {
 
   const handleCardClick = (e) => {
     if (e.target.closest('[data-log-row]')) return;
-    setLogExpanded((prev) => !prev);
+    if (onToggleExpand) onToggleExpand(!expanded);
   };
 
   const handleLogClick = useCallback(
     (log, index) => {
-      setLogExpanded(true);
+      if (onToggleExpand) onToggleExpand(true);
       scrollToTime(log.time);
       setFlashId(log.id);
       if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
       flashTimerRef.current = setTimeout(() => setFlashId(null), 1000);
     },
-    [scrollToTime]
+    [scrollToTime, onToggleExpand]
   );
 
   const tagColor = isBuy ? 'red' : 'green';
@@ -200,14 +200,17 @@ export default function PositionCard({ position, scrollToTime, isFirst }) {
       </Descriptions>
 
       {/* Expandable trade log */}
-      {logExpanded && (
+      {expanded && (
         <div
+          ref={logContainerRef}
           data-section="trade-log"
           style={{
             display: 'block',
             marginTop: 8,
             borderTop: '1px solid var(--panel-border-color)',
             paddingTop: 8,
+            maxHeight: 200,
+            overflowY: 'auto',
           }}
         >
           {position.log.map((log, index) => (

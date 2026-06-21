@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { ConfigProvider, theme as antdTheme } from 'antd';
 import { TradingDataProvider, useTradingData } from './context/TradingDataContext';
 import { usePolling } from './hooks/usePolling';
@@ -10,6 +10,7 @@ function AppContent() {
   const { theme, refreshData } = useTradingData();
   const [scrollToTime, setScrollToTime] = useState(null);
   const [activeTab, setActiveTab] = useState('summary');
+  const historyPanelRef = useRef(null);
 
   // Start polling
   usePolling(refreshData);
@@ -36,9 +37,13 @@ function AppContent() {
     >
       <Toolbar />
       <div className="ab">
-        <ChartPanel onChartReady={handleChartReady} />
+        <ChartPanel
+          onChartReady={handleChartReady}
+          historyPanelRef={historyPanelRef}
+        />
         {scrollToTime && (
           <HistoryPanel
+            ref={historyPanelRef}
             scrollToTime={scrollToTime}
             activeTab={activeTab}
             onTabChange={handleTabChange}

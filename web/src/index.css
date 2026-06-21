@@ -128,14 +128,12 @@ body {
 
 .history-tabs .ant-tabs-tabpane {
   height: 100%;
-  overflow: hidden auto;  /* scroll y only, no horizontal scrollbar */
+  overflow: hidden;  /* virtual list handles scrolling internally */
 }
 
-/* Layout container inside tab panes — scrolling is handled by the tabpane */
+/* Layout container inside tab panes — kept for compatibility, virtual list handles
+   its own layout via react-window; only used for non-virtualized content */
 .history-scroll-container {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
   padding: 14px;
 }
 
