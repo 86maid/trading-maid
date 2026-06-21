@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { Card, Tag, Flex, Typography, Descriptions } from 'antd';
 import TradeLogRow from './TradeLogRow';
 import { useTradingData } from '../context/TradingDataContext';
@@ -7,7 +7,7 @@ import { t } from '../utils/i18n';
 
 const { Text } = Typography;
 
-export default function PositionCard({ position, scrollToTime, isFirst, expanded, onToggleExpand }) {
+export default function PositionCard({ position, scrollToTime, expanded, onToggleExpand }) {
   const { isZh, currentDataSource } = useTradingData();
   const [flashId, setFlashId] = useState(null);
   const flashTimerRef = useRef(null);
@@ -24,10 +24,6 @@ export default function PositionCard({ position, scrollToTime, isFirst, expanded
     : isFullClose
       ? t('Full Close', '完全平仓', isZh)
       : t('Partial Close', '部分平仓', isZh);
-
-  useEffect(() => {
-    if (isFirst && onToggleExpand) onToggleExpand(true);
-  }, [isFirst]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const priceFormatter = currentDataSource
     ? makePriceFormatter(currentDataSource.metadata.tick_size)

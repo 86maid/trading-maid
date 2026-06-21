@@ -44363,7 +44363,7 @@ function t(en, zh, isZh) {
 //#endregion
 //#region src/components/PositionCard.jsx
 var { Text: Text$1 } = Typography;
-function PositionCard({ position, scrollToTime, isFirst, expanded, onToggleExpand }) {
+function PositionCard({ position, scrollToTime, expanded, onToggleExpand }) {
 	const { isZh, currentDataSource } = useTradingData();
 	const [flashId, setFlashId] = (0, import_react.useState)(null);
 	const flashTimerRef = (0, import_react.useRef)(null);
@@ -44372,9 +44372,6 @@ function PositionCard({ position, scrollToTime, isFirst, expanded, onToggleExpan
 	const isLiquidation = position.log.length > 0 && position.log[position.log.length - 1].kind === "Liquidation";
 	const isFullClose = position.max_quantity === position.close_quantity;
 	const statusText = isLiquidation ? t("Liquidation", "强平", isZh) : isFullClose ? t("Full Close", "完全平仓", isZh) : t("Partial Close", "部分平仓", isZh);
-	(0, import_react.useEffect)(() => {
-		if (isFirst && onToggleExpand) onToggleExpand(true);
-	}, [isFirst]);
 	const priceFormatter = currentDataSource ? makePriceFormatter(currentDataSource.metadata.tick_size) : (v) => String(v);
 	const formatPrice = (v) => {
 		const n = Number(v);
@@ -44751,9 +44748,9 @@ function OrderCard({ order, scrollToTime }) {
 //#region src/components/HistoryPanel.jsx
 var CARD_GAP = 12;
 var OVERSCAN_COUNT = 3;
-var TRADE_LOG_ROW_H = 36;
+var TRADE_LOG_ROW_H = 31;
 var TRADE_LOG_MAX_H = 200;
-var TRADE_LOG_CHROME = 20;
+var TRADE_LOG_CHROME = 17;
 var EST_COLLAPSED = 250;
 var EST_ORDER = 210;
 var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollToTime, activeTab, onTabChange }, ref) {
@@ -44921,7 +44918,6 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PositionCard, {
 					position: pos,
 					scrollToTime: scrollToTimeRef.current,
-					isFirst: index === 0,
 					expanded: expandedRef.current.has(pos.open_time),
 					onToggleExpand: (f) => handleToggleExpandRef.current(pos.open_time, f)
 				})
@@ -45079,7 +45075,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-CQ25cLT8.js.map</script>
+//# sourceMappingURL=index-DgMEwYQQ.js.map</script>
 </head>
 
 <body class="theme-dark">

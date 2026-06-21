@@ -9,9 +9,9 @@ import { useTradingData } from '../context/TradingDataContext';
 // ── Constants ──────────────────────────────────────────────────────────
 const CARD_GAP = 12;
 const OVERSCAN_COUNT = 3;
-const TRADE_LOG_ROW_H = 36;   // per-row height inside trade log
+const TRADE_LOG_ROW_H = 31;   // padding(7+7) + line-height(~17) = 31
 const TRADE_LOG_MAX_H = 200;  // maxHeight of the scrollable log area
-const TRADE_LOG_CHROME = 20;  // marginTop + borderTop + paddingTop
+const TRADE_LOG_CHROME = 17;  // marginTop(8) + borderTop(1) + paddingTop(8)
 const EST_COLLAPSED = 250;    // fallback before first card is measured
 const EST_ORDER = 210;
 
@@ -222,7 +222,6 @@ const HistoryPanel = forwardRef(function HistoryPanel(
             <PositionCard
               position={pos}
               scrollToTime={scrollToTimeRef.current}
-              isFirst={index === 0}
               expanded={expandedRef.current.has(pos.open_time)}
               onToggleExpand={(f) => handleToggleExpandRef.current(pos.open_time, f)}
             />
