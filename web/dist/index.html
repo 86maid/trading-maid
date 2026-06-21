@@ -44751,8 +44751,11 @@ function OrderCard({ order, scrollToTime }) {
 //#region src/components/HistoryPanel.jsx
 var CARD_GAP = 12;
 var OVERSCAN_COUNT = 3;
-var EST_POS = 280;
-var EST_ORD = 220;
+var TRADE_LOG_ROW_H = 36;
+var TRADE_LOG_MAX_H = 200;
+var TRADE_LOG_CHROME = 20;
+var EST_COLLAPSED = 250;
+var EST_ORDER = 210;
 var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollToTime, activeTab, onTabChange }, ref) {
 	const { historyPositionList, historyOrderList, currentSymbol, isZh } = useTradingData();
 	const filteredPositions = (0, import_react.useMemo)(() => historyPositionList.filter((v) => v.symbol === currentSymbol), [historyPositionList, currentSymbol]);
@@ -44761,33 +44764,37 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 	filteredPositionsRef.current = filteredPositions;
 	const filteredOrdersRef = (0, import_react.useRef)(filteredOrders);
 	filteredOrdersRef.current = filteredOrders;
-	const currentSymbolRef = (0, import_react.useRef)(currentSymbol);
-	currentSymbolRef.current = currentSymbol;
 	const scrollToTimeRef = (0, import_react.useRef)(scrollToTime);
 	scrollToTimeRef.current = scrollToTime;
 	const [expandedPositions, setExpandedPositions] = (0, import_react.useState)(/* @__PURE__ */ new Set());
 	const expandedRef = (0, import_react.useRef)(expandedPositions);
 	expandedRef.current = expandedPositions;
-	const posSizeCache = (0, import_react.useRef)({});
-	const orderSizeCache = (0, import_react.useRef)({});
-	const posResetPending = (0, import_react.useRef)(false);
-	const orderResetPending = (0, import_react.useRef)(false);
-	const schedulePosReset = (0, import_react.useCallback)(() => {
-		if (posResetPending.current) return;
-		posResetPending.current = true;
+	const [posCollapsedH, setPosCollapsedH] = (0, import_react.useState)(null);
+	const [orderCollapsedH, setOrderCollapsedH] = (0, import_react.useState)(null);
+	const posFirstMeasureRef = (0, import_react.useCallback)((el) => {
+		if (!el || posCollapsedH !== null) return;
 		requestAnimationFrame(() => {
-			posResetPending.current = false;
-			posListRef.current?.resetAfterIndex(0);
+			if (!el.isConnected) return;
+			const h = Math.round(el.getBoundingClientRect().height);
+			if (h > 0) setPosCollapsedH(h);
 		});
-	}, []);
-	const scheduleOrderReset = (0, import_react.useCallback)(() => {
-		if (orderResetPending.current) return;
-		orderResetPending.current = true;
+	}, [posCollapsedH]);
+	const orderFirstMeasureRef = (0, import_react.useCallback)((el) => {
+		if (!el || orderCollapsedH !== null) return;
 		requestAnimationFrame(() => {
-			orderResetPending.current = false;
-			orderListRef.current?.resetAfterIndex(0);
+			if (!el.isConnected) return;
+			const h = Math.round(el.getBoundingClientRect().height);
+			if (h > 0) setOrderCollapsedH(h);
 		});
-	}, []);
+	}, [orderCollapsedH]);
+	(0, import_react.useEffect)(() => {
+		if (posCollapsedH !== null) requestAnimationFrame(() => posListRef.current?.resetAfterIndex(0));
+	}, [posCollapsedH]);
+	(0, import_react.useEffect)(() => {
+		if (orderCollapsedH !== null) requestAnimationFrame(() => orderListRef.current?.resetAfterIndex(0));
+	}, [orderCollapsedH]);
+	const posListRef = (0, import_react.useRef)(null);
+	const orderListRef = (0, import_react.useRef)(null);
 	const handleToggleExpand = (0, import_react.useCallback)((openTime, force) => {
 		const idx = filteredPositionsRef.current.findIndex((p) => p.open_time === openTime);
 		let changed = false;
@@ -44812,139 +44819,122 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 			else next.add(openTime);
 			return next;
 		});
-		if (idx >= 0 && changed) {
-			delete posSizeCache.current[idx];
-			requestAnimationFrame(() => {
-				posListRef.current?.resetAfterIndex(idx);
-			});
-		}
+		if (idx >= 0 && changed) requestAnimationFrame(() => posListRef.current?.resetAfterIndex(idx));
 	}, []);
 	const handleToggleExpandRef = (0, import_react.useRef)(handleToggleExpand);
 	handleToggleExpandRef.current = handleToggleExpand;
-	const posListRef = (0, import_react.useRef)(null);
-	const orderListRef = (0, import_react.useRef)(null);
-	const posObserverRef = (0, import_react.useRef)(null);
-	const orderObserverRef = (0, import_react.useRef)(null);
-	const posContainerElRef = (0, import_react.useRef)(null);
-	const orderContainerElRef = (0, import_react.useRef)(null);
 	const [posContainerHeight, setPosContainerHeight] = (0, import_react.useState)(0);
 	const [orderContainerHeight, setOrderContainerHeight] = (0, import_react.useState)(0);
+	const posObserverRef = (0, import_react.useRef)(null);
+	const orderObserverRef = (0, import_react.useRef)(null);
 	const posContainerCbRef = (0, import_react.useCallback)((el) => {
 		if (posObserverRef.current) {
 			posObserverRef.current.disconnect();
 			posObserverRef.current = null;
 		}
-		posContainerElRef.current = el;
 		if (!el) return;
 		setPosContainerHeight(el.clientHeight || 0);
-		const observer = new ResizeObserver((entries) => {
-			const h = entries[0]?.contentRect?.height;
+		const obs = new ResizeObserver((e) => {
+			const h = e[0]?.contentRect?.height;
 			if (h != null) setPosContainerHeight(h);
 		});
-		observer.observe(el);
-		posObserverRef.current = observer;
+		obs.observe(el);
+		posObserverRef.current = obs;
 	}, []);
 	const orderContainerCbRef = (0, import_react.useCallback)((el) => {
 		if (orderObserverRef.current) {
 			orderObserverRef.current.disconnect();
 			orderObserverRef.current = null;
 		}
-		orderContainerElRef.current = el;
 		if (!el) return;
 		setOrderContainerHeight(el.clientHeight || 0);
-		const observer = new ResizeObserver((entries) => {
-			const h = entries[0]?.contentRect?.height;
+		const obs = new ResizeObserver((e) => {
+			const h = e[0]?.contentRect?.height;
 			if (h != null) setOrderContainerHeight(h);
 		});
-		observer.observe(el);
-		orderObserverRef.current = observer;
+		obs.observe(el);
+		orderObserverRef.current = obs;
 	}, []);
 	const getPositionItemSize = (0, import_react.useCallback)((index) => {
-		const cached = posSizeCache.current[index];
-		return cached !== void 0 ? cached + CARD_GAP : EST_POS;
-	}, []);
-	const getOrderItemSize = (0, import_react.useCallback)((index) => {
-		const cached = orderSizeCache.current[index];
-		return cached !== void 0 ? cached + CARD_GAP : EST_ORD;
-	}, []);
+		const base = posCollapsedH ?? EST_COLLAPSED;
+		const pos = filteredPositionsRef.current[index];
+		if (pos && expandedRef.current.has(pos.open_time)) {
+			const rows = pos.log?.length || 0;
+			const logH = Math.min(rows * TRADE_LOG_ROW_H, TRADE_LOG_MAX_H);
+			return base + TRADE_LOG_CHROME + logH + CARD_GAP;
+		}
+		return base + CARD_GAP;
+	}, [posCollapsedH]);
+	const getOrderItemSize = (0, import_react.useCallback)(() => {
+		return (orderCollapsedH ?? EST_ORDER) + CARD_GAP;
+	}, [orderCollapsedH]);
 	(0, import_react.useImperativeHandle)(ref, () => ({ scrollToRecord(recordId, onReady) {
-		const list = historyPositionList.filter((v) => v.symbol === currentSymbolRef.current);
-		let targetIndex = -1;
-		let targetPos = null;
+		const list = historyPositionList.filter((v) => v.symbol === currentSymbol);
+		let idx = -1, target = null;
 		for (let i = 0; i < list.length; i++) if (list[i].log?.some((l) => l.id === recordId)) {
-			targetIndex = i;
-			targetPos = list[i];
+			idx = i;
+			target = list[i];
 			break;
 		}
-		if (targetIndex === -1 || !targetPos) {
-			if (onReady) onReady(null);
+		if (idx === -1 || !target) {
+			onReady?.(null);
 			return;
 		}
-		const capturedIndex = targetIndex;
-		const capturedId = recordId;
+		const capIdx = idx, capId = recordId;
 		onTabChange("positions");
-		const alreadyExpanded = expandedRef.current.has(targetPos.open_time);
-		if (!alreadyExpanded) {
+		if (!expandedRef.current.has(target.open_time)) {
 			setExpandedPositions((prev) => {
-				if (prev.has(targetPos.open_time)) return prev;
-				const next = new Set(prev);
-				next.add(targetPos.open_time);
-				return next;
+				if (prev.has(target.open_time)) return prev;
+				const n = new Set(prev);
+				n.add(target.open_time);
+				return n;
 			});
-			delete posSizeCache.current[capturedIndex];
-		}
-		requestAnimationFrame(() => {
-			if (!alreadyExpanded) posListRef.current?.resetAfterIndex(capturedIndex);
 			requestAnimationFrame(() => {
-				posListRef.current?.scrollToItem(capturedIndex, "start");
-				let attempts = 0;
-				const waitForDom = () => {
-					if (document.getElementById("record_" + capturedId)) {
-						if (onReady) onReady(capturedId);
-					} else if (attempts++ < 120) requestAnimationFrame(waitForDom);
-					else if (onReady) onReady(null);
-				};
-				requestAnimationFrame(waitForDom);
+				posListRef.current?.resetAfterIndex(capIdx);
+				requestAnimationFrame(() => {
+					posListRef.current?.scrollToItem(capIdx, "start");
+					requestAnimationFrame(() => pollDom(capId, onReady));
+				});
 			});
+		} else requestAnimationFrame(() => {
+			posListRef.current?.scrollToItem(capIdx, "start");
+			requestAnimationFrame(() => pollDom(capId, onReady));
 		});
+		function pollDom(id, cb) {
+			let n = 0;
+			const check = () => {
+				if (document.getElementById("record_" + id)) cb?.(id);
+				else if (n++ < 120) requestAnimationFrame(check);
+				else cb?.(null);
+			};
+			requestAnimationFrame(check);
+		}
 	} }), [historyPositionList, onTabChange]);
-	const measureCard = (0, import_react.useCallback)((el, index, cacheRef, scheduleReset) => {
-		if (!el) return;
-		requestAnimationFrame(() => {
-			if (!el.isConnected) return;
-			const measured = Math.round(el.getBoundingClientRect().height);
-			if (measured <= 0) return;
-			if (cacheRef.current[index] !== measured) {
-				cacheRef.current[index] = measured;
-				scheduleReset();
-			}
-		});
-	}, []);
 	const renderPositionRow = (0, import_react.useCallback)(({ index, style }) => {
 		const pos = filteredPositionsRef.current[index];
 		if (!pos) return null;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			style,
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				ref: (el) => measureCard(el, index, posSizeCache, schedulePosReset),
+				ref: index === 0 ? posFirstMeasureRef : void 0,
 				style: { padding: "0 14px" },
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PositionCard, {
 					position: pos,
 					scrollToTime: scrollToTimeRef.current,
 					isFirst: index === 0,
 					expanded: expandedRef.current.has(pos.open_time),
-					onToggleExpand: (force) => handleToggleExpandRef.current(pos.open_time, force)
+					onToggleExpand: (f) => handleToggleExpandRef.current(pos.open_time, f)
 				})
 			})
 		});
-	}, [measureCard, schedulePosReset]);
+	}, [posFirstMeasureRef]);
 	const renderOrderRow = (0, import_react.useCallback)(({ index, style }) => {
 		const order = filteredOrdersRef.current[index];
 		if (!order) return null;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			style,
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				ref: (el) => measureCard(el, index, orderSizeCache, scheduleOrderReset),
+				ref: index === 0 ? orderFirstMeasureRef : void 0,
 				style: { padding: "0 14px" },
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OrderCard, {
 					order,
@@ -44952,7 +44942,7 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 				})
 			})
 		});
-	}, [measureCard, scheduleOrderReset]);
+	}, [orderFirstMeasureRef]);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("aside", {
 		style: {
 			flex: 1,
@@ -44976,7 +44966,7 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 					key: "positions",
 					label: isZh ? "历史仓位" : "History Position",
 					children: filteredPositions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, {
-						description: isZh ? "暂无历史仓位" : "No history positions to display",
+						description: isZh ? "暂无历史仓位" : "No history positions",
 						style: { padding: 40 }
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						ref: posContainerCbRef,
@@ -44990,7 +44980,7 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 							width: "100%",
 							itemCount: filteredPositions.length,
 							itemSize: getPositionItemSize,
-							estimatedItemSize: EST_POS,
+							estimatedItemSize: (posCollapsedH ?? EST_COLLAPSED) + CARD_GAP,
 							overscanCount: OVERSCAN_COUNT,
 							style: { overflowX: "hidden" },
 							children: renderPositionRow
@@ -45001,7 +44991,7 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 					key: "orders",
 					label: isZh ? "历史订单" : "History Order",
 					children: filteredOrders.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Empty, {
-						description: isZh ? "暂无历史订单" : "No history orders to display",
+						description: isZh ? "暂无历史订单" : "No history orders",
 						style: { padding: 40 }
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						ref: orderContainerCbRef,
@@ -45015,7 +45005,7 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 							width: "100%",
 							itemCount: filteredOrders.length,
 							itemSize: getOrderItemSize,
-							estimatedItemSize: EST_ORD,
+							estimatedItemSize: (orderCollapsedH ?? EST_ORDER) + CARD_GAP,
 							overscanCount: OVERSCAN_COUNT,
 							style: { overflowX: "hidden" },
 							children: renderOrderRow
@@ -45033,7 +45023,9 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 				getPositionItemSize,
 				getOrderItemSize,
 				renderPositionRow,
-				renderOrderRow
+				renderOrderRow,
+				posCollapsedH,
+				orderCollapsedH
 			]),
 			activeKey: activeTab,
 			onChange: onTabChange,
@@ -45087,7 +45079,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-BXTs2LuI.js.map</script>
+//# sourceMappingURL=index-CQ25cLT8.js.map</script>
 </head>
 
 <body class="theme-dark">
