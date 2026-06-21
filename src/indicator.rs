@@ -462,3 +462,27 @@ pub fn bollinger(
 
     (Some(middle), Some(upper), Some(lower))
 }
+
+/// Detects when `fast` crosses **above** `slow` (golden cross).
+///
+/// Returns `true` if `fast[0] > slow[0]` and `fast[1] <= slow[1]`.
+/// Returns `false` if either series has fewer than 2 elements.
+pub fn cross_over(fast: &Series, slow: &Series) -> bool {
+    if fast.len() < 2 || slow.len() < 2 {
+        return false;
+    }
+
+    fast[0] > slow[0] && fast[1] <= slow[1]
+}
+
+/// Detects when `fast` crosses **below** `slow` (dead cross).
+///
+/// Returns `true` if `fast[0] < slow[0]` and `fast[1] >= slow[1]`.
+/// Returns `false` if either series has fewer than 2 elements.
+pub fn cross_under(fast: &Series, slow: &Series) -> bool {
+    if fast.len() < 2 || slow.len() < 2 {
+        return false;
+    }
+
+    fast[0] < slow[0] && fast[1] >= slow[1]
+}
