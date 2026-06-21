@@ -416,8 +416,8 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 
 ```rust
 // 获取 BTCUSDT 在 5 分钟级别的数据
-if let Some(btc_5m) = cx.request("BTCUSDT", Level::Minute5) {
-    let ma_30 = ma(btc_5m.close, 30);
+if let Some(btc_5m_cx) = cx.request("BTCUSDT", Level::Minute5) {
+    let ma_30 = ma(btc_5m_cx.close, 30);
 }
 ```
 

@@ -417,8 +417,8 @@ Use `cx.request()` to obtain a symbol's OHLCV context at a **specific level**.
 
 ```rust
 // Get BTCUSDT at 5-minute level
-if let Some(btc_5m) = cx.request("BTCUSDT", Level::Minute5) {
-    let ma_30 = ma(btc_5m.close, 30);
+if let Some(btc_5m_cx) = cx.request("BTCUSDT", Level::Minute5) {
+    let ma_30 = ma(btc_5m_cx.close, 30);
 }
 ```
 
