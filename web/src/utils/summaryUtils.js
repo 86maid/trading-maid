@@ -59,23 +59,14 @@ export function computeSummary(historyPositionList, symbol) {
     makeRow('Win Rate', '胜率', `${winRate.toFixed(1)}%`),
     makeRow('Winning Trades', '盈利笔数', winTrades),
     makeRow('Losing Trades', '亏损笔数', lossTrades),
-    makeRow('Net PnL', '总收益', fx(totalProfit), valueClass(totalProfit)),
+    makeRow('Fee', '手续费', `${totalFee.toFixed(2)}`, ''),
     makeRow(
       'Profit Factor',
       '盈亏比',
       profitLossRatio == null ? '∞' : profitLossRatio.toFixed(2),
-      profitLossRatio == null ? '' : profitLossRatio >= 1 ? 'positive' : 'negative'
+      ''
     ),
-    makeRow('Total Net Profit', '净盈利', fx(netGrossProfit), 'positive'),
-    makeRow(
-      'Total Net Loss',
-      '净亏损',
-      `-${netGrossLossAbs.toFixed(2)}`,
-      'negative'
-    ),
-    makeRow('Gross Profit', '毛盈利', fx(grossProfit), 'positive'),
-    makeRow('Gross Loss', '毛亏损', `-${grossLossAbs.toFixed(2)}`, 'negative'),
-    makeRow('Fee', '手续费', `-${totalFee.toFixed(2)}`, 'negative'),
+    makeRow('Net PnL', '总收益', fx(totalProfit), valueClass(totalProfit)),
     makeRow(
       'Average PnL per Trade',
       '平均单笔收益',
@@ -84,6 +75,15 @@ export function computeSummary(historyPositionList, symbol) {
     ),
     makeRow('Best Trade', '最佳单笔', fx(bestTrade), valueClass(bestTrade)),
     makeRow('Worst Trade', '最差单笔', fx(worstTrade), valueClass(worstTrade)),
+    makeRow('Total Net Profit', '净盈利', netGrossProfit.toFixed(2), 'positive'),
+    makeRow(
+      'Total Net Loss',
+      '净亏损',
+      netGrossLossAbs.toFixed(2),
+      'negative'
+    ),
+    makeRow('Gross Profit', '毛盈利', grossProfit.toFixed(2), 'positive'),
+    makeRow('Gross Loss', '毛亏损', grossLossAbs.toFixed(2), 'negative'),
   ];
 
   return { totalTrades, rows };
