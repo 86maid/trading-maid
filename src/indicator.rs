@@ -1,4 +1,5 @@
 use rust_decimal::Decimal;
+use rust_decimal::MathematicalOps;
 use rust_decimal_macros::dec;
 
 use crate::series::Series;
@@ -399,4 +400,65 @@ pub fn swing_low(
     } else {
         None
     }
+}
+
+/// Calculates the Average True Range (ATR) for a given period.
+///
+/// Returns `Some(ATR)` or `None` if the length is zero or insufficient data.
+pub fn atr(high: &Series, low: &Series, close: &Series, length: usize) -> Option<Decimal> {
+    if length == 0 || high.len() < length + 1 || low.len() < length + 1 || close.len() < length + 1
+    {
+        return None;
+    }
+
+    let sum = (0..length)
+        .map(|i| {
+            let h = high[i];
+            let l = low[i];
+            let prev_c = close[i + 1];
+
+            (h - l).max((h - prev_c).abs()).max((l - prev_c).abs())
+        })
+        .sum::<Decimal>();
+
+    Some(sum / Decimal::from(length))
+}
+
+/// Calculates Bollinger Bands for a given series.
+///
+/// Returns `(middle, upper, lower)` where middle is the SMA, upper and lower are
+/// `multiplier` standard deviations away from the middle.
+/// Returns `None` for each band if insufficient data.
+pub fn bollinger(
+    series: &Series,
+    length: usize,
+    multiplier: Decimal,
+) -> (Option<Decimal>, Option<Decimal>, Option<Decimal>) {
+    if length == 0 || series.len() < length {
+        return (None, None, None);
+    }
+
+    let Some(middle) = ma(series, length) else {
+        return (None, None, None);
+    };
+
+    let prices: Vec<Decimal> = series.iter().take(length).copied().collect();
+
+    let variance: Decimal = prices
+        .iter()
+        .map(|p| {
+            let diff = p - middle;
+            diff * diff
+        })
+        .sum::<Decimal>()
+        / Decimal::from(length);
+
+    let Some(std_dev) = variance.sqrt() else {
+        return (None, None, None);
+    };
+
+    let upper = middle + multiplier * std_dev;
+    let lower = middle - multiplier * std_dev;
+
+    (Some(middle), Some(upper), Some(lower))
 }
