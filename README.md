@@ -28,7 +28,7 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - [🚦 Hook Intercept](#-hook-intercept)
 - [📊 Custom Series](#-custom-series)
 - [🌐 Multi-Asset Strategy](#-multi-asset-strategy)
-- [🧪 A Complete Example](#-a-complete-example)
+- [🧪 EMA Strategy Example](#-ema-strategy-example)
 
 ## ✨ Core Capabilities
 
@@ -444,7 +444,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 >
 > ⚠️ **Note:** The engine calls `next` concurrently for each symbol.
 
-## 🧪 A Complete Example
+## 🧪 EMA Strategy Example
 
 ```rust
 use std::sync::Arc;
