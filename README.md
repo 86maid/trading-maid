@@ -27,6 +27,7 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - [🛑 Error Handling](#-error-handling)
 - [🚦 Hook Intercept](#-hook-intercept)
 - [📊 Custom Series](#-custom-series)
+- [🔄 Getting Data at Other Levels](#-getting-data-at-other-levels)
 - [🌐 Multi-Asset Strategy](#-multi-asset-strategy)
 - [🧪 EMA Strategy Example](#-ema-strategy-example)
 
@@ -409,6 +410,26 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 ```
 
 If no series is registered for the given symbol/level/name, `cx[name]` returns an empty series (compare with `== []`).
+
+## 🔄 Getting Data at Other Levels
+
+Use `cx.request()` to obtain a symbol's OHLCV context at a **specific level**.
+
+```rust
+// Get BTCUSDT at 5-minute level
+if let Some(btc_5m) = cx.request("BTCUSDT", Level::Minute5) {
+    let ma_30 = ma(btc_5m.close, 30);
+}
+```
+
+`request` is powered by **resampling**:
+
+- If the requested level matches the **strategy level** (the level passed to `engine.run`) or the **source data level** (the DataSource's level), pre-built data is returned instantly with zero overhead.
+- For any other level, the framework resamples from the source kline data to the target level. The result is **computed on first access and cached** — subsequent calls within the same bar hit the cache and incur no extra cost.
+
+The target level must be an integer multiple of the source data level. Use `is_valid_sampling_target` to check compatibility.
+
+> ⚠️ **Recommendation: always use 1‑minute data as the source.** This allows resampling to any coarser level for maximum flexibility.
 
 ## 🌐 Multi-Asset Strategy
 
