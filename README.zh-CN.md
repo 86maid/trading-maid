@@ -27,6 +27,7 @@ trading-maid 是一个面向加密货币合约交易的回测与实盘框架，�
 - [🛑 错误处理](#-错误处理)
 - [🚦 Hook 劫持](#-hook-劫持)
 - [📊 自定义系列](#-自定义系列)
+- [🌐 多币种策略](#-多币种策略)
 - [🧪 一个完整的例子](#-一个完整的例子)
 
 ## ✨ 核心能力
@@ -91,21 +92,31 @@ trading-maid = "1"
 use trading_maid::prelude::*;
 
 // 出现长上影线时开空单
-async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-    let body_size = (cx.open - cx.close).abs();
-    let upper_shadow_size = (cx.high - cx.open).abs();
+async fn my_strategy(
+    Context {
+        time,
+        open,
+        high,
+        low: _,
+        close,
+        volume: _,
+        exchange,
+    }: &Context<'_>,
+) -> anyhow::Result<()> {
+    let body_size = (open - close).abs();
+    let upper_shadow_size = (high - open).abs();
     let open_short_condition =
-        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= 300;
+        open > close && upper_shadow_size >= body_size * 2 && body_size >= 300;
 
-    if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
-        println!("place order: {}", t2s(cx.time));
+    if exchange.get_position("BTCUSDT").await?.is_none() && open_short_condition {
+        println!("place order: {}", t2s(time));
 
-        let take_profit_price = cx.open - upper_shadow_size;
-        let stop_price = cx.open + upper_shadow_size;
+        let take_profit_price = open - upper_shadow_size;
+        let stop_price = open + upper_shadow_size;
 
-        cx.cancel_all_order("BTCUSDT").await?;
+        exchange.cancel_all_order("BTCUSDT").await?;
 
-        _ = cx
+        _ = exchange
             .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
             .await?;
     }
@@ -227,10 +238,14 @@ async fn my_strategy(
 在 `indicator` 中内置了一些常用的指标。
 
 ```rust
-async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-    highest(cx.high, 7);
-    ma(cx.close, 30);
-    ema(cx.close, 144);
+async fn my_strategy(
+    Context {
+        high, close, ..
+    }: &Context<'_>,
+) -> anyhow::Result<()> {
+    highest(high, 7);
+    ma(close, 30);
+    ema(close, 144);
     Ok(())
 }
 ```
@@ -312,15 +327,13 @@ if let Err(v) = engine.run("BTCUSDT", Level::Minute5).await {
 
 ## 📊 自定义系列
 
-使用 `add_series` 将自定义数据（资金费率、链上指标、情绪等）附加到引擎。注册后，系列会与 OHLCV 数据同步，并可在策略中通过 `cx["name"]` 访问。
+使用 `add_series` 将自定义数据（资金费率、链上指标、情绪等）附加到引擎。注册后，系列会与 OHLCV 数据同步，并可在策略中通过 `series["name"]` 访问。
 
 ### 对齐自定义数据
 
 自定义数据通常以稀疏的 `(时间戳毫秒, 值)` 形式存在。使用 `align_to_series` 将其前向填充为对齐到目标 K 线级别的 `AlignedSeries`：
 
 ```rust
-use trading_maid::prelude::*;
-
 // 稀疏的自定义数据：(时间戳毫秒, 值)
 let custom_data = vec![
     (1717200000000, "1.5".parse::<Decimal>().unwrap()),
@@ -354,12 +367,14 @@ engine.run("BTCUSDT", Level::Hour1).await?;
 在策略中按名称读取附加系列：
 
 ```rust
-async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-    if cx["funding_rate"] != &[] {
+async fn my_strategy(
+    Context { series, .. }: &Context<'_>,
+) -> anyhow::Result<()> {
+    if series["funding_rate"] != &[] {
         // 当前 K 线的资金费率
-        let fr = cx["funding_rate"][0];
+        let fr = series["funding_rate"][0];
         // 上一根 K 线
-        let fr_prev = cx["funding_rate"][1];
+        let fr_prev = series["funding_rate"][1];
 
         // 费率过高时避免做多
         if fr > "0.0005".parse::<Decimal>().unwrap() {
@@ -367,12 +382,43 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         }
     }
 
-    // ... 策略其余部分
     Ok(())
 }
 ```
 
-如果给定的 symbol/level/name 没有注册系列，`cx[name]` 会返回空系列（可通过 `== []` 判断）。
+如果给定的 symbol/level/name 没有注册系列，`series[name]` 会返回空系列（可通过 `== []` 判断）。
+
+## 🌐 多币种策略
+
+同时运行多个交易对的策略。向 `run()` 传入交易对数组，通过 `cx.request()` 访问其他交易对的 OHLCV 数据：
+
+```rust
+let exchange = LocalExchange::new([btc_data, eth_data]);
+
+let mut engine = Engine::new(exchange, my_strategy);
+
+// 向 run() 传入多个交易对
+engine.run(["BTCUSDT", "ETHUSDT"], Level::Hour1).await?;
+```
+
+在策略中，通过 `cx.request()` 访问其他交易对的上下文：
+
+```rust
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    // 直接访问 BTCUSDT（主交易对）
+    let ma_val = ma(cx.close, 30);
+
+    // 通过 request 访问 ETHUSDT
+    if let Some(eth_cx) = cx.request("ETHUSDT", Level::Hour1) {
+        // 像普通 Context 一样使用 eth_cx
+        let ma_val = ma(eth_cx.close, 30);
+    }
+    
+    Ok(())
+}
+```
+
+> ⚠️ **注意：** 所有币种必须使用相同的级别，且数据时间范围必须有交集——只有当所有币种在当前 K 线都有数据时，策略才会触发。
 
 ## 🧪 一个完整的例子
 

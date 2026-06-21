@@ -26,6 +26,7 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - [🛑 Error Handling](#-error-handling)
 - [🚦 Hook Intercept](#-hook-intercept)
 - [📊 Custom Series](#-custom-series)
+- [🌐 Multi-Asset Strategy](#-multi-asset-strategy)
 - [🧪 A Complete Example](#-a-complete-example)
 
 ## ✨ Core Capabilities
@@ -90,21 +91,31 @@ trading-maid = "1"
 use trading_maid::prelude::*;
 
 // Open a short position when a long upper shadow appears.
-async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-    let body_size = (cx.open - cx.close).abs();
-    let upper_shadow_size = (cx.high - cx.open).abs();
+async fn my_strategy(
+    Context {
+        time,
+        open,
+        high,
+        low: _,
+        close,
+        volume: _,
+        exchange,
+    }: &Context<'_>,
+) -> anyhow::Result<()> {
+    let body_size = (open - close).abs();
+    let upper_shadow_size = (high - open).abs();
     let open_short_condition =
-        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= 300;
+        open > close && upper_shadow_size >= body_size * 2 && body_size >= 300;
 
-    if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
-        println!("place order: {}", t2s(cx.time));
+    if exchange.get_position("BTCUSDT").await?.is_none() && open_short_condition {
+        println!("place order: {}", t2s(time));
 
-        let take_profit_price = cx.open - upper_shadow_size;
-        let stop_price = cx.open + upper_shadow_size;
+        let take_profit_price = open - upper_shadow_size;
+        let stop_price = open + upper_shadow_size;
 
-        cx.cancel_all_order("BTCUSDT").await?;
+        exchange.cancel_all_order("BTCUSDT").await?;
 
-        _ = cx
+        _ = exchange
             .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
             .await?;
     }
@@ -226,10 +237,14 @@ async fn my_strategy(
 Some commonly used indicators are built into `indicator`.
 
 ```rust
-async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-    highest(cx.high, 7);
-    ma(cx.close, 30);
-    ema(cx.close, 144);
+async fn my_strategy(
+    Context {
+        high, close, ..
+    }: &Context<'_>,
+) -> anyhow::Result<()> {
+    highest(high, 7);
+    ma(close, 30);
+    ema(close, 144);
     Ok(())
 }
 ```
@@ -313,15 +328,13 @@ if let Err(v) = engine.run("BTCUSDT", Level::Minute5).await {
 
 ## 📊 Custom Series
 
-Use `add_series` to attach custom data (funding rate, on-chain metrics, sentiment, etc.) to the engine. Once registered, the series is synchronised with the OHLCV data and accessible in the strategy via `cx["name"]`.
+Use `add_series` to attach custom data (funding rate, on-chain metrics, sentiment, etc.) to the engine. Once registered, the series is synchronised with the OHLCV data and accessible in the strategy via `series["name"]`.
 
 ### Aligning Custom Data
 
 Custom data usually comes as sparse `(timestamp_ms, value)` pairs. Use `align_to_series` to forward-fill these into an `AlignedSeries` at a target k-line level:
 
 ```rust
-use trading_maid::prelude::*;
-
 // Sparse custom data: (timestamp_ms, value)
 let custom_data = vec![
     (1717200000000, "1.5".parse::<Decimal>().unwrap()),
@@ -355,12 +368,14 @@ engine.run("BTCUSDT", Level::Hour1).await?;
 Read the additional series by name inside the strategy:
 
 ```rust
-async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-    if cx["funding_rate"] != &[] {
+async fn my_strategy(
+    Context { series, .. }: &Context<'_>,
+) -> anyhow::Result<()> {
+    if series["funding_rate"] != &[] {
         // Current bar's funding rate
-        let fr = cx["funding_rate"][0];
+        let fr = series["funding_rate"][0];
         // Previous bar
-        let fr_prev = cx["funding_rate"][1];
+        let fr_prev = series["funding_rate"][1];
 
         // Avoid longing when funding is too high
         if fr > "0.0005".parse::<Decimal>().unwrap() {
@@ -368,12 +383,43 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         }
     }
 
-    // ... rest of strategy
     Ok(())
 }
 ```
 
-If no series is registered for the given symbol/level/name, `cx[name]` returns an empty series (compare with `== []`).
+If no series is registered for the given symbol/level/name, `series[name]` returns an empty series (compare with `== []`).
+
+## 🌐 Multi-Asset Strategy
+
+Run a strategy across multiple symbols simultaneously. Pass an array of symbols to `run()` and use `cx.request()` to access other symbols' OHLCV data:
+
+```rust
+let exchange = LocalExchange::new([btc_data, eth_data]);
+
+let mut engine = Engine::new(exchange, my_strategy);
+
+// Pass multiple symbols to run()
+engine.run(["BTCUSDT", "ETHUSDT"], Level::Hour1).await?;
+```
+
+In the strategy, access another symbol's context via `cx.request()`:
+
+```rust
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    // Access BTCUSDT directly (primary symbol)
+    let ma_val = ma(cx.close, 30);
+
+    // Access ETHUSDT via request
+    if let Some(eth_cx) = cx.request("ETHUSDT", Level::Hour1) {
+        // Use eth_cx like a normal Context
+        let ma_val = ma(eth_cx.close, 30);
+    }
+    
+    Ok(())
+}
+```
+
+> ⚠️ **Note:** All symbols must share the same level, and their data time ranges must overlap — the strategy only fires when all symbols have data at the current bar.
 
 ## 🧪 A Complete Example
 
