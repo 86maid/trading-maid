@@ -21,6 +21,7 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - [🏗️ Architecture Overview](#-architecture-overview)
 - [🚀 Quick Start](#-quick-start)
 - [🧠 Context](#-context)
+- [📊 Series](#-series)
 - [📈 Indicators](#-indicators)
 - [🧩 Strategy as Struct](#-strategy-as-struct)
 - [🛑 Error Handling](#-error-handling)
@@ -91,31 +92,21 @@ trading-maid = "1"
 use trading_maid::prelude::*;
 
 // Open a short position when a long upper shadow appears.
-async fn my_strategy(
-    Context {
-        time,
-        open,
-        high,
-        low: _,
-        close,
-        volume: _,
-        exchange,
-    }: &Context<'_>,
-) -> anyhow::Result<()> {
-    let body_size = (open - close).abs();
-    let upper_shadow_size = (high - open).abs();
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    let body_size = (cx.open - cx.close).abs();
+    let upper_shadow_size = (cx.high - cx.open).abs();
     let open_short_condition =
-        open > close && upper_shadow_size >= body_size * 2 && body_size >= 300;
+        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= 300;
 
-    if exchange.get_position("BTCUSDT").await?.is_none() && open_short_condition {
-        println!("place order: {}", t2s(time));
+    if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
+        println!("place order: {}", t2s(cx.time));
 
-        let take_profit_price = open - upper_shadow_size;
-        let stop_price = open + upper_shadow_size;
+        let take_profit_price = cx.open - upper_shadow_size;
+        let stop_price = cx.open + upper_shadow_size;
 
-        exchange.cancel_all_order("BTCUSDT").await?;
+        cx.cancel_all_order("BTCUSDT").await?;
 
-        _ = exchange
+        _ = cx
             .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
             .await?;
     }
@@ -209,7 +200,7 @@ In `Context`, `time`, `open`, `high`, `low`, and `close` are of type `&Series`, 
 
 You can use `cx.close[0]` for the current k-line close, `cx.close[1]` for the previous k-line close, and so on.
 
-You can use `cx.close[2..]` to get a slice.
+You can use `&cx.close[2..]` to get a slice.
 
 This type also overloads many operators, so you can omit index `[0]` in calculations, for example `cx.close + 100`.
 
@@ -225,6 +216,7 @@ async fn my_strategy(
         close,
         volume,
         exchange,
+        series,
     }: &Context<'_>,
 ) -> anyhow::Result<()> {
     println!("time: {}", t2s(time));
@@ -232,26 +224,57 @@ async fn my_strategy(
 }
 ```
 
+## 📊 Series
+
+`Series` is the core numeric type used throughout `Context`. It wraps a reversed slice — `series[0]` is the current bar, `series[1]` the previous, and so on. Out-of-bounds indices return `Decimal::MAX`.
+
+`Series` overloads a wide range of operators, so you can write natural expressions:
+
+```rust
+// Arithmetic — omits [0] automatically
+cx.close + 100;
+cx.high - cx.low;
+cx.close * dec!(1.5);
+
+// Comparison — compare directly with numbers or strings
+cx.close == 123;
+cx.close > 123.456;
+cx.close < "0.0005";
+
+// Slicing — returns &Series
+&cx.close[2..];     // from 2 bars ago to the start
+&cx.close[..5];     // most recent 5 bars
+&cx.close[2..5];    // range of bars
+```
+
+> ⚠️ **Precision Warning:** Avoid `f64` literals — use strings (`"123.456"`) or the `dec!` macro instead to prevent floating-point precision loss.
+
 ## 📈 Indicators
 
 Some commonly used indicators are built into `indicator`.
 
 ```rust
-async fn my_strategy(
-    Context {
-        high, close, ..
-    }: &Context<'_>,
-) -> anyhow::Result<()> {
-    highest(high, 7);
-    ma(close, 30);
-    ema(close, 144);
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    highest(cx.high, 7);
+    ma(cx.close, 30);
+    ema(cx.close, 144);
     Ok(())
 }
 ```
 
 Calling `ema` directly may lead to slow backtests and incorrect calculations, because EMA depends on the previous EMA value. So it is recommended to use `EMACache` for fast and accurate calculation.
 
-Use `EMACache::with_ema` to create an instance with an initial EMA value.
+Use `EMACache::with_ema` to create an instance with an initial EMA value, then call `EMACache::update` on each k-line to update and get the current value:
+
+```rust
+async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
+    let Some(ema144) = self.ema_cache144.update(cx.close) else {
+        return Ok(());
+    };
+    
+    Ok(())
+}
+```
 
 ## 🧩 Strategy as Struct
 
@@ -328,7 +351,7 @@ if let Err(v) = engine.run("BTCUSDT", Level::Minute5).await {
 
 ## 📊 Custom Series
 
-Use `add_series` to attach custom data (funding rate, on-chain metrics, sentiment, etc.) to the engine. Once registered, the series is synchronised with the OHLCV data and accessible in the strategy via `series["name"]`.
+Use `add_series` to attach custom data (funding rate, on-chain metrics, sentiment, etc.) to the engine. Once registered, the series is synchronised with the OHLCV data and accessible in the strategy via `cx["name"]`.
 
 ### Aligning Custom Data
 
@@ -368,14 +391,12 @@ engine.run("BTCUSDT", Level::Hour1).await?;
 Read the additional series by name inside the strategy:
 
 ```rust
-async fn my_strategy(
-    Context { series, .. }: &Context<'_>,
-) -> anyhow::Result<()> {
-    if series["funding_rate"] != &[] {
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    if cx["funding_rate"] != &[] {
         // Current bar's funding rate
-        let fr = series["funding_rate"][0];
+        let fr = cx["funding_rate"][0];
         // Previous bar
-        let fr_prev = series["funding_rate"][1];
+        let fr_prev = cx["funding_rate"][1];
 
         // Avoid longing when funding is too high
         if fr > dec!(0.0005) {
@@ -387,7 +408,7 @@ async fn my_strategy(
 }
 ```
 
-If no series is registered for the given symbol/level/name, `series[name]` returns an empty series (compare with `== []`).
+If no series is registered for the given symbol/level/name, `cx[name]` returns an empty series (compare with `== []`).
 
 ## 🌐 Multi-Asset Strategy
 

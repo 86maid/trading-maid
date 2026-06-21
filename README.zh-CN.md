@@ -22,6 +22,7 @@ trading-maid 是一个面向加密货币合约交易的回测与实盘框架，�
 - [🏗️ 架构概览](#-架构概览)
 - [🚀 快速开始](#-快速开始)
 - [🧠 Context](#-context)
+- [📊 Series](#-series)
 - [📈 指标](#-指标)
 - [🧩 策略 Struct](#-策略-struct)
 - [🛑 错误处理](#-错误处理)
@@ -92,31 +93,21 @@ trading-maid = "1"
 use trading_maid::prelude::*;
 
 // 出现长上影线时开空单
-async fn my_strategy(
-    Context {
-        time,
-        open,
-        high,
-        low: _,
-        close,
-        volume: _,
-        exchange,
-    }: &Context<'_>,
-) -> anyhow::Result<()> {
-    let body_size = (open - close).abs();
-    let upper_shadow_size = (high - open).abs();
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    let body_size = (cx.open - cx.close).abs();
+    let upper_shadow_size = (cx.high - cx.open).abs();
     let open_short_condition =
-        open > close && upper_shadow_size >= body_size * 2 && body_size >= 300;
+        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= 300;
 
-    if exchange.get_position("BTCUSDT").await?.is_none() && open_short_condition {
-        println!("place order: {}", t2s(time));
+    if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
+        println!("place order: {}", t2s(cx.time));
 
-        let take_profit_price = open - upper_shadow_size;
-        let stop_price = open + upper_shadow_size;
+        let take_profit_price = cx.open - upper_shadow_size;
+        let stop_price = cx.open + upper_shadow_size;
 
-        exchange.cancel_all_order("BTCUSDT").await?;
+        cx.cancel_all_order("BTCUSDT").await?;
 
-        _ = exchange
+        _ = cx
             .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
             .await?;
     }
@@ -210,7 +201,7 @@ async fn main() {
 
 你可以使用 `cx.close[0]` 表示当前 k 线的收盘价，`cx.close[1]` 表示上一根 k 线的收盘价，以此类推。 
 
-你可以使用 `cx.close[2..]` 来获取一个切片。
+你可以使用 `&cx.close[2..]` 来获取一个切片。
 
 该类型还重载了大量的运算符，在计算时候可以省略下标 `[0]`，例如 `cx.close + 100`。
 
@@ -226,6 +217,7 @@ async fn my_strategy(
         close,
         volume,
         exchange,
+        series,
     }: &Context<'_>,
 ) -> anyhow::Result<()> {
     println!("time: {}", t2s(time));
@@ -233,26 +225,57 @@ async fn my_strategy(
 }
 ```
 
+## 📊 Series
+
+`Series` 是 `Context` 中贯穿始终的核心数值类型。它封装了一个倒序切片——`series[0]` 是当前 K 线，`series[1]` 是上一根，以此类推。越界索引返回 `Decimal::MAX`。
+
+`Series` 重载了大量运算符，可以写出自然的表达式：
+
+```rust
+// 算术运算——自动省略 [0]
+cx.close + 100;
+cx.high - cx.low;
+cx.close * dec!(1.5);
+
+// 比较——直接与数字或字符串比较
+cx.close == 123;
+cx.close > 123.456;
+cx.close < "0.0005";
+
+// 切片——返回 &Series
+&cx.close[2..];     // 从 2 根前到最早
+&cx.close[..5];     // 最近 5 根
+&cx.close[2..5];    // 指定范围
+```
+
+> ⚠️ **精度警告：** 避免使用 `f64` 字面量——应使用字符串（`"123.456"`）或 `dec!` 宏，以防止浮点数精度丢失。
+
 ## 📈 指标
 
 在 `indicator` 中内置了一些常用的指标。
 
 ```rust
-async fn my_strategy(
-    Context {
-        high, close, ..
-    }: &Context<'_>,
-) -> anyhow::Result<()> {
-    highest(high, 7);
-    ma(close, 30);
-    ema(close, 144);
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    highest(cx.high, 7);
+    ma(cx.close, 30);
+    ema(cx.close, 144);
     Ok(())
 }
 ```
 
 直接调用 `ema` 函数可能导致回测缓慢和计算错误，因为计算 `ema` 需要用到上一个 `ema` 的值，所以推荐使用 `EMACache` 来进行快速和精确的计算。
 
-使用 `EMACache::with_ema` 可以创建一个带有初始值的实例。
+使用 `EMACache::with_ema` 可以创建一个带有初始值的实例，然后在每根 K 线调用 `EMACache::update` 更新并获取当前值：
+
+```rust
+async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
+    let Some(ema144) = self.ema_cache144.update(cx.close) else {
+        return Ok(());
+    };
+    
+    Ok(())
+}
+```
 
 ## 🧩 策略 Struct
 
@@ -327,7 +350,7 @@ if let Err(v) = engine.run("BTCUSDT", Level::Minute5).await {
 
 ## 📊 自定义系列
 
-使用 `add_series` 将自定义数据（资金费率、链上指标、情绪等）附加到引擎。注册后，系列会与 OHLCV 数据同步，并可在策略中通过 `series["name"]` 访问。
+使用 `add_series` 将自定义数据（资金费率、链上指标、情绪等）附加到引擎。注册后，系列会与 OHLCV 数据同步，并可在策略中通过 `cx["name"]` 访问。
 
 ### 对齐自定义数据
 
@@ -367,14 +390,12 @@ engine.run("BTCUSDT", Level::Hour1).await?;
 在策略中按名称读取附加系列：
 
 ```rust
-async fn my_strategy(
-    Context { series, .. }: &Context<'_>,
-) -> anyhow::Result<()> {
-    if series["funding_rate"] != &[] {
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    if cx["funding_rate"] != &[] {
         // 当前 K 线的资金费率
-        let fr = series["funding_rate"][0];
+        let fr = cx["funding_rate"][0];
         // 上一根 K 线
-        let fr_prev = series["funding_rate"][1];
+        let fr_prev = cx["funding_rate"][1];
 
         // 费率过高时避免做多
         if fr > dec!(0.0005) {
@@ -386,7 +407,7 @@ async fn my_strategy(
 }
 ```
 
-如果给定的 symbol/level/name 没有注册系列，`series[name]` 会返回空系列（可通过 `== []` 判断）。
+如果给定的 symbol/level/name 没有注册系列，`cx[name]` 会返回空系列（可通过 `== []` 判断）。
 
 ## 🌐 多币种策略
 
