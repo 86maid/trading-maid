@@ -152,16 +152,22 @@ const HistoryPanel = forwardRef(function HistoryPanel(
   const getPositionItemSize = useCallback((index) => {
     const base = posCollapsedH ?? EST_COLLAPSED;
     const pos = filteredPositionsRef.current[index];
+    let h;
     if (pos && expandedRef.current.has(pos.open_time)) {
       const rows = pos.log?.length || 0;
       const logH = Math.min(rows * TRADE_LOG_ROW_H, TRADE_LOG_MAX_H);
-      return base + TRADE_LOG_CHROME + logH + CARD_GAP;
+      h = base + TRADE_LOG_CHROME + logH + CARD_GAP;
+    } else {
+      h = base + CARD_GAP;
     }
-    return base + CARD_GAP;
+    if (index === 0) h += CARD_GAP; // top spacing for first item
+    return h;
   }, [posCollapsedH]);
 
-  const getOrderItemSize = useCallback(() => {
-    return (orderCollapsedH ?? EST_ORDER) + CARD_GAP;
+  const getOrderItemSize = useCallback((index) => {
+    let h = (orderCollapsedH ?? EST_ORDER) + CARD_GAP;
+    if (index === 0) h += CARD_GAP; // top spacing for first item
+    return h;
   }, [orderCollapsedH]);
 
   // ── scrollToRecord ──────────────────────────────────────────────────
@@ -177,24 +183,30 @@ const HistoryPanel = forwardRef(function HistoryPanel(
       const capIdx = idx, capId = recordId;
       onTabChange('positions');
 
-      if (!expandedRef.current.has(target.open_time)) {
-        setExpandedPositions(prev => {
-          if (prev.has(target.open_time)) return prev;
-          const n = new Set(prev); n.add(target.open_time); return n;
-        });
+      // Always ensure the position is expanded
+      setExpandedPositions(prev => {
+        if (prev.has(target.open_time)) return prev;
+        const n = new Set(prev); n.add(target.open_time); return n;
+      });
+
+      // Wait for the virtual list to be ready (tab switch may need
+      // one extra render for the container to measure its height).
+      const waitForList = (cb) => {
+        let n = 0;
+        const check = () => {
+          if (posListRef.current) { cb(); }
+          else if (n++ < 120) requestAnimationFrame(check);
+        };
+        requestAnimationFrame(check);
+      };
+
+      waitForList(() => {
+        posListRef.current.resetAfterIndex(capIdx);
         requestAnimationFrame(() => {
-          posListRef.current?.resetAfterIndex(capIdx);
-          requestAnimationFrame(() => {
-            posListRef.current?.scrollToItem(capIdx, 'start');
-            requestAnimationFrame(() => pollDom(capId, onReady));
-          });
-        });
-      } else {
-        requestAnimationFrame(() => {
-          posListRef.current?.scrollToItem(capIdx, 'start');
+          posListRef.current.scrollToItem(capIdx, 'start');
           requestAnimationFrame(() => pollDom(capId, onReady));
         });
-      }
+      });
 
       function pollDom(id, cb) {
         let n = 0;
@@ -215,6 +227,7 @@ const HistoryPanel = forwardRef(function HistoryPanel(
       if (!pos) return null;
       return (
         <div style={style}>
+          {index === 0 && <div style={{ height: CARD_GAP }} />}
           <div
             ref={index === 0 ? posFirstMeasureRef : undefined}
             style={{ padding: '0 14px' }}
@@ -238,6 +251,7 @@ const HistoryPanel = forwardRef(function HistoryPanel(
       if (!order) return null;
       return (
         <div style={style}>
+          {index === 0 && <div style={{ height: CARD_GAP }} />}
           <div
             ref={index === 0 ? orderFirstMeasureRef : undefined}
             style={{ padding: '0 14px' }}

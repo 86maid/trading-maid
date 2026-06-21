@@ -44855,15 +44855,19 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 	const getPositionItemSize = (0, import_react.useCallback)((index) => {
 		const base = posCollapsedH ?? EST_COLLAPSED;
 		const pos = filteredPositionsRef.current[index];
+		let h;
 		if (pos && expandedRef.current.has(pos.open_time)) {
 			const rows = pos.log?.length || 0;
 			const logH = Math.min(rows * TRADE_LOG_ROW_H, TRADE_LOG_MAX_H);
-			return base + TRADE_LOG_CHROME + logH + CARD_GAP;
-		}
-		return base + CARD_GAP;
+			h = base + TRADE_LOG_CHROME + logH + CARD_GAP;
+		} else h = base + CARD_GAP;
+		if (index === 0) h += CARD_GAP;
+		return h;
 	}, [posCollapsedH]);
-	const getOrderItemSize = (0, import_react.useCallback)(() => {
-		return (orderCollapsedH ?? EST_ORDER) + CARD_GAP;
+	const getOrderItemSize = (0, import_react.useCallback)((index) => {
+		let h = (orderCollapsedH ?? EST_ORDER) + CARD_GAP;
+		if (index === 0) h += CARD_GAP;
+		return h;
 	}, [orderCollapsedH]);
 	(0, import_react.useImperativeHandle)(ref, () => ({ scrollToRecord(recordId, onReady) {
 		const list = historyPositionList.filter((v) => v.symbol === currentSymbol);
@@ -44879,23 +44883,26 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 		}
 		const capIdx = idx, capId = recordId;
 		onTabChange("positions");
-		if (!expandedRef.current.has(target.open_time)) {
-			setExpandedPositions((prev) => {
-				if (prev.has(target.open_time)) return prev;
-				const n = new Set(prev);
-				n.add(target.open_time);
-				return n;
-			});
+		setExpandedPositions((prev) => {
+			if (prev.has(target.open_time)) return prev;
+			const n = new Set(prev);
+			n.add(target.open_time);
+			return n;
+		});
+		const waitForList = (cb) => {
+			let n = 0;
+			const check = () => {
+				if (posListRef.current) cb();
+				else if (n++ < 120) requestAnimationFrame(check);
+			};
+			requestAnimationFrame(check);
+		};
+		waitForList(() => {
+			posListRef.current.resetAfterIndex(capIdx);
 			requestAnimationFrame(() => {
-				posListRef.current?.resetAfterIndex(capIdx);
-				requestAnimationFrame(() => {
-					posListRef.current?.scrollToItem(capIdx, "start");
-					requestAnimationFrame(() => pollDom(capId, onReady));
-				});
+				posListRef.current.scrollToItem(capIdx, "start");
+				requestAnimationFrame(() => pollDom(capId, onReady));
 			});
-		} else requestAnimationFrame(() => {
-			posListRef.current?.scrollToItem(capIdx, "start");
-			requestAnimationFrame(() => pollDom(capId, onReady));
 		});
 		function pollDom(id, cb) {
 			let n = 0;
@@ -44910,9 +44917,9 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 	const renderPositionRow = (0, import_react.useCallback)(({ index, style }) => {
 		const pos = filteredPositionsRef.current[index];
 		if (!pos) return null;
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			style,
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			children: [index === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { height: CARD_GAP } }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				ref: index === 0 ? posFirstMeasureRef : void 0,
 				style: { padding: "0 14px" },
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PositionCard, {
@@ -44921,22 +44928,22 @@ var HistoryPanel = (0, import_react.forwardRef)(function HistoryPanel({ scrollTo
 					expanded: expandedRef.current.has(pos.open_time),
 					onToggleExpand: (f) => handleToggleExpandRef.current(pos.open_time, f)
 				})
-			})
+			})]
 		});
 	}, [posFirstMeasureRef]);
 	const renderOrderRow = (0, import_react.useCallback)(({ index, style }) => {
 		const order = filteredOrdersRef.current[index];
 		if (!order) return null;
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			style,
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			children: [index === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { height: CARD_GAP } }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				ref: index === 0 ? orderFirstMeasureRef : void 0,
 				style: { padding: "0 14px" },
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OrderCard, {
 					order,
 					scrollToTime: scrollToTimeRef.current
 				})
-			})
+			})]
 		});
 	}, [orderFirstMeasureRef]);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("aside", {
@@ -45075,7 +45082,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-DgMEwYQQ.js.map</script>
+//# sourceMappingURL=index-B-yu0Y0H.js.map</script>
 </head>
 
 <body class="theme-dark">
