@@ -378,7 +378,7 @@ async fn my_strategy(
         let fr_prev = series["funding_rate"][1];
 
         // Avoid longing when funding is too high
-        if fr > "0.0005".parse::<Decimal>().unwrap() {
+        if fr > dec!(0.0005) {
             return Ok(());
         }
     }
@@ -420,6 +420,8 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 ```
 
 > ⚠️ **Note:** All symbols must share the same level, and their data time ranges must overlap — the strategy only fires when all symbols have data at the current bar.
+>
+> ⚠️ **Note:** The engine calls `next` concurrently for each symbol.
 
 ## 🧪 A Complete Example
 

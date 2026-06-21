@@ -377,7 +377,7 @@ async fn my_strategy(
         let fr_prev = series["funding_rate"][1];
 
         // 费率过高时避免做多
-        if fr > "0.0005".parse::<Decimal>().unwrap() {
+        if fr > dec!(0.0005) {
             return Ok(());
         }
     }
@@ -419,6 +419,8 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 ```
 
 > ⚠️ **注意：** 所有币种必须使用相同的级别，且数据时间范围必须有交集——只有当所有币种在当前 K 线都有数据时，策略才会触发。
+>
+> ⚠️ **注意：** 回测引擎会并发调用每个币种的 `next`。
 
 ## 🧪 一个完整的例子
 
