@@ -334,6 +334,7 @@ let series = align_to_series(&custom_data, Level::Hour1).unwrap();
 // Register with the engine before calling run()
 let mut engine = Engine::new(exchange, my_strategy);
 engine.add_series("BTCUSDT", "custom_metric", series);
+engine.run("BTCUSDT", Level::Hour1).await?;
 ```
 
 ### Funding Rate Example
@@ -346,6 +347,7 @@ let funding_rate_series = get_or_download_funding_rate_to_series(
 ).await.unwrap();
 
 engine.add_series("BTCUSDT", "funding_rate", funding_rate_series);
+engine.run("BTCUSDT", Level::Hour1).await?;
 ```
 
 ### Access in Strategy
@@ -354,14 +356,16 @@ Read the additional series by name inside the strategy:
 
 ```rust
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
-    // Current bar's funding rate
-    let fr = cx["funding_rate"][0];
-    // Previous bar
-    let fr_prev = cx["funding_rate"][1];
+    if cx["funding_rate"] != &[] {
+        // Current bar's funding rate
+        let fr = cx["funding_rate"][0];
+        // Previous bar
+        let fr_prev = cx["funding_rate"][1];
 
-    // Avoid longing when funding is too high
-    if fr > "0.0005".parse::<Decimal>().unwrap() {
-        return Ok(());
+        // Avoid longing when funding is too high
+        if fr > "0.0005".parse::<Decimal>().unwrap() {
+            return Ok(());
+        }
     }
 
     // ... rest of strategy
