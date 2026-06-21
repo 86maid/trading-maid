@@ -13,7 +13,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         cx.cancel_all_order("BTCUSDT").await?;
 
         _ = cx
-            .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
+            .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, "0.01")
             .await?;
     }
 

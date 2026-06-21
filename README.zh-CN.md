@@ -108,7 +108,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         cx.cancel_all_order("BTCUSDT").await?;
 
         _ = cx
-            .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, 0.01)
+            .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, "0.01")
             .await?;
     }
 
@@ -398,7 +398,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         let fr_prev = cx["funding_rate"][1];
 
         // 费率过高时避免做多
-        if fr > dec!(0.0005) {
+        if fr > "0.0005" {
             return Ok(());
         }
     }
@@ -486,7 +486,7 @@ impl Strategy for MyStrategy {
             cx.cancel_all_order("BTCUSDT").await?;
 
             _ = cx
-                .sell_tp_sl("BTCUSDT", cx.close - 1000, cx.close + 1000, 0.01)
+                .sell_tp_sl("BTCUSDT", cx.close - 1000, cx.close + 1000, "0.01")
                 .await?;
         }
 

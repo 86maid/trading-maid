@@ -38,7 +38,7 @@ impl Strategy for MyStrategy {
             cx.cancel_all_order("BTCUSDT").await?;
 
             _ = cx
-                .sell_tp_sl("BTCUSDT", cx.close - 1000, cx.close + 1000, 0.01)
+                .sell_tp_sl("BTCUSDT", cx.close - 1000, cx.close + 1000, "0.01")
                 .await?;
         }
 
