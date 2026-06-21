@@ -43646,7 +43646,9 @@ function ChartPanel({ onChartReady }) {
 	const { currentDataSource, theme, magnet, showVolume, locale, historyPositionList } = useTradingData();
 	const blinkRef = (0, import_react.useRef)({
 		interval: null,
-		timeout: null
+		timeout: null,
+		scrollTimer: null,
+		scrollCleanup: null
 	});
 	const { scrollToTime } = useChart(containerRef, currentDataSource, theme, magnet, showVolume, locale, historyPositionList, import_react.useCallback((hoveredObjectId) => {
 		if (blinkRef.current.interval) {
@@ -43656,6 +43658,14 @@ function ChartPanel({ onChartReady }) {
 		if (blinkRef.current.timeout) {
 			clearTimeout(blinkRef.current.timeout);
 			blinkRef.current.timeout = null;
+		}
+		if (blinkRef.current.scrollTimer) {
+			clearTimeout(blinkRef.current.scrollTimer);
+			blinkRef.current.scrollTimer = null;
+		}
+		if (blinkRef.current.scrollCleanup) {
+			blinkRef.current.scrollCleanup();
+			blinkRef.current.scrollCleanup = null;
 		}
 		const posTab = document.querySelector("[data-node-key=\"positions\"]");
 		if (posTab) posTab.click();
@@ -43682,11 +43692,11 @@ function ChartPanel({ onChartReady }) {
 				const log = record.closest("[data-section=\"trade-log\"]");
 				if (log) log.style.display = "block";
 				const color = getComputedStyle(document.body).getPropertyValue("--highlight-color").trim();
-				blinkRef.current.timeout = setTimeout(() => {
+				const startBlink = () => {
+					if (blinkRef.current.interval) return;
 					let flag = false;
 					blinkRef.current.interval = setInterval(() => {
-						if (flag) record.style.backgroundColor = color;
-						else record.style.backgroundColor = "";
+						record.style.backgroundColor = flag ? color : "";
 						flag = !flag;
 					}, 100);
 					blinkRef.current.timeout = setTimeout(() => {
@@ -43695,7 +43705,36 @@ function ChartPanel({ onChartReady }) {
 						blinkRef.current.timeout = null;
 						record.style.backgroundColor = "";
 					}, 1e3);
-				}, 400);
+				};
+				let scrollContainer = card.parentElement;
+				while (scrollContainer && scrollContainer.scrollHeight <= scrollContainer.clientHeight) scrollContainer = scrollContainer.parentElement;
+				const scrollTarget = scrollContainer && scrollContainer !== document.documentElement ? scrollContainer : window;
+				const rect = record.getBoundingClientRect();
+				if (rect.top >= 0 && rect.bottom <= window.innerHeight) startBlink();
+				else {
+					const cleanupScrollWatch = () => {
+						if (blinkRef.current.scrollTimer) {
+							clearTimeout(blinkRef.current.scrollTimer);
+							blinkRef.current.scrollTimer = null;
+						}
+						scrollTarget.removeEventListener("scroll", onScroll, { passive: true });
+					};
+					blinkRef.current.scrollCleanup = cleanupScrollWatch;
+					const onScroll = () => {
+						if (blinkRef.current.scrollTimer) clearTimeout(blinkRef.current.scrollTimer);
+						blinkRef.current.scrollTimer = setTimeout(() => {
+							cleanupScrollWatch();
+							blinkRef.current.scrollCleanup = null;
+							startBlink();
+						}, 150);
+					};
+					scrollTarget.addEventListener("scroll", onScroll, { passive: true });
+					blinkRef.current.scrollTimer = setTimeout(() => {
+						cleanupScrollWatch();
+						blinkRef.current.scrollCleanup = null;
+						startBlink();
+					}, 2e3);
+				}
 			});
 		});
 	}, []));
@@ -44367,7 +44406,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-O2176r64.js.map</script>
+//# sourceMappingURL=index-BI39u0m0.js.map</script>
 </head>
 
 <body class="theme-dark">

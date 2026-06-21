@@ -14,12 +14,17 @@ export default function ChartPanel({ onChartReady }) {
   } = useTradingData();
 
   // Track active blink state for cleanup across rapid clicks
-  const blinkRef = useRef({ interval: null, timeout: null });
+  const blinkRef = useRef({
+    interval: null,
+    timeout: null,
+    scrollTimer: null,
+    scrollCleanup: null,
+  });
 
   // Handle marker click: switch to positions tab, expand the right card, scroll + blink
   const handleMarkerClick = React.useCallback(
     (hoveredObjectId) => {
-      // 1. Clear any previous blink
+      // 1. Clear any previous blink / scroll watcher
       if (blinkRef.current.interval) {
         clearInterval(blinkRef.current.interval);
         blinkRef.current.interval = null;
@@ -27,6 +32,14 @@ export default function ChartPanel({ onChartReady }) {
       if (blinkRef.current.timeout) {
         clearTimeout(blinkRef.current.timeout);
         blinkRef.current.timeout = null;
+      }
+      if (blinkRef.current.scrollTimer) {
+        clearTimeout(blinkRef.current.scrollTimer);
+        blinkRef.current.scrollTimer = null;
+      }
+      if (blinkRef.current.scrollCleanup) {
+        blinkRef.current.scrollCleanup();
+        blinkRef.current.scrollCleanup = null;
       }
 
       // 2. Switch to positions tab
@@ -72,15 +85,12 @@ export default function ChartPanel({ onChartReady }) {
           const style = getComputedStyle(document.body);
           const color = style.getPropertyValue('--highlight-color').trim();
 
-          // Wait for smooth scroll to finish (~400ms), then blink
-          blinkRef.current.timeout = setTimeout(() => {
+          // Start the blink animation
+          const startBlink = () => {
+            if (blinkRef.current.interval) return; // already blinking
             let flag = false;
             blinkRef.current.interval = setInterval(() => {
-              if (flag) {
-                record.style.backgroundColor = color;
-              } else {
-                record.style.backgroundColor = '';
-              }
+              record.style.backgroundColor = flag ? color : '';
               flag = !flag;
             }, 100);
             blinkRef.current.timeout = setTimeout(() => {
@@ -89,7 +99,65 @@ export default function ChartPanel({ onChartReady }) {
               blinkRef.current.timeout = null;
               record.style.backgroundColor = '';
             }, 1000);
-          }, 400);
+          };
+
+          // Find the scrollable container that scrollIntoView will use
+          let scrollContainer = card.parentElement;
+          while (
+            scrollContainer &&
+            scrollContainer.scrollHeight <= scrollContainer.clientHeight
+          ) {
+            scrollContainer = scrollContainer.parentElement;
+          }
+          const scrollTarget =
+            scrollContainer && scrollContainer !== document.documentElement
+              ? scrollContainer
+              : window;
+
+          // Check if target is already in view (no scroll needed)
+          const rect = record.getBoundingClientRect();
+          const isInView =
+            rect.top >= 0 &&
+            rect.bottom <= window.innerHeight;
+
+          if (isInView) {
+            // Already visible, blink immediately
+            startBlink();
+          } else {
+            // Wait for smooth scroll to actually finish, then blink
+            const cleanupScrollWatch = () => {
+              if (blinkRef.current.scrollTimer) {
+                clearTimeout(blinkRef.current.scrollTimer);
+                blinkRef.current.scrollTimer = null;
+              }
+              scrollTarget.removeEventListener('scroll', onScroll, {
+                passive: true,
+              });
+            };
+            blinkRef.current.scrollCleanup = cleanupScrollWatch;
+
+            const onScroll = () => {
+              // Debounce: restart the timer every time a scroll event fires
+              if (blinkRef.current.scrollTimer)
+                clearTimeout(blinkRef.current.scrollTimer);
+              blinkRef.current.scrollTimer = setTimeout(() => {
+                cleanupScrollWatch();
+                blinkRef.current.scrollCleanup = null;
+                startBlink();
+              }, 150); // 150ms of no scrolling = scroll has ended
+            };
+
+            scrollTarget.addEventListener('scroll', onScroll, {
+              passive: true,
+            });
+
+            // Safety fallback: if scroll events never settle, blink anyway
+            blinkRef.current.scrollTimer = setTimeout(() => {
+              cleanupScrollWatch();
+              blinkRef.current.scrollCleanup = null;
+              startBlink();
+            }, 2000);
+          }
         });
       });
     },
