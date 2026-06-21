@@ -205,7 +205,7 @@ async fn main() {
 
 该类型还重载了大量的运算符，在计算时候可以省略下标 `[0]`，例如 `cx.close + 100`。
 
-你可以将 `Context` 展开，以方便使用 OHLC。
+你可以将 `Context` 展开，以方便使用 OHLCV。
 
 ```rust
 async fn my_strategy(

@@ -204,7 +204,7 @@ You can use `&cx.close[2..]` to get a slice.
 
 This type also overloads many operators, so you can omit index `[0]` in calculations, for example `cx.close + 100`.
 
-You can destructure `Context` for easier OHLC usage.
+You can destructure `Context` for easier OHLCV usage.
 
 ```rust
 async fn my_strategy(
