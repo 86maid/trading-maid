@@ -1,7 +1,6 @@
 ---
 name: strategy-backtest
 description: AI 编写交易策略并通过回测迭代优化，直到策略收益为正
-model: opus
 ---
 
 # 策略编写与回测迭代
