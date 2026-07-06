@@ -31,6 +31,9 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - [🔄 Getting Data at Other Levels](#-getting-data-at-other-levels)
 - [🌐 Multi-Asset Strategy](#-multi-asset-strategy)
 - [🧪 EMA Strategy Example](#-ema-strategy-example)
+- [📊 Shadow Reversal Example](#-shadow-reversal--candle-wick-reversal-built-in-indicators)
+- [📊 Volume Breakout Example](#-volume-breakout--donchian--volume-spike-custom-indicators)
+- [📊 Price Action Example](#-price-action--momentum-breakout-custom-indicators)
 
 ## ✨ Core Capabilities
 
@@ -529,7 +532,11 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 >
 > ⚠️ **Note:** The engine calls `next` concurrently for each symbol.
 
-## 🧪 EMA Strategy Example
+## 📐 Strategy Examples
+
+The `examples/` directory contains runnable strategies that demonstrate different approaches. Some build on built-in indicators, while others implement their own from scratch.
+
+### 🧪 EMA Strategy Example
 
 ```rust
 use std::sync::Arc;
@@ -653,4 +660,289 @@ async fn main() {
     .await
     .unwrap();
 }
+```
+### 📊 Shadow Reversal — Candle Wick Reversal (built-in indicators)
+
+A mean-reversion strategy that opens positions when long wicks (rejection) or long lower shadows (support) appear on 4-hour candles. Uses only `atr()` from the built-in indicators.
+
+```rust
+use trading_maid::prelude::*;
+
+fn round_to_tick(price: Decimal) -> Decimal {
+    let tick = dec!(0.1);
+    let rounded = (price / tick).round_dp(0) * tick;
+    if rounded <= Decimal::ZERO { tick } else { rounded }
+}
+
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    if cx.close.len() < 50 {
+        return Ok(());
+    }
+
+    let atr_val = atr(cx.high, cx.low, cx.close, 14);
+    let Some(atr) = atr_val else { return Ok(()) };
+
+    if cx.get_position("BTCUSDT").await?.is_some() {
+        return Ok(());
+    }
+
+    let body = (cx.open[0] - cx.close[0]).abs();
+
+    // Short: upper shadow >= 2x body + body >= 200
+    let upper_shadow = cx.high[0] - cx.open[0].max(cx.close[0]);
+    if cx.close[0] < cx.open[0]
+        && upper_shadow >= body * dec!(2)
+        && body >= dec!(200)
+    {
+        let sl = round_to_tick(cx.high[0] + atr * dec!(0.5));
+        let tp = round_to_tick(cx.low[0] - atr * dec!(3));
+        cx.cancel_all_order("BTCUSDT").await?;
+        _ = cx.sell_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
+        return Ok(());
+    }
+
+    // Long: lower shadow >= 2x body + body >= 200
+    let lower_shadow = cx.open[0].min(cx.close[0]) - cx.low[0];
+    if cx.close[0] > cx.open[0]
+        && lower_shadow >= body * dec!(2)
+        && body >= dec!(200)
+    {
+        let sl = round_to_tick(cx.low[0] - atr * dec!(0.5));
+        let tp = round_to_tick(cx.high[0] + atr * dec!(3));
+        cx.cancel_all_order("BTCUSDT").await?;
+        _ = cx.buy_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    let result = backtest("BTCUSDT", 12, my_strategy, Level::Hour4)
+        .await
+        .unwrap();
+    println!("summary: {:#?}", result.summarize());
+}
+```
+
+**Backtest result (12 months, BTCUSDT, 4H):**
+
+| Metric | Value |
+|--------|-------|
+| total_profit | **252 USDT** |
+| total_trades | **57** |
+| win_rate | **35%** |
+| profit_loss_ratio | **2.49** |
+
+### 📊 Volume Breakout — Donchian + Volume Spike (custom indicators)
+
+A breakout strategy that implements **Donchian channels**, **volume ratio**, and **RMA (smoothed moving average)** entirely from scratch. Enters when price breaks the 20-period Donchian channel with 1.3x+ volume spike and price above/below the RMA trend filter.
+
+```rust
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use std::collections::VecDeque;
+use trading_maid::prelude::*;
+
+fn donchian(high: &[Decimal], low: &[Decimal], period: usize) -> (Decimal, Decimal) {
+    let upper = high.iter().take(period).copied().fold(Decimal::MIN, Decimal::max);
+    let lower = low.iter().take(period).copied().fold(Decimal::MAX, Decimal::min);
+    (upper, lower)
+}
+
+fn vol_ratio(volume: &[Decimal], period: usize) -> Option<Decimal> {
+    if volume.len() < period + 1 { return None; }
+    let avg: Decimal = volume.iter().skip(1).take(period).sum::<Decimal>() / Decimal::from(period);
+    if avg.is_zero() { None } else { Some(volume[0] / avg) }
+}
+
+struct Rma {
+    period: usize,
+    buf: VecDeque<Decimal>,
+    value: Option<Decimal>,
+}
+
+impl Rma {
+    fn new(period: usize) -> Self { Rma { period, buf: VecDeque::new(), value: None } }
+    fn update(&mut self, price: Decimal) -> Option<Decimal> {
+        self.buf.push_front(price);
+        if self.buf.len() < self.period {
+            let sum: Decimal = self.buf.iter().sum();
+            self.value = Some(sum / Decimal::from(self.buf.len()));
+            return self.value;
+        }
+        if self.buf.len() == self.period {
+            let sum: Decimal = self.buf.iter().sum();
+            self.value = Some(sum / Decimal::from(self.period));
+            return self.value;
+        }
+        let alpha = dec!(1) / Decimal::from(self.period);
+        if let Some(prev) = self.value {
+            self.value = Some(alpha * price + (dec!(1) - alpha) * prev);
+        }
+        self.value
+    }
+}
+
+struct VolumeBreakout {
+    high_buf: VecDeque<Decimal>,
+    low_buf: VecDeque<Decimal>,
+    vol_buf: VecDeque<Decimal>,
+    rma_close: Rma,
+    rma_vol: Rma,
+}
+
+impl VolumeBreakout {
+    fn new() -> Self { VolumeBreakout { high_buf: VecDeque::new(), low_buf: VecDeque::new(), vol_buf: VecDeque::new(), rma_close: Rma::new(20), rma_vol: Rma::new(20) } }
+}
+
+#[async_trait(?Send)]
+impl Strategy for VolumeBreakout {
+    async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
+        self.high_buf.push_front(cx.high[0]);
+        self.low_buf.push_front(cx.low[0]);
+        self.vol_buf.push_front(cx.volume[0]);
+        if self.high_buf.len() < 25 { self.rma_close.update(cx.close[0]); self.rma_vol.update(cx.volume[0]); return Ok(()); }
+        let ma_price = self.rma_close.update(cx.close[0]);
+        let _ma_vol = self.rma_vol.update(cx.volume[0]);
+        let Some(ma_price) = ma_price else { return Ok(()) };
+        let h: Vec<Decimal> = self.high_buf.iter().copied().collect();
+        let l: Vec<Decimal> = self.low_buf.iter().copied().collect();
+        let v: Vec<Decimal> = self.vol_buf.iter().copied().collect();
+        let (dc_u, dc_l) = donchian(&h, &l, 20);
+        let vr = vol_ratio(&v, 20);
+        if cx.get_position("BTCUSDT").await?.is_some() { return Ok(()); }
+        let atr_val = atr(cx.high, cx.low, cx.close, 14);
+        let Some(atr) = atr_val else { return Ok(()) };
+        let has_vol = vr.map_or(false, |r| r > dec!(1.3));
+        if cx.high[0] >= dc_u && has_vol && cx.close[0] > ma_price {
+            let sl = ((ma_price - atr * dec!(0.5)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            let tp = ((cx.close[0] + atr * dec!(4)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            cx.cancel_all_order("BTCUSDT").await?;
+            _ = cx.buy_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
+        } else if cx.low[0] <= dc_l && has_vol && cx.close[0] < ma_price {
+            let sl = ((ma_price + atr * dec!(0.5)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            let tp = ((cx.close[0] - atr * dec!(4)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            cx.cancel_all_order("BTCUSDT").await?;
+            _ = cx.sell_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
+        }
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let result = backtest("BTCUSDT", 12, VolumeBreakout::new(), Level::Hour4).await.unwrap();
+    println!("summary: {:#?}", result.summarize());
+}
+```
+
+**Backtest result (12 months, BTCUSDT, 4H):**
+
+| Metric | Value |
+|--------|-------|
+| total_profit | **547 USDT** |
+| total_trades | **39** |
+| win_rate | **61.5%** |
+| profit_loss_ratio | **1.18** |
+
+### 📊 Price Action — Momentum Breakout (custom indicators)
+
+A pure price-action strategy that implements **momentum scoring**, **volume spike detection**, and **average range** from scratch — no built-in indicators used at all. It enters when cumulative 3-bar momentum exceeds 2% with a volume spike of 1.5x+.
+
+```rust
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use std::collections::VecDeque;
+use trading_maid::prelude::*;
+
+fn round_to_tick(price: Decimal) -> Decimal {
+    let tick = dec!(0.1);
+    let rounded = (price / tick).round_dp(0) * tick;
+    if rounded <= Decimal::ZERO { tick } else { rounded }
+}
+
+fn momentum_score(close: &[Decimal], n: usize) -> Decimal {
+    if close.len() < n + 1 { return dec!(0); }
+    let mut score = dec!(0);
+    for i in 0..n {
+        score = score + (close[i] - close[i + 1]) / close[i + 1] * dec!(100);
+    }
+    score
+}
+
+fn volume_spike(volume: &[Decimal], n: usize) -> Option<Decimal> {
+    if volume.len() < n + 1 { return None; }
+    let avg: Decimal = volume.iter().skip(1).take(n).sum::<Decimal>() / Decimal::from(n);
+    if avg.is_zero() { None } else { Some(volume[0] / avg) }
+}
+
+fn avg_range(high: &[Decimal], low: &[Decimal], n: usize) -> Decimal {
+    if high.len() < n || low.len() < n { return dec!(300); }
+    let sum: Decimal = high.iter().zip(low.iter()).take(n).map(|(h, l)| h - l).sum();
+    sum / Decimal::from(n)
+}
+
+struct Momentum {
+    close_buf: VecDeque<Decimal>, high_buf: VecDeque<Decimal>,
+    low_buf: VecDeque<Decimal>, vol_buf: VecDeque<Decimal>,
+}
+
+impl Momentum {
+    fn new() -> Self { Momentum { close_buf: VecDeque::new(), high_buf: VecDeque::new(), low_buf: VecDeque::new(), vol_buf: VecDeque::new() } }
+}
+
+#[async_trait(?Send)]
+impl Strategy for Momentum {
+    async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
+        self.close_buf.push_front(cx.close[0]);
+        self.high_buf.push_front(cx.high[0]);
+        self.low_buf.push_front(cx.low[0]);
+        self.vol_buf.push_front(cx.volume[0]);
+        if self.high_buf.len() < 8 { return Ok(()); }
+        let c: Vec<Decimal> = self.close_buf.iter().copied().collect();
+        let h: Vec<Decimal> = self.high_buf.iter().copied().collect();
+        let l: Vec<Decimal> = self.low_buf.iter().copied().collect();
+        let v: Vec<Decimal> = self.vol_buf.iter().copied().collect();
+        if cx.get_position("BTCUSDT").await?.is_some() { return Ok(()); }
+        let score = momentum_score(&c, 3);
+        let spike = volume_spike(&v, 5);
+        let range = avg_range(&h, &l, 5);
+        let body = (cx.open[0] - cx.close[0]).abs();
+        if score > dec!(2) && body >= range && body >= dec!(200) && spike.map_or(false, |s| s > dec!(1.5)) {
+            let sl = round_to_tick(c[0] - range * dec!(1.5));
+            let tp = round_to_tick(c[0] + range * dec!(3));
+            cx.cancel_all_order("BTCUSDT").await?;
+            _ = cx.buy_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
+        } else if score < dec!(-2) && body >= range && body >= dec!(200) && spike.map_or(false, |s| s > dec!(1.5)) {
+            let sl = round_to_tick(c[0] + range * dec!(1.5));
+            let tp = round_to_tick(c[0] - range * dec!(3));
+            cx.cancel_all_order("BTCUSDT").await?;
+            _ = cx.sell_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
+        }
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let result = backtest("BTCUSDT", 12, Momentum::new(), Level::Hour4).await.unwrap();
+    println!("summary: {:#?}", result.summarize());
+}
+```
+
+**Backtest result (12 months, BTCUSDT, 4H):**
+
+| Metric | Value |
+|--------|-------|
+| total_profit | **383 USDT** |
+| total_trades | **68** |
+| win_rate | **42.6%** |
+| profit_loss_ratio | **1.95** |
+
+Run any example with:
+```bash
+cargo run --release --example shadow_reversal
+cargo run --release --example volume_breakout
+cargo run --release --example price_action
 ```

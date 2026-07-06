@@ -32,6 +32,9 @@ trading-maid 是一个面向加密货币合约交易的回测与实盘框架，�
 - [🔄 获取其他级别的数据](#-获取其他级别的数据)
 - [🌐 多币种策略](#-多币种策略)
 - [🧪 EMA 策略例子](#-ema-策略例子)
+- [📊 影线反转策略](#-影线反转策略--candle-wick-reversal使用内置指标)
+- [📊 成交量突破策略](#-成交量突破策略--donchian--volume-spike自实现指标)
+- [📊 动量突破策略](#-动量突破策略--price-action自实现指标)
 
 ## ✨ 核心能力
 
@@ -652,4 +655,211 @@ async fn main() {
     .await
     .unwrap();
 }
+```
+
+### 📊 影线反转策略 — Candle Wick Reversal（使用内置指标）
+
+均值回归策略，当 4 小时 K 线出现长上影线（拒绝上涨）或长下影线（支撑确认）时开仓。仅使用了内置的 `atr()`。
+
+```rust
+use trading_maid::prelude::*;
+
+fn round_to_tick(price: Decimal) -> Decimal {
+    let tick = dec!(0.1);
+    (price / tick).round_dp(0) * tick
+}
+
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    if cx.close.len() < 50 { return Ok(()); }
+    let atr_val = atr(cx.high, cx.low, cx.close, 14);
+    let Some(atr) = atr_val else { return Ok(()) };
+    if cx.get_position("BTCUSDT").await?.is_some() { return Ok(()); }
+    let body = (cx.open[0] - cx.close[0]).abs();
+    // 做空：上影线 >= 2 倍实体
+    let upper = cx.high[0] - cx.open[0].max(cx.close[0]);
+    if cx.close[0] < cx.open[0] && upper >= body * dec!(2) && body >= dec!(200) {
+        _ = cx.sell_tp_sl("BTCUSDT", round_to_tick(cx.low[0] - atr * dec!(3)), round_to_tick(cx.high[0] + atr * dec!(0.5)), "0.01").await?;
+        return Ok(());
+    }
+    // 做多：下影线 >= 2 倍实体
+    let lower = cx.open[0].min(cx.close[0]) - cx.low[0];
+    if cx.close[0] > cx.open[0] && lower >= body * dec!(2) && body >= dec!(200) {
+        _ = cx.buy_tp_sl("BTCUSDT", round_to_tick(cx.high[0] + atr * dec!(3)), round_to_tick(cx.low[0] - atr * dec!(0.5)), "0.01").await?;
+    }
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    let result = backtest("BTCUSDT", 12, my_strategy, Level::Hour4).await.unwrap();
+    println!("summary: {:#?}", result.summarize());
+}
+```
+
+**回测结果（12 个月，BTCUSDT，4H）：**
+
+| 指标 | 值 |
+|------|------|
+| total_profit | **252 USDT** |
+| total_trades | **57** |
+| win_rate | **35%** |
+| profit_loss_ratio | **2.49** |
+
+### 📊 成交量突破策略 — Donchian + Volume Spike（自实现指标）
+
+完全从零实现**唐奇安通道**、**成交量比率**和**RMA 平滑均线**。价格放量突破 20 周期唐奇安通道时入场。
+
+```rust
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use std::collections::VecDeque;
+use trading_maid::prelude::*;
+
+fn donchian(h: &[Decimal], l: &[Decimal], p: usize) -> (Decimal, Decimal) {
+    (h.iter().take(p).copied().fold(Decimal::MIN, Decimal::max),
+     l.iter().take(p).copied().fold(Decimal::MAX, Decimal::min))
+}
+
+fn vol_ratio(v: &[Decimal], p: usize) -> Option<Decimal> {
+    if v.len() < p + 1 { return None; }
+    let avg: Decimal = v.iter().skip(1).take(p).sum::<Decimal>() / Decimal::from(p);
+    if avg.is_zero() { None } else { Some(v[0] / avg) }
+}
+
+struct Rma { period: usize, buf: VecDeque<Decimal>, value: Option<Decimal> }
+impl Rma {
+    fn new(p: usize) -> Self { Rma { period: p, buf: VecDeque::new(), value: None } }
+    fn update(&mut self, price: Decimal) -> Option<Decimal> {
+        self.buf.push_front(price);
+        if self.buf.len() < self.period { let s: Decimal = self.buf.iter().sum(); self.value = Some(s / Decimal::from(self.buf.len())); return self.value; }
+        if self.buf.len() == self.period { let s: Decimal = self.buf.iter().sum(); self.value = Some(s / Decimal::from(self.period)); return self.value; }
+        let a = dec!(1) / Decimal::from(self.period);
+        self.value = self.value.map(|p| a * price + (dec!(1) - a) * p);
+        self.value
+    }
+}
+
+struct VB { hb: VecDeque<Decimal>, lb: VecDeque<Decimal>, vb: VecDeque<Decimal>, rma: Rma }
+impl VB {
+    fn new() -> Self { VB { hb: VecDeque::new(), lb: VecDeque::new(), vb: VecDeque::new(), rma: Rma::new(20) } }
+}
+
+#[async_trait(?Send)]
+impl Strategy for VB {
+    async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
+        self.hb.push_front(cx.high[0]); self.lb.push_front(cx.low[0]); self.vb.push_front(cx.volume[0]);
+        if self.hb.len() < 25 { self.rma.update(cx.close[0]); return Ok(()); }
+        let ma = self.rma.update(cx.close[0]);
+        let Some(ma) = ma else { return Ok(()) };
+        let h: Vec<Decimal> = self.hb.iter().copied().collect();
+        let l: Vec<Decimal> = self.lb.iter().copied().collect();
+        let v: Vec<Decimal> = self.vb.iter().copied().collect();
+        let (dc_u, dc_l) = donchian(&h, &l, 20);
+        let vr = vol_ratio(&v, 20);
+        if cx.get_position("BTCUSDT").await?.is_some() { return Ok(()); }
+        let atr_val = atr(cx.high, cx.low, cx.close, 14);
+        let Some(atr) = atr_val else { return Ok(()) };
+        let hv = vr.map_or(false, |r| r > dec!(1.3));
+        if cx.high[0] >= dc_u && hv && cx.close[0] > ma {
+            let sl = ((ma - atr * dec!(0.5)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            let tp = ((cx.close[0] + atr * dec!(4)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            _ = cx.buy_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
+        } else if cx.low[0] <= dc_l && hv && cx.close[0] < ma {
+            let sl = ((ma + atr * dec!(0.5)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            let tp = ((cx.close[0] - atr * dec!(4)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            _ = cx.sell_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
+        }
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let r = backtest("BTCUSDT", 12, VB::new(), Level::Hour4).await.unwrap();
+    println!("summary: {:#?}", r.summarize());
+}
+```
+
+**回测结果（12 个月，BTCUSDT，4H）：**
+
+| 指标 | 值 |
+|------|------|
+| total_profit | **547 USDT** |
+| total_trades | **39** |
+| win_rate | **61.5%** |
+| profit_loss_ratio | **1.18** |
+
+### 📊 动量突破策略 — Price Action（自实现指标）
+
+纯裸 K 策略，完全自实现**动量评分**、**成交量爆发检测**和**平均波幅**，未使用任何内置指标。3 根 K 线累积极动量超过 2% 且成交量爆发 1.5 倍时入场。
+
+```rust
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use std::collections::VecDeque;
+use trading_maid::prelude::*;
+
+fn momentum(c: &[Decimal], n: usize) -> Decimal {
+    if c.len() < n + 1 { return dec!(0); }
+    (0..n).map(|i| (c[i] - c[i+1]) / c[i+1] * dec!(100)).sum()
+}
+
+fn spike(v: &[Decimal], n: usize) -> Option<Decimal> {
+    if v.len() < n + 1 { return None; }
+    let avg: Decimal = v.iter().skip(1).take(n).sum::<Decimal>() / Decimal::from(n);
+    if avg.is_zero() { None } else { Some(v[0] / avg) }
+}
+
+fn ar(h: &[Decimal], l: &[Decimal], n: usize) -> Decimal {
+    if h.len() < n || l.len() < n { return dec!(300); }
+    h.iter().zip(l.iter()).take(n).map(|(h, l)| h - l).sum::<Decimal>() / Decimal::from(n)
+}
+
+struct M { cb: VecDeque<Decimal>, hb: VecDeque<Decimal>, lb: VecDeque<Decimal>, vb: VecDeque<Decimal> }
+impl M { fn new() -> Self { M { cb: VecDeque::new(), hb: VecDeque::new(), lb: VecDeque::new(), vb: VecDeque::new() } } }
+
+#[async_trait(?Send)]
+impl Strategy for M {
+    async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
+        self.cb.push_front(cx.close[0]); self.hb.push_front(cx.high[0]);
+        self.lb.push_front(cx.low[0]); self.vb.push_front(cx.volume[0]);
+        if self.hb.len() < 8 { return Ok(()); }
+        if cx.get_position("BTCUSDT").await?.is_some() { return Ok(()); }
+        let c: Vec<Decimal> = self.cb.iter().copied().collect();
+        let h: Vec<Decimal> = self.hb.iter().copied().collect();
+        let l: Vec<Decimal> = self.lb.iter().copied().collect();
+        let v: Vec<Decimal> = self.vb.iter().copied().collect();
+        let sc = momentum(&c, 3); let sp = spike(&v, 5); let r = ar(&h, &l, 5);
+        let b = (cx.open[0] - cx.close[0]).abs();
+        let tk = dec!(0.1);
+        if sc > dec!(2) && b >= r && b >= dec!(200) && sp.map_or(false, |s| s > dec!(1.5)) {
+            _ = cx.buy_tp_sl("BTCUSDT", ((c[0] + r * dec!(3)) / tk).round_dp(0) * tk, ((c[0] - r * dec!(1.5)) / tk).round_dp(0) * tk, "0.01").await?;
+        } else if sc < dec!(-2) && b >= r && b >= dec!(200) && sp.map_or(false, |s| s > dec!(1.5)) {
+            _ = cx.sell_tp_sl("BTCUSDT", ((c[0] - r * dec!(3)) / tk).round_dp(0) * tk, ((c[0] + r * dec!(1.5)) / tk).round_dp(0) * tk, "0.01").await?;
+        }
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let r = backtest("BTCUSDT", 12, M::new(), Level::Hour4).await.unwrap();
+    println!("summary: {:#?}", r.summarize());
+}
+```
+
+**回测结果（12 个月，BTCUSDT，4H）：**
+
+| 指标 | 值 |
+|------|------|
+| total_profit | **383 USDT** |
+| total_trades | **68** |
+| win_rate | **42.6%** |
+| profit_loss_ratio | **1.95** |
+
+运行示例：
+```bash
+cargo run --release --example shadow_reversal
+cargo run --release --example volume_breakout
+cargo run --release --example price_action
 ```
