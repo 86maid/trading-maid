@@ -30,10 +30,8 @@ async fn main() {
         .await
         .unwrap();
 
-    // BacktestResult 提供的方法：
-    println!("summary: {:#?}", result.summarize());     // 打印汇总
-    result.open_in_browser().unwrap();                   // 在浏览器中可视化
-    result.open_in_server().await.unwrap();              // 启动本地服务器可视化
+    // 打印汇总
+    println!("summary: {:#?}", result.summarize());
 }
 ```
 
