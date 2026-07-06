@@ -43506,8 +43506,16 @@ function useChart(containerRef, currentDataSource, theme, magnet, showVolume, lo
 		const series = seriesRef.current;
 		const volumeSeries = volumeSeriesRef.current;
 		if (!chart || !series || !currentDataSource) return;
-		series.setData(currentDataSource.data);
-		chart.timeScale().fitContent();
+		const data = currentDataSource.data;
+		series.setData(data);
+		const MAX_VISIBLE_BARS = 300;
+		if (data.length > MAX_VISIBLE_BARS) {
+			const from = data.length - MAX_VISIBLE_BARS;
+			chart.timeScale().setVisibleLogicalRange({
+				from,
+				to: data.length - 1
+			});
+		} else chart.timeScale().fitContent();
 		const markerSymbol = currentDataSource.metadata.symbol;
 		const bodyStyle = getComputedStyle(document.body);
 		const buyColor = bodyStyle.getPropertyValue("--buy-color").trim();
@@ -45082,7 +45090,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-B-yu0Y0H.js.map</script>
+//# sourceMappingURL=index-MuAoWVCV.js.map</script>
 </head>
 
 <body class="theme-dark">

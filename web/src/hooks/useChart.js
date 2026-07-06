@@ -318,8 +318,20 @@ export function useChart(
     const volumeSeries = volumeSeriesRef.current;
     if (!chart || !series || !currentDataSource) return;
 
-    series.setData(currentDataSource.data);
-    chart.timeScale().fitContent();
+    const data = currentDataSource.data;
+    series.setData(data);
+
+    // Show the last N bars (or all bars if fewer) to maintain consistent
+    // visual density across timeframes. Without this, higher timeframes
+    // like 4h have only 1/4 the bars of 1h covering the same time range,
+    // causing excessively wide spacing.
+    const MAX_VISIBLE_BARS = 300;
+    if (data.length > MAX_VISIBLE_BARS) {
+      const from = data.length - MAX_VISIBLE_BARS;
+      chart.timeScale().setVisibleLogicalRange({ from, to: data.length - 1 });
+    } else {
+      chart.timeScale().fitContent();
+    }
 
     // Update markers
     const markerSymbol = currentDataSource.metadata.symbol;
