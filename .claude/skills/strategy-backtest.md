@@ -216,6 +216,7 @@ impl Strategy for MyStrategy {
 3. **手续费**：`backtest()` 预设 maker 0.02%, taker 0.05%，高频交易手续费影响很大。
 4. **Series 索引**：`series[0]` 是最新值，`series[1]` 是前一根。
 5. **Rust edition 2024**：需要 Rust >= 1.85。跑不通先检查 `rustup update`。
+6. 禁止使用可视化函数，例如 `open_in_server`, `open_in_browser`。
 
 ## 迭代终止条件
 
