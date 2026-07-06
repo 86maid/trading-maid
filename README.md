@@ -816,13 +816,13 @@ impl Strategy for VolumeBreakout {
         let Some(atr) = atr_val else { return Ok(()) };
         let has_vol = vr.map_or(false, |r| r > dec!(1.3));
         if cx.high[0] >= dc_u && has_vol && cx.close[0] > ma_price {
-            let sl = ((ma_price - atr * dec!(0.5)) / dec!(0.1)).round_dp(0) * dec!(0.1);
-            let tp = ((cx.close[0] + atr * dec!(4)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            let sl = round_to_tick(ma_price - atr * dec!(0.5));
+            let tp = round_to_tick(cx.close[0] + atr * dec!(4));
             cx.cancel_all_order("BTCUSDT").await?;
             _ = cx.buy_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
         } else if cx.low[0] <= dc_l && has_vol && cx.close[0] < ma_price {
-            let sl = ((ma_price + atr * dec!(0.5)) / dec!(0.1)).round_dp(0) * dec!(0.1);
-            let tp = ((cx.close[0] - atr * dec!(4)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            let sl = round_to_tick(ma_price + atr * dec!(0.5));
+            let tp = round_to_tick(cx.close[0] - atr * dec!(4));
             cx.cancel_all_order("BTCUSDT").await?;
             _ = cx.sell_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
         }

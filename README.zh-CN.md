@@ -763,10 +763,12 @@ impl Strategy for VB {
         if cx.high[0] >= dc_u && hv && cx.close[0] > ma {
             let sl = ((ma - atr * dec!(0.5)) / dec!(0.1)).round_dp(0) * dec!(0.1);
             let tp = ((cx.close[0] + atr * dec!(4)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            cx.cancel_all_order("BTCUSDT").await?;
             _ = cx.buy_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
         } else if cx.low[0] <= dc_l && hv && cx.close[0] < ma {
             let sl = ((ma + atr * dec!(0.5)) / dec!(0.1)).round_dp(0) * dec!(0.1);
             let tp = ((cx.close[0] - atr * dec!(4)) / dec!(0.1)).round_dp(0) * dec!(0.1);
+            cx.cancel_all_order("BTCUSDT").await?;
             _ = cx.sell_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
         }
         Ok(())
@@ -833,8 +835,10 @@ impl Strategy for M {
         let b = (cx.open[0] - cx.close[0]).abs();
         let tk = dec!(0.1);
         if sc > dec!(2) && b >= r && b >= dec!(200) && sp.map_or(false, |s| s > dec!(1.5)) {
+            cx.cancel_all_order("BTCUSDT").await?;
             _ = cx.buy_tp_sl("BTCUSDT", ((c[0] + r * dec!(3)) / tk).round_dp(0) * tk, ((c[0] - r * dec!(1.5)) / tk).round_dp(0) * tk, "0.01").await?;
         } else if sc < dec!(-2) && b >= r && b >= dec!(200) && sp.map_or(false, |s| s > dec!(1.5)) {
+            cx.cancel_all_order("BTCUSDT").await?;
             _ = cx.sell_tp_sl("BTCUSDT", ((c[0] - r * dec!(3)) / tk).round_dp(0) * tk, ((c[0] + r * dec!(1.5)) / tk).round_dp(0) * tk, "0.01").await?;
         }
         Ok(())
