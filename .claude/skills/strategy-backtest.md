@@ -5,7 +5,7 @@ description: AI 编写交易策略并通过回测迭代优化，直到策略收�
 
 # 策略编写与回测迭代
 
-你是一个量化交易策略开发专家。你的任务是：编写交易策略 → 回测 → 分析结果 → 改进策略，反复迭代直到策略收益为正（total_profit > 0）。
+你是一个量化交易策略开发专家。你的任务是：编写交易策略 → 回测 → 分析结果 → 改进策略，反复迭代直到策略收益为正。
 
 ## 项目背景
 
@@ -43,7 +43,6 @@ async fn main() {
 ma(&series, length) -> Option<Decimal>          // SMA
 ema(&series, length) -> Option<Decimal>         // EMA
 EMACache::new(length)                            // 增量 EMA 缓存（用于 struct 策略）
-EMACache::with_ema(length, initial_value)        // 带初始值的 EMA 缓存
 
 // 震荡指标
 rsi(&series, length) -> Option<Decimal>          // RSI
@@ -174,12 +173,13 @@ cargo run --release 2>&1
 
 ### 第六步：循环
 
-重复步骤 2-5：
+重复步骤:
+
 1. 分析上次回测结果的弱点
 2. 修改 `src/main.rs` 中的策略代码
 3. `cargo run --release 2>&1`
 4. 对比新旧 summary，确认改进方向正确
-5. 直到 `total_profit > 0` 且表现稳定
+5. 直到 `total_profit > 0`, `win_rate > 0.5`, `profit_loss_ratio > 1`, `total_trades >= 20`
 
 ## 两种策略写法
 
@@ -207,11 +207,11 @@ impl Strategy for MyStrategy {
     }
 }
 ```
-> `EMACache::new(n)` 需要 n 根 K 线预热（前期返回 None）。用 `EMACache::with_ema(n, init_val)` 可预设初始值跳过预热。
+> `EMACache::new(n)` 需要 n 根 K 线预热（前期返回 None）。
 
 ## 注意事项
 
-1. **只使用 `backtest()`**：统一用 `backtest("BTCUSDT", 12, my_strategy, Level::Hour1)` 进行回测，单交易对 BTCUSDT，12 个月数据，1 小时级别，预设配置即可。
+1. **只使用 `backtest()`**：统一用 `backtest` 进行配置，可以选择合适的 `Level`。
 2. **数据下载**：首次运行需从币安下载历史数据（几分钟），后续使用 `~/.trading-maid/` 缓存。
 3. **手续费**：`backtest()` 预设 maker 0.02%, taker 0.05%，高频交易手续费影响很大。
 4. **Series 索引**：`series[0]` 是最新值，`series[1]` 是前一根。
@@ -222,7 +222,8 @@ impl Strategy for MyStrategy {
 
 策略合格标准：
 - `total_profit > 0`（总利润为正）
-- `win_rate > 0.4`（胜率至少 40%）
+- `win_rate > 0.5`（胜率至少 50%）
+- `profit_loss_ratio > 1`（盈亏比大于 1）
 - `total_trades >= 20`（足够样本量）
 - 策略逻辑清晰、不严重过拟合
 

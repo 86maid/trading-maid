@@ -428,11 +428,19 @@ pub fn atr(high: &Series, low: &Series, close: &Series, length: usize) -> Option
 /// Returns `(middle, upper, lower)` where middle is the SMA, upper and lower are
 /// `multiplier` standard deviations away from the middle.
 /// Returns `None` for each band if insufficient data.
-pub fn bollinger(
+pub fn bollinger<T>(
     series: &Series,
     length: usize,
-    multiplier: Decimal,
-) -> (Option<Decimal>, Option<Decimal>, Option<Decimal>) {
+    multiplier: T,
+) -> (Option<Decimal>, Option<Decimal>, Option<Decimal>)
+where
+    T: TryInto<Decimal>,
+    <T as TryInto<Decimal>>::Error: std::fmt::Debug,
+{
+    let multiplier = multiplier
+        .try_into()
+        .expect("failed to convert multiplier to Decimal");
+
     if length == 0 || series.len() < length {
         return (None, None, None);
     }
