@@ -20,6 +20,7 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - [🧭 Trading Model and Constraints](#-trading-model-and-constraints)
 - [🏗️ Architecture Overview](#-architecture-overview)
 - [🚀 Quick Start](#-quick-start)
+- [⚡ Fast Backtest](#-fast-backtest)
 - [🧠 Context](#-context)
 - [📊 Series](#-series)
 - [📈 Indicators](#-indicators)
@@ -194,6 +195,69 @@ Use `cargo run -r` to run backtests faster.
 > ⚠️ **Stop Loss**: Stop loss should use trigger orders. For example, after a market buy, use `sell_trigger_market_reduce_only` (trigger price reached → reduce-only market sell); after a market sell, use `buy_trigger_market_reduce_only` (trigger price reached → reduce-only market buy). Do NOT use `sell_limit_reduce_only` or `buy_limit_reduce_only` — in an order book, a sell limit below market (or buy limit above market) crosses the spread and matches instantly, turning your stop loss into an immediate market exit instead of waiting for the price to reach your stop. Simply put, your limit order fills instantly at the market price. Also, always use `reduce_only` — without it, the order may open a reverse position instead of closing your current one.
 
 > ⚠️ **Precision Warning**: When creating orders (e.g., `buy`, `sell`, `buy_limit`, `sell_tp_sl`, etc.), price and quantity parameters accept `impl TryInto<Decimal>`. To avoid floating-point precision loss, pass high-precision values as strings (e.g., `"0.01"`) instead of `f64` literals like `0.01`.
+
+## ⚡ Fast Backtest
+
+For quick backtesting with sensible defaults, use the `backtest()` function — it handles data downloading, exchange setup, and engine creation automatically. One function call is all you need:
+
+```rust
+use trading_maid::prelude::*;
+
+// Open a short position when a long upper shadow appears.
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    let body_size = (cx.open - cx.close).abs();
+    let upper_shadow_size = (cx.high - cx.open).abs();
+    let open_short_condition =
+        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= 300;
+
+    if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
+        println!("place order: {}", t2s(cx.time));
+
+        let take_profit_price = cx.open - upper_shadow_size;
+        let stop_price = cx.open + upper_shadow_size;
+
+        cx.cancel_all_order("BTCUSDT").await?;
+
+        _ = cx
+            .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, "0.01")
+            .await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    let result = backtest("BTCUSDT", 12, my_strategy, Level::Hour1)
+        .await
+        .unwrap();
+
+    // Backtest result summary
+    println!("summary: {:#?}", result.summarize());
+
+    // Visualization with data resampled to all compatible levels
+    result.resample_all_open_in_server().await.unwrap();
+}
+```
+
+`backtest()` uses the following preset configurations:
+
+* **Data source**: 1-minute level (auto-downloaded via `get_or_download`)
+* **Metadata**: min_size=0.01, min_notional=0, tick_size=0.1, maker_fee=0.0002, taker_fee=0.0005, maintenance=0.004
+* **Exchange**: cash=1,000,000, leverage=1, slippage=0
+
+### BacktestResult API
+
+The returned `BacktestResult` provides:
+
+| Method | Description |
+|--------|-------------|
+| `summarize()` | Returns a `HistoryPositionSummary` with key metrics (win rate, profit/loss, total trades, etc.) |
+| `open_in_browser()` | Writes visualization to a temp HTML file and opens it in the default browser |
+| `open_in_server()` | Starts a local server for visualization at the strategy level |
+| `resample_all_open_in_server()` | Starts a local server with data resampled to all compatible levels for easy switching |
+
+> 💡 **This is the lazy approach** — perfect for rapid strategy prototyping and quick experiments. For full control over fees, leverage, slippage, cash, and other parameters, use the manual setup shown in [Quick Start](#-quick-start).
 
 ## 🧠 Context
 

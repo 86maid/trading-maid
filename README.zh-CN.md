@@ -21,6 +21,7 @@ trading-maid 是一个面向加密货币合约交易的回测与实盘框架，�
 - [🧭 交易模型与限制](#-交易模型与限制)
 - [🏗️ 架构概览](#-架构概览)
 - [🚀 快速开始](#-快速开始)
+- [⚡ 快速回测](#-快速回测)
 - [🧠 Context](#-context)
 - [📊 Series](#-series)
 - [📈 指标](#-指标)
@@ -195,6 +196,69 @@ async fn main() {
 > ⚠️ **止损注意**：止损应该使用触发单，例如，市价做多后的止损应使用 `sell_trigger_market_reduce_only`（价格到达触发价后执行只减仓市价卖出），市价做空后的止损应使用 `buy_trigger_market_reduce_only`（价格到达触发价后执行只减仓市价买入）。不要用 `sell_limit_reduce_only` 或 `buy_limit_reduce_only`——在订单簿中，卖出限价低于市价（或买入限价高于市价）意味着你的挂单直接穿过了买卖价差，会立刻成交，止损单就变成了即时市价出场，而不是等价格跌到止损位再触发。简单说，你的限价单会立即以市价成交。此外，止损务必使用 `reduce_only`，否则可能导致仓位反向持仓。
 
 > ⚠️ **精度警告**：创建订单时（如 `buy`、`sell`、`buy_limit`、`sell_tp_sl` 等），价格和数量参数接受 `impl TryInto<Decimal>`。为避免浮点数精度丢失，对于高精度的数值，应使用字符串形式传入（如 `"0.01"`），而不是使用 `f64` 字面量如 `0.01`。
+
+## ⚡ 快速回测
+
+如果你想要用合理的预设配置快速回测，可以使用 `backtest()` 函数——它会自动处理数据下载、交易所设置和引擎创建，一行代码搞定：
+
+```rust
+use trading_maid::prelude::*;
+
+// 出现长上影线时开空单
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    let body_size = (cx.open - cx.close).abs();
+    let upper_shadow_size = (cx.high - cx.open).abs();
+    let open_short_condition =
+        cx.open > cx.close && upper_shadow_size >= body_size * 2 && body_size >= 300;
+
+    if cx.get_position("BTCUSDT").await?.is_none() && open_short_condition {
+        println!("place order: {}", t2s(cx.time));
+
+        let take_profit_price = cx.open - upper_shadow_size;
+        let stop_price = cx.open + upper_shadow_size;
+
+        cx.cancel_all_order("BTCUSDT").await?;
+
+        _ = cx
+            .sell_tp_sl("BTCUSDT", take_profit_price, stop_price, "0.01")
+            .await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    let result = backtest("BTCUSDT", 12, my_strategy, Level::Hour1)
+        .await
+        .unwrap();
+
+    // 回测结果汇总
+    println!("summary: {:#?}", result.summarize());
+
+    // 数据重采样到所有级别后可视化
+    result.resample_all_open_in_server().await.unwrap();
+}
+```
+
+`backtest()` 使用以下预设配置：
+
+* **数据源**：1 分钟级别（自动通过 `get_or_download` 下载）
+* **Metadata**：min_size=0.01、min_notional=0、tick_size=0.1、maker_fee=0.0002、taker_fee=0.0005、maintenance=0.004
+* **交易所**：cash=1,000,000、leverage=1、slippage=0
+
+### BacktestResult API
+
+返回的 `BacktestResult` 提供以下方法：
+
+| 方法 | 说明 |
+|--------|-------------|
+| `summarize()` | 返回 `HistoryPositionSummary`，包含胜率、盈亏、总交易次数等关键指标 |
+| `open_in_browser()` | 将可视化写入临时 HTML 文件并在默认浏览器中打开 |
+| `open_in_server()` | 启动本地服务器，以策略级别数据进行可视化 |
+| `resample_all_open_in_server()` | 启动本地服务器，数据重采样到所有兼容级别，方便切换查看 |
+
+> 💡 **这是懒人方法**——适合快速策略原型验证和实验。如果需要完全控制费率、杠杆、滑点、现金等参数，请使用[快速开始](#-快速开始)中的手动设置方式。
 
 ## 🧠 Context
 
