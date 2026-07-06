@@ -48,7 +48,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn main() {
-    let result = backtest("BTCUSDT", 12 * 4, my_strategy, Level::Hour4)
+    let result = backtest("BTCUSDT", 12, my_strategy, Level::Hour4)
         .await
         .unwrap();
 

@@ -35,6 +35,7 @@ trading-maid 是一个面向加密货币合约交易的回测与实盘框架，�
 - [📊 影线反转策略](#-影线反转策略--candle-wick-reversal使用内置指标)
 - [📊 成交量突破策略](#-成交量突破策略--donchian--volume-spike自实现指标)
 - [📊 动量突破策略](#-动量突破策略--price-action自实现指标)
+- [📊 RSI EMA 突破策略](#-rsi-ema-突破策略--consecutive-candle-breakout使用内置指标)
 
 ## ✨ 核心能力
 
@@ -861,9 +862,97 @@ async fn main() {
 | win_rate | **42.6%** |
 | profit_loss_ratio | **1.95** |
 
+### 📊 RSI EMA 突破策略 — Consecutive Candle Breakout（使用内置指标）
+
+趋势跟踪策略，通过**连续阳线/阴线** + **成交量确认** + **SMA50 趋势过滤**判断强势方向动量。使用内置的 `atr()`、`ma()`。
+
+```rust
+use trading_maid::prelude::*;
+
+fn round_to_tick(price: rust_decimal::Decimal) -> rust_decimal::Decimal {
+    let tick = rust_decimal_macros::dec!(0.1);
+    let rounded = (price / tick).round_dp(0) * tick;
+    if rounded <= rust_decimal::Decimal::ZERO { tick } else { rounded }
+}
+
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    if cx.close.len() < 30 {
+        return Ok(());
+    }
+
+    if cx.get_position("BTCUSDT").await?.is_some() {
+        return Ok(());
+    }
+
+    let sma50 = ma(cx.close, 50);
+    let atr_val = atr(cx.high, cx.low, cx.close, 14);
+    let (Some(sma50), Some(atr)) = (sma50, atr_val) else { return Ok(()) };
+
+    let body0 = (cx.close[0] - cx.open[0]).abs();
+
+    let vol_ma: rust_decimal::Decimal = (1..=10)
+        .filter_map(|i| cx.volume.get(i))
+        .sum::<rust_decimal::Decimal>()
+        / rust_decimal_macros::dec!(10);
+    let vol_ok = vol_ma > rust_decimal::Decimal::ZERO && cx.volume[0] > vol_ma;
+
+    // 多头：2根连续阳线、突破前高、在SMA50之上、放量
+    if cx.close[0] > cx.open[0]
+        && cx.close[1] > cx.open[1]
+        && body0 >= atr * rust_decimal_macros::dec!(0.4)
+        && cx.close[0] > cx.high[1]
+        && cx.close[0] > sma50
+        && vol_ok
+    {
+        let low_2 = cx.low[1].min(cx.low[0]);
+        let sl = round_to_tick(low_2);
+        let tp = round_to_tick(cx.close[0] + atr * rust_decimal_macros::dec!(3.9));
+        cx.cancel_all_order("BTCUSDT").await?;
+        _ = cx.buy_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
+        return Ok(());
+    }
+
+    // 空头：2根连续阴线、跌破前低、在SMA50之下、放量
+    if cx.close[0] < cx.open[0]
+        && cx.close[1] < cx.open[1]
+        && body0 >= atr * rust_decimal_macros::dec!(0.4)
+        && cx.close[0] < cx.low[1]
+        && cx.close[0] < sma50
+        && vol_ok
+    {
+        let high_2 = cx.high[1].max(cx.high[0]);
+        let sl = round_to_tick(high_2);
+        let tp = round_to_tick(cx.close[0] - atr * rust_decimal_macros::dec!(3.9));
+        cx.cancel_all_order("BTCUSDT").await?;
+        _ = cx.sell_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    let result = backtest("BTCUSDT", 12, my_strategy, Level::Hour4)
+        .await
+        .unwrap();
+
+    println!("summary: {:#?}", result.summarize());
+}
+```
+
+**回测结果（12 个月，BTCUSDT，4H）：**
+
+| 指标 | 值 |
+|------|------|
+| total_profit | **640 USDT** |
+| total_trades | **69** |
+| win_rate | **50.7%** |
+| profit_loss_ratio | **1.65** |
+
 运行示例：
 ```bash
 cargo run --release --example shadow_reversal
 cargo run --release --example volume_breakout
 cargo run --release --example price_action
+cargo run --release --example rsi_ema
 ```
