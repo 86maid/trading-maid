@@ -1,5 +1,9 @@
-use crate::data::{AlignedSeries, DataSource, FundingRate, KLine, Level};
+use crate::data::{AlignedSeries, DataSource, FundingRate, KLine, Level, Metadata};
+use crate::engine::Engine;
+use crate::exchange::Exchange;
+use crate::local_exchange::LocalExchange;
 use crate::order::{HistoryPosition, HistoryPositionSummary, OrderMessage, Side};
+use crate::strategy::Strategy;
 use anyhow::Context;
 use anyhow::bail;
 use chrono::{
@@ -54,7 +58,7 @@ impl<T, const N: usize> IsContainer for &[T; N] {}
 ///
 /// # Note
 /// During merging, only the first 6 columns are kept (timestamp, open, high, low, close, volume)
-pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<PathBuf> {
+pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyhow::Result<PathBuf> {
     fn parse_symbol(input: &str) -> anyhow::Result<(&str, &str, &str)> {
         let part_list = input.split('/').collect::<Vec<_>>();
 
@@ -145,7 +149,7 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
         Ok(Some(csv_content))
     }
 
-    let (base_symbol, interval, market_type) = parse_symbol(format)?;
+    let (base_symbol, interval, market_type) = parse_symbol(format.as_ref())?;
 
     let base_data_directory = dirs::home_dir()
         .map(|home_directory| home_directory.join(".trading-maid"))
@@ -298,7 +302,7 @@ pub async fn get_or_download(format: &str, month_count: u32) -> anyhow::Result<P
 /// Input: `calc_time,funding_interval_hours,last_funding_rate`
 /// Output: `Vec<FundingRate>` serialized with bincode (no header)
 pub async fn get_or_download_funding_rate_path(
-    format: &str,
+    format: impl AsRef<str>,
     month_count: u32,
 ) -> anyhow::Result<PathBuf> {
     fn parse_symbol(input: &str) -> &str {
@@ -371,7 +375,7 @@ pub async fn get_or_download_funding_rate_path(
         Ok(Some(csv_content))
     }
 
-    let base_symbol = parse_symbol(format);
+    let base_symbol = parse_symbol(format.as_ref());
 
     let base_data_directory = dirs::home_dir()
         .map(|home_directory| home_directory.join(".trading-maid"))
@@ -1509,6 +1513,97 @@ pub async fn open_in_server(
     task.await?;
 
     Ok(())
+}
+
+#[derive(Clone)]
+pub struct BacktestResult {
+    pub data_source: DataSource,
+    pub history_position: Vec<HistoryPosition>,
+    pub history_order: Vec<OrderMessage>,
+}
+
+impl BacktestResult {
+    pub fn summarize(&self) -> HistoryPositionSummary {
+        summarize(&self.history_position)
+    }
+
+    pub fn open_in_browser(self) -> anyhow::Result<()> {
+        open_in_browser(
+            [self.data_source],
+            self.history_position,
+            self.history_order,
+        )
+    }
+
+    pub async fn open_in_server(self) -> anyhow::Result<()> {
+        open_in_server(
+            [self.data_source],
+            self.history_position,
+            self.history_order,
+        )
+        .await
+    }
+
+    pub async fn resample_all_open_in_server(self) -> anyhow::Result<()> {
+        let mut data_source = self.data_source.resample_all()?;
+
+        data_source.insert(0, self.data_source);
+
+        open_in_server(data_source, self.history_position, self.history_order).await
+    }
+}
+
+/// Runs a backtest using preset configurations.
+///
+/// # Arguments
+/// - `symbol`: The trading symbol to be tested.
+/// - `month_count`: The number of months of historical data to use for the backtest.
+/// - `strategy`: The trading strategy to be evaluated.
+/// - `strategy_level`: The level at which the strategy is applied.
+///
+/// # Returns
+/// A `BacktestResult` containing the data source, historical positions, and historical orders generated during the backtest.
+pub async fn backtest(
+    symbol: impl AsRef<str>,
+    month_count: u32,
+    strategy: impl Strategy,
+    strategy_level: Level,
+) -> anyhow::Result<BacktestResult> {
+    let symbol = symbol.as_ref();
+
+    let path = get_or_download(format!("{}/1m", symbol), month_count)
+        .await
+        .unwrap();
+
+    let data_source = DataSource::from_file_metadata(
+        path,
+        Metadata {
+            symbol: symbol.to_string(),
+            level: Level::Minute1,
+            min_size: "0.01".parse().unwrap(),
+            min_notional: "0".parse().unwrap(),
+            tick_size: "0.1".parse().unwrap(),
+            maker_fee: "0.0002".parse().unwrap(),
+            taker_fee: "0.0005".parse().unwrap(),
+            maintenance: "0.004".parse().unwrap(),
+        },
+    )
+    .unwrap();
+
+    let exchange = LocalExchange::new(data_source.clone()).cash(1000000);
+
+    Engine::new(exchange.clone(), strategy)
+        .run(symbol, strategy_level)
+        .await?;
+
+    let history_position = exchange.get_history_position_list(symbol).await.unwrap();
+    let history_order = exchange.get_history_order_list(symbol).await.unwrap();
+
+    Ok(BacktestResult {
+        data_source,
+        history_position,
+        history_order,
+    })
 }
 
 #[cfg(test)]

@@ -204,6 +204,7 @@ impl DataSource {
         DataSource(Arc::new(DataSourceInner { metadata, data }))
     }
 
+    /// Resample the data source to a different level.
     pub fn resample(&self, level: Level) -> anyhow::Result<Self> {
         if !self.metadata.level.is_valid_sampling_target(level) {
             bail!(
@@ -221,6 +222,48 @@ impl DataSource {
         Ok(Self::new(metadata, data))
     }
 
+    /// Resample the data source to all higher levels.
+    pub fn resample_all(&self) -> anyhow::Result<Vec<Self>> {
+        let all_level = [
+            Level::Minute1,
+            Level::Minute3,
+            Level::Minute5,
+            Level::Minute15,
+            Level::Minute30,
+            Level::Hour1,
+            Level::Hour2,
+            Level::Hour4,
+            Level::Hour6,
+            Level::Hour8,
+            Level::Hour12,
+            Level::Day1,
+            Level::Day3,
+            Level::Week1,
+            Level::Month1,
+        ];
+
+        let mut result = Vec::<Self>::new();
+
+        for level in all_level {
+            if level <= self.metadata.level {
+                continue;
+            }
+
+            let source = result
+                .last()
+                .filter(|v| v.metadata.level.is_valid_sampling_target(level))
+                .map_or(self, |v| v);
+
+            let mut metadata = source.metadata.clone();
+
+            metadata.level = level;
+
+            result.push(Self::new(metadata, resample(&source.data, level)?));
+        }
+
+        Ok(result)
+    }
+
     /// Returns a new [`DataSource`] containing only candles whose `time`
     /// falls in `[start_time, end_time)`.
     pub fn range(&self, start_time: u64, end_time: u64) -> Self {
@@ -234,6 +277,7 @@ impl DataSource {
         )
     }
 
+    /// Check whether the data source is sorted by time in ascending order.
     pub fn is_sorted_by_time(&self) -> bool {
         self.data.windows(2).all(|pair| pair[0].time < pair[1].time)
     }

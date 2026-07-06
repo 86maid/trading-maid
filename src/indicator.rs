@@ -187,7 +187,6 @@ impl EMACache {
         let price = price
             .try_into()
             .expect("failed to convert price to Decimal");
-        ();
 
         self.count = self.count.saturating_add(1);
 
