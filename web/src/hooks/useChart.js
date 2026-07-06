@@ -136,68 +136,101 @@ export function useChart(
   localeRef.current = locale;
   currentDataSourceRef.current = currentDataSource;
 
-  // --- Apply chart options from theme ---
-  const applyChartOptions = useCallback(() => {
+  // Hardcoded theme colors — MUST stay in sync with index.css :root/.theme-light/.theme-dark.
+  // We use these instead of reading CSS custom properties so the chart theme is
+  // correct on the very first paint, before React has had a chance to swap the
+  // body class (which happens in a parent useEffect).
+  const THEME_COLORS = {
+    light: {
+      background: '#ffffff',
+      text: '#888888',
+      grid: '#f2f3f3',
+      border: '#dddddd',
+      buy: '#f23645',
+      sell: '#089981',
+    },
+    dark: {
+      background: '#161a25',
+      text: '#aaaaaa',
+      grid: '#222631',
+      border: '#666666',
+      buy: '#ca4064',
+      sell: '#25a74f',
+    },
+  };
+
+  // --- Apply theme-dependent chart styling (pure colors, no data needed) ---
+  const applyChartTheme = useCallback(
+    (explicitTheme) => {
+      const chart = chartRef.current;
+      const series = seriesRef.current;
+      if (!chart || !series) return;
+
+      const t = explicitTheme || theme;
+      const c = THEME_COLORS[t] || THEME_COLORS.dark;
+
+      chart.applyOptions({
+        layout: {
+          background: { color: c.background },
+          textColor: c.text,
+        },
+        grid: {
+          vertLines: { color: c.grid },
+          horzLines: { color: c.grid },
+        },
+        crosshair: {
+          mode: 0,
+          horzLine: { labelBackgroundColor: c.border },
+          vertLine: { labelBackgroundColor: c.border },
+        },
+        timeScale: {
+          borderColor: c.border,
+          tickMarkFormatter,
+        },
+        rightPriceScale: {
+          borderColor: c.border,
+        },
+        autoSize: true,
+      });
+
+      series.applyOptions({
+        upColor: c.buy,
+        downColor: c.sell,
+        borderUpColor: c.buy,
+        borderDownColor: c.sell,
+        wickUpColor: c.buy,
+        wickDownColor: c.sell,
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+    },
+    [theme]
+  );
+
+  // --- Apply data-dependent chart options (price format, localization) ---
+  const applyChartDataOptions = useCallback(() => {
     const chart = chartRef.current;
     const series = seriesRef.current;
     if (!chart || !series) return;
     if (!currentDataSource) return;
 
-    const bodyStyle = getComputedStyle(document.body);
-
     const priceFormatterFn = makePriceFormatter(currentDataSource.metadata.tick_size);
 
     chart.applyOptions({
-      layout: {
-        background: { color: bodyStyle.getPropertyValue('--background-color') },
-        textColor: bodyStyle.getPropertyValue('--label-color'),
-      },
-      grid: {
-        vertLines: { color: bodyStyle.getPropertyValue('--grid-color') },
-        horzLines: { color: bodyStyle.getPropertyValue('--grid-color') },
-      },
-      crosshair: {
-        mode: 0,
-        horzLine: {
-          labelBackgroundColor: bodyStyle.getPropertyValue('--border-color'),
-        },
-        vertLine: {
-          labelBackgroundColor: bodyStyle.getPropertyValue('--border-color'),
-        },
-      },
-      timeScale: {
-        borderColor: bodyStyle.getPropertyValue('--border-color'),
-        tickMarkFormatter,
-      },
-      rightPriceScale: {
-        borderColor: bodyStyle.getPropertyValue('--border-color'),
-      },
       localization: {
         timeFormatter: (t) => timeFormatter(t, locale),
         priceFormatter: priceFormatterFn,
       },
-      autoSize: true,
     });
 
-    const buyColor = bodyStyle.getPropertyValue('--buy-color').trim();
-    const sellColor = bodyStyle.getPropertyValue('--sell-color').trim();
-
     series.applyOptions({
-      upColor: buyColor,
-      downColor: sellColor,
-      borderUpColor: buyColor,
-      borderDownColor: sellColor,
-      wickUpColor: buyColor,
-      wickDownColor: sellColor,
-      lastValueVisible: false,
-      priceLineVisible: false,
       priceFormat: {
         type: 'custom',
         formatter: priceFormatterFn,
         minMove: currentDataSource.metadata.tick_size || 0.01,
       },
     });
-  }, [currentDataSource, locale, theme]);
+  }, [currentDataSource, locale]);
 
   // --- Initialize chart (once) ---
   useEffect(() => {
@@ -230,6 +263,11 @@ export function useChart(
     window.volumeSeries = volumeSeries;
     window.vm = vm;
 
+    // Apply the saved theme IMMEDIATELY — use the current theme prop value
+    // (read from localStorage at context init time) so the chart is themed
+    // correctly on first paint, before the parent's body-class useEffect runs.
+    applyChartTheme(theme);
+
     return () => {
       chart.remove();
       chartRef.current = null;
@@ -243,10 +281,15 @@ export function useChart(
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // --- Apply options when theme or locale changes ---
+  // --- Apply theme colors when theme changes ---
   useEffect(() => {
-    applyChartOptions();
-  }, [applyChartOptions]);
+    applyChartTheme(theme);
+  }, [applyChartTheme, theme]);
+
+  // --- Apply data-dependent options when data source or locale changes ---
+  useEffect(() => {
+    applyChartDataOptions();
+  }, [applyChartDataOptions]);
 
   // --- Crosshair subscription (once, using refs) ---
   useEffect(() => {

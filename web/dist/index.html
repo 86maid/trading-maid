@@ -43356,60 +43356,77 @@ function useChart(containerRef, currentDataSource, theme, magnet, showVolume, lo
 	magnetRef.current = magnet;
 	localeRef.current = locale;
 	currentDataSourceRef.current = currentDataSource;
-	const applyChartOptions = (0, import_react.useCallback)(() => {
+	const THEME_COLORS = {
+		light: {
+			background: "#ffffff",
+			text: "#888888",
+			grid: "#f2f3f3",
+			border: "#dddddd",
+			buy: "#f23645",
+			sell: "#089981"
+		},
+		dark: {
+			background: "#161a25",
+			text: "#aaaaaa",
+			grid: "#222631",
+			border: "#666666",
+			buy: "#ca4064",
+			sell: "#25a74f"
+		}
+	};
+	const applyChartTheme = (0, import_react.useCallback)((explicitTheme) => {
+		const chart = chartRef.current;
+		const series = seriesRef.current;
+		if (!chart || !series) return;
+		const c = THEME_COLORS[explicitTheme || theme] || THEME_COLORS.dark;
+		chart.applyOptions({
+			layout: {
+				background: { color: c.background },
+				textColor: c.text
+			},
+			grid: {
+				vertLines: { color: c.grid },
+				horzLines: { color: c.grid }
+			},
+			crosshair: {
+				mode: 0,
+				horzLine: { labelBackgroundColor: c.border },
+				vertLine: { labelBackgroundColor: c.border }
+			},
+			timeScale: {
+				borderColor: c.border,
+				tickMarkFormatter
+			},
+			rightPriceScale: { borderColor: c.border },
+			autoSize: true
+		});
+		series.applyOptions({
+			upColor: c.buy,
+			downColor: c.sell,
+			borderUpColor: c.buy,
+			borderDownColor: c.sell,
+			wickUpColor: c.buy,
+			wickDownColor: c.sell,
+			lastValueVisible: false,
+			priceLineVisible: false
+		});
+	}, [theme]);
+	const applyChartDataOptions = (0, import_react.useCallback)(() => {
 		const chart = chartRef.current;
 		const series = seriesRef.current;
 		if (!chart || !series) return;
 		if (!currentDataSource) return;
-		const bodyStyle = getComputedStyle(document.body);
 		const priceFormatterFn = makePriceFormatter(currentDataSource.metadata.tick_size);
-		chart.applyOptions({
-			layout: {
-				background: { color: bodyStyle.getPropertyValue("--background-color") },
-				textColor: bodyStyle.getPropertyValue("--label-color")
-			},
-			grid: {
-				vertLines: { color: bodyStyle.getPropertyValue("--grid-color") },
-				horzLines: { color: bodyStyle.getPropertyValue("--grid-color") }
-			},
-			crosshair: {
-				mode: 0,
-				horzLine: { labelBackgroundColor: bodyStyle.getPropertyValue("--border-color") },
-				vertLine: { labelBackgroundColor: bodyStyle.getPropertyValue("--border-color") }
-			},
-			timeScale: {
-				borderColor: bodyStyle.getPropertyValue("--border-color"),
-				tickMarkFormatter
-			},
-			rightPriceScale: { borderColor: bodyStyle.getPropertyValue("--border-color") },
-			localization: {
-				timeFormatter: (t) => timeFormatter(t, locale),
-				priceFormatter: priceFormatterFn
-			},
-			autoSize: true
-		});
-		const buyColor = bodyStyle.getPropertyValue("--buy-color").trim();
-		const sellColor = bodyStyle.getPropertyValue("--sell-color").trim();
-		series.applyOptions({
-			upColor: buyColor,
-			downColor: sellColor,
-			borderUpColor: buyColor,
-			borderDownColor: sellColor,
-			wickUpColor: buyColor,
-			wickDownColor: sellColor,
-			lastValueVisible: false,
-			priceLineVisible: false,
-			priceFormat: {
-				type: "custom",
-				formatter: priceFormatterFn,
-				minMove: currentDataSource.metadata.tick_size || .01
-			}
-		});
-	}, [
-		currentDataSource,
-		locale,
-		theme
-	]);
+		chart.applyOptions({ localization: {
+			timeFormatter: (t) => timeFormatter(t, locale),
+			priceFormatter: priceFormatterFn
+		} });
+		series.applyOptions({ priceFormat: {
+			type: "custom",
+			formatter: priceFormatterFn,
+			minMove: currentDataSource.metadata.tick_size || .01
+		} });
+	}, [currentDataSource, locale]);
 	(0, import_react.useEffect)(() => {
 		const container = containerRef.current;
 		if (!container) return;
@@ -43435,6 +43452,7 @@ function useChart(containerRef, currentDataSource, theme, magnet, showVolume, lo
 		window.series = series;
 		window.volumeSeries = volumeSeries;
 		window.vm = vm;
+		applyChartTheme(theme);
 		return () => {
 			chart.remove();
 			chartRef.current = null;
@@ -43448,8 +43466,11 @@ function useChart(containerRef, currentDataSource, theme, magnet, showVolume, lo
 		};
 	}, []);
 	(0, import_react.useEffect)(() => {
-		applyChartOptions();
-	}, [applyChartOptions]);
+		applyChartTheme(theme);
+	}, [applyChartTheme, theme]);
+	(0, import_react.useEffect)(() => {
+		applyChartDataOptions();
+	}, [applyChartDataOptions]);
 	(0, import_react.useEffect)(() => {
 		const chart = chartRef.current;
 		const series = seriesRef.current;
@@ -45090,7 +45111,7 @@ var root = document.getElementById("root");
 if (root) import_client.createRoot(root).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
 
-//# sourceMappingURL=index-MuAoWVCV.js.map</script>
+//# sourceMappingURL=index-DeksAp6k.js.map</script>
 </head>
 
 <body class="theme-dark">
