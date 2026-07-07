@@ -470,6 +470,215 @@ where
     (Some(middle), Some(upper), Some(lower))
 }
 
+/// Standard pivot points.
+///
+/// Returns `(pp, r1, r2, r3, s1, s2, s3)` where:
+/// - `pp`   = (high + low + close) / 3
+/// - `r1`   = 2 * pp - low
+/// - `r2`   = pp + (high - low)
+/// - `r3`   = high + 2 * (pp - low)
+/// - `s1`   = 2 * pp - high
+/// - `s2`   = pp - (high - low)
+/// - `s3`   = low - 2 * (high - pp)
+///
+/// Returns `None` for all values if any required series has fewer than 1 element.
+pub fn pivot_point(
+    high: &Series,
+    low: &Series,
+    close: &Series,
+) -> (
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+) {
+    if high.len() < 1 || low.len() < 1 || close.len() < 1 {
+        return (None, None, None, None, None, None, None);
+    }
+
+    let h = high[0];
+    let l = low[0];
+    let c = close[0];
+    let range = h - l;
+
+    let pp = (h + l + c) / dec!(3);
+    let r1 = dec!(2) * pp - l;
+    let r2 = pp + range;
+    let r3 = h + dec!(2) * (pp - l);
+    let s1 = dec!(2) * pp - h;
+    let s2 = pp - range;
+    let s3 = l - dec!(2) * (h - pp);
+
+    (
+        Some(pp),
+        Some(r1),
+        Some(r2),
+        Some(r3),
+        Some(s1),
+        Some(s2),
+        Some(s3),
+    )
+}
+
+/// Fibonacci pivot points.
+///
+/// Returns `(pp, r1, r2, r3, s1, s2, s3)` where:
+/// - `pp`   = (high + low + close) / 3
+/// - `r1`   = pp + 0.382 * range
+/// - `r2`   = pp + 0.618 * range
+/// - `r3`   = pp + 1.000 * range
+/// - `s1`   = pp - 0.382 * range
+/// - `s2`   = pp - 0.618 * range
+/// - `s3`   = pp - 1.000 * range
+///
+/// Returns `None` for all values if any required series has fewer than 1 element.
+pub fn fib_pivot_point(
+    high: &Series,
+    low: &Series,
+    close: &Series,
+) -> (
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+) {
+    if high.len() < 1 || low.len() < 1 || close.len() < 1 {
+        return (None, None, None, None, None, None, None);
+    }
+
+    let h = high[0];
+    let l = low[0];
+    let c = close[0];
+    let range = h - l;
+
+    let pp = (h + l + c) / dec!(3);
+    let r1 = pp + dec!(0.382) * range;
+    let r2 = pp + dec!(0.618) * range;
+    let r3 = pp + range;
+    let s1 = pp - dec!(0.382) * range;
+    let s2 = pp - dec!(0.618) * range;
+    let s3 = pp - range;
+
+    (
+        Some(pp),
+        Some(r1),
+        Some(r2),
+        Some(r3),
+        Some(s1),
+        Some(s2),
+        Some(s3),
+    )
+}
+
+/// Camarilla pivot points.
+///
+/// Returns `(pp, r1, r2, r3, r4, s1, s2, s3, s4)` where:
+/// - `pp`   = (high + low + close) / 3
+/// - `r1`   = close + range * 1.1 / 12
+/// - `r2`   = close + range * 1.1 / 6
+/// - `r3`   = close + range * 1.1 / 4
+/// - `r4`   = close + range * 1.1 / 2
+/// - `s1`   = close - range * 1.1 / 12
+/// - `s2`   = close - range * 1.1 / 6
+/// - `s3`   = close - range * 1.1 / 4
+/// - `s4`   = close - range * 1.1 / 2
+///
+/// Returns `None` for all values if any required series has fewer than 1 element.
+pub fn camarilla_pivot_point(
+    high: &Series,
+    low: &Series,
+    close: &Series,
+) -> (
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+) {
+    if high.len() < 1 || low.len() < 1 || close.len() < 1 {
+        return (None, None, None, None, None, None, None, None, None);
+    }
+
+    let h = high[0];
+    let l = low[0];
+    let c = close[0];
+    let range = h - l;
+
+    let pp = (h + l + c) / dec!(3);
+    let factor = range * dec!(1.1);
+
+    let r1 = c + factor / dec!(12);
+    let r2 = c + factor / dec!(6);
+    let r3 = c + factor / dec!(4);
+    let r4 = c + factor / dec!(2);
+
+    let s1 = c - factor / dec!(12);
+    let s2 = c - factor / dec!(6);
+    let s3 = c - factor / dec!(4);
+    let s4 = c - factor / dec!(2);
+
+    (
+        Some(pp),
+        Some(r1),
+        Some(r2),
+        Some(r3),
+        Some(r4),
+        Some(s1),
+        Some(s2),
+        Some(s3),
+        Some(s4),
+    )
+}
+
+/// Woodie pivot points.
+///
+/// Returns `(pp, r1, r2, s1, s2)` where:
+/// - `pp`   = (high + low + 2 * close) / 4
+/// - `r1`   = 2 * pp - low
+/// - `r2`   = pp + (high - low)
+/// - `s1`   = 2 * pp - high
+/// - `s2`   = pp - (high - low)
+///
+/// Returns `None` for all values if any required series has fewer than 1 element.
+pub fn woodie_pivot_point(
+    high: &Series,
+    low: &Series,
+    close: &Series,
+) -> (
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+    Option<Decimal>,
+) {
+    if high.len() < 1 || low.len() < 1 || close.len() < 1 {
+        return (None, None, None, None, None);
+    }
+
+    let h = high[0];
+    let l = low[0];
+    let c = close[0];
+    let range = h - l;
+
+    let pp = (h + l + dec!(2) * c) / dec!(4);
+    let r1 = dec!(2) * pp - l;
+    let r2 = pp + range;
+    let s1 = dec!(2) * pp - h;
+    let s2 = pp - range;
+
+    (Some(pp), Some(r1), Some(r2), Some(s1), Some(s2))
+}
+
 /// Detects when `fast` crosses **above** `slow` (golden cross).
 ///
 /// Returns `true` if `fast[0] > slow[0]` and `fast[1] <= slow[1]`.

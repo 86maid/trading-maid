@@ -1333,23 +1333,44 @@ pub fn summarize(list: impl AsRef<[HistoryPosition]>) -> HistoryPositionSummary 
         .reduce(Decimal::min)
         .unwrap_or_default();
 
+    let expectancy = if total_trades == 0 {
+        Decimal::ZERO
+    } else {
+        let win_rate_decimal = win_rate / Decimal::from(100); // 转为小数
+        let loss_rate_decimal = Decimal::ONE - win_rate_decimal; // 败率
+
+        (win_rate_decimal * avg_win) - (loss_rate_decimal * avg_loss)
+    };
+
     HistoryPositionSummary {
-        symbol,
-        leverage,
-        total_trades,
-        win_rate,
-        win_trades,
-        loss_trades,
-        total_profit,
-        profit_loss_ratio,
-        net_gross_profit,
-        net_gross_loss_abs,
-        gross_profit,
-        gross_loss_abs,
-        total_fee,
-        avg_profit,
-        best_trade,
-        worst_trade,
+        // ===== 1. 基础标识 =====
+        symbol,   // 交易对
+        leverage, // 杠杆倍数
+
+        // ===== 2. 交易总量统计 =====
+        total_trades, // 总交易次数
+        win_trades,   // 盈利次数
+        loss_trades,  // 亏损次数
+
+        // ===== 3. 核心绩效指标（最重要）=====
+        win_rate,          // 胜率 (%)
+        profit_loss_ratio, // 盈亏比
+        expectancy,        // 期望值 (每笔平均盈亏)
+
+        // ===== 4. 盈亏汇总 =====
+        total_profit,       // 总盈亏
+        avg_profit,         // 平均每笔盈亏
+        net_gross_profit,   // 总盈利（只算赚钱的）
+        net_gross_loss_abs, // 总亏损绝对值（只算亏钱的）
+
+        // ===== 5. 费用明细 =====
+        gross_profit,   // 毛利润（含手续费前）
+        gross_loss_abs, // 毛亏损绝对值（含手续费前）
+        total_fee,      // 总手续费
+
+        // ===== 6. 极端值 =====
+        best_trade,  // 最佳单笔交易
+        worst_trade, // 最差单笔交易
     }
 }
 

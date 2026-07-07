@@ -32,6 +32,69 @@ pub struct Order {
 }
 
 impl Order {
+    pub fn market(symbol: &str, side: Side, quantity: Decimal, reduce_only: bool) -> Self {
+        Self {
+            symbol: symbol.to_string(),
+            side,
+            trigger_price: Decimal::ZERO,
+            price: Decimal::ZERO,
+            quantity,
+            reduce_only,
+        }
+    }
+
+    pub fn limit(
+        symbol: &str,
+        side: Side,
+        price: Decimal,
+        quantity: Decimal,
+        reduce_only: bool,
+    ) -> Self {
+        Self {
+            symbol: symbol.to_string(),
+            side,
+            trigger_price: Decimal::ZERO,
+            price,
+            quantity,
+            reduce_only,
+        }
+    }
+
+    pub fn trigger_market(
+        symbol: &str,
+        side: Side,
+        trigger_price: Decimal,
+        quantity: Decimal,
+        reduce_only: bool,
+    ) -> Self {
+        Self {
+            symbol: symbol.to_string(),
+            side,
+            trigger_price,
+            price: Decimal::ZERO,
+            quantity,
+            reduce_only,
+        }
+    }
+
+    pub fn trigger_limit(
+        symbol: &str,
+        side: Side,
+        trigger_price: Decimal,
+        price: Decimal,
+        quantity: Decimal,
+        reduce_only: bool,
+    ) -> Self {
+        Self {
+            symbol: symbol.to_string(),
+            side,
+            trigger_price,
+            price,
+            quantity,
+            reduce_only,
+        }
+    }
+
     pub fn is_market(&self) -> bool {
         self.trigger_price == Decimal::ZERO && self.price == Decimal::ZERO
     }
@@ -144,17 +207,18 @@ pub struct HistoryPositionSummary {
     pub symbol: String,
     pub leverage: u32,
     pub total_trades: usize,
-    pub win_rate: Decimal,
     pub win_trades: usize,
     pub loss_trades: usize,
-    pub total_profit: Decimal,
+    pub win_rate: Decimal,
     pub profit_loss_ratio: Decimal,
+    pub expectancy: Decimal,
+    pub total_profit: Decimal,
+    pub avg_profit: Decimal,
     pub net_gross_profit: Decimal,
     pub net_gross_loss_abs: Decimal,
     pub gross_profit: Decimal,
     pub gross_loss_abs: Decimal,
     pub total_fee: Decimal,
-    pub avg_profit: Decimal,
     pub best_trade: Decimal,
     pub worst_trade: Decimal,
 }
