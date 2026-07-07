@@ -1,8 +1,7 @@
+use crate::series::Series;
 use rust_decimal::Decimal;
 use rust_decimal::MathematicalOps;
 use rust_decimal_macros::dec;
-
-use crate::series::Series;
 
 /// Calculates the Simple Moving Average (SMA) for a given series of prices and a specified length.
 /// Returns Some(SMA) or None if the length is zero or if there are not enough data points in the series.
@@ -163,29 +162,22 @@ impl EMACache {
         }
     }
 
-    pub fn with_ema<T>(length: usize, ema: T) -> Self
-    where
-        T: TryInto<Decimal>,
-        <T as TryInto<Decimal>>::Error: std::fmt::Debug,
-    {
+    pub fn with_ema(length: usize, ema: impl TryInto<Decimal>) -> Self {
         let multiplier = dec!(2) / (Decimal::from(length) + dec!(1));
 
         EMACache {
             length,
             multiplier,
-            current_ema: Some(ema.try_into().expect("failed to convert EMA value")),
+            current_ema: Some(ema.try_into().ok().expect("failed to convert EMA value")),
             count: usize::MAX,
             sum: dec!(0),
         }
     }
 
-    pub fn update<T>(&mut self, price: T) -> Option<Decimal>
-    where
-        T: TryInto<Decimal>,
-        <T as TryInto<Decimal>>::Error: std::fmt::Debug,
-    {
+    pub fn update(&mut self, price: impl TryInto<Decimal>) -> Option<Decimal> {
         let price = price
             .try_into()
+            .ok()
             .expect("failed to convert price to Decimal");
 
         self.count = self.count.saturating_add(1);
@@ -247,8 +239,11 @@ impl RSICache {
         }
     }
 
-    pub fn update(&mut self, price: impl Into<Decimal>) -> Option<Decimal> {
-        let price = price.into();
+    pub fn update(&mut self, price: impl TryInto<Decimal>) -> Option<Decimal> {
+        let price = price
+            .try_into()
+            .ok()
+            .expect("failed to convert price to Decimal");
 
         if self.length == 0 {
             return None;

@@ -199,8 +199,7 @@ impl LocalExchange {
 
     /// Sets the starting cash balance (shared across all symbols).
     pub fn cash(self, cash: impl TryInto<Decimal>) -> Self {
-        self.inner.try_lock().unwrap().cash =
-            cash.try_into().unwrap_or_else(|_| panic!("invalid cash"));
+        self.inner.try_lock().unwrap().cash = cash.try_into().ok().expect("invalid cash");
         self
     }
 
@@ -222,9 +221,8 @@ impl LocalExchange {
 
     /// Sets the slippage fraction applied to market-order fill prices.
     pub fn slippage(self, slippage: impl TryInto<Decimal>) -> Self {
-        self.inner.try_lock().unwrap().slippage = slippage
-            .try_into()
-            .unwrap_or_else(|_| panic!("invalid slippage"));
+        self.inner.try_lock().unwrap().slippage =
+            slippage.try_into().ok().expect("invalid slippage");
         self
     }
 
@@ -324,7 +322,7 @@ impl LocalExchangeInner {
         if !need.is_zero() && self.cash < need {
             bail!("cash shortage, need {}, balance {}", need, self.cash);
         }
-        
+
         self.cash -= need;
 
         Ok(())
