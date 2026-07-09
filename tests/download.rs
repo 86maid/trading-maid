@@ -82,7 +82,7 @@ async fn engine_with_funding_rate() {
         Ok(())
     }
 
-    let mut engine = Engine::new(LocalExchange::new(data), strategy);
+    let mut engine = Engine::new(LocalExchange::new(data).unwrap(), strategy);
 
     engine.add_series("BTCUSDT", "funding_rate", fr);
     engine.run("BTCUSDT", Level::Hour1).await.unwrap();
@@ -172,7 +172,7 @@ async fn run() {
     }
 
     let mut engine = Engine::new(
-        LocalExchange::new(data),
+        LocalExchange::new(data).unwrap(),
         RunTest {
             history: Vec::new(),
         },

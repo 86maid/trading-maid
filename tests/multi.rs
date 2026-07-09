@@ -131,6 +131,7 @@ async fn main() {
     .unwrap();
 
     let exchange = LocalExchange::new([data_source_1m.clone(), data_source_1m_eth.clone()])
+        .unwrap()
         .cash(10000)
         .leverage(10)
         .slippage(0);

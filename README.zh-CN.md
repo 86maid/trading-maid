@@ -142,6 +142,7 @@ async fn main() {
     .unwrap();
 
     let exchange = LocalExchange::new(data_source_1m.clone())
+        .unwrap()
         .cash(10000)
         .leverage(10)
         .slippage(0);
@@ -503,7 +504,7 @@ if let Some(btc_5m_cx) = cx.request("BTCUSDT", Level::Minute5) {
 同时运行多个交易对的策略。向 `run()` 传入交易对数组，通过 `cx.request()` 访问其他交易对的 OHLCV 数据：
 
 ```rust
-let exchange = LocalExchange::new([btc_data, eth_data]);
+let exchange = LocalExchange::new([btc_data, eth_data])?;
 
 let mut engine = Engine::new(exchange, my_strategy);
 
@@ -627,6 +628,7 @@ async fn main() {
     .unwrap();
 
     let exchange = LocalExchange::new(data_source_1m.clone())
+        .unwrap()
         .cash(10000)
         .leverage(10)
         .slippage(0);

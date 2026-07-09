@@ -1592,12 +1592,8 @@ pub async fn backtest(
 ) -> anyhow::Result<BacktestResult> {
     let symbol = symbol.as_ref();
 
-    let path = get_or_download(format!("{}/1m", symbol), month_count)
-        .await
-        .unwrap();
-
     let data_source = DataSource::from_file_metadata(
-        path,
+        get_or_download(format!("{}/1m", symbol), month_count).await?,
         Metadata {
             symbol: symbol.to_string(),
             level: Level::Minute1,
@@ -1608,17 +1604,16 @@ pub async fn backtest(
             taker_fee: "0.0005".parse().unwrap(),
             maintenance: "0.004".parse().unwrap(),
         },
-    )
-    .unwrap();
+    )?;
 
-    let exchange = LocalExchange::new(data_source.clone()).cash(1000000);
+    let exchange = LocalExchange::new(data_source.clone())?.cash(1000000);
 
     Engine::new(exchange.clone(), strategy)
         .run(symbol, strategy_level)
         .await?;
 
-    let history_position = exchange.get_history_position_list(symbol).await.unwrap();
-    let history_order = exchange.get_history_order_list(symbol).await.unwrap();
+    let history_position = exchange.get_history_position_list(symbol).await?;
+    let history_order = exchange.get_history_order_list(symbol).await?;
 
     Ok(BacktestResult {
         data_source,

@@ -165,13 +165,13 @@ impl LocalExchange {
     /// All data sources must share the same [`Level`] and have overlapping
     /// time ranges. The shortest data source determines the total steps.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `data_source` is empty, levels differ, or time ranges
+    /// Returns an error if `data_source` is empty, levels differ, or time ranges
     /// do not overlap.
-    pub fn new(data_source: impl ToDataSourceVec) -> Self {
-        let timeline = Timeline::new(data_source.into_vec())
-            .expect("LocalExchange::new: timeline creation failed");
+    ///
+    pub fn new(data_source: impl ToDataSourceVec) -> anyhow::Result<Self> {
+        let timeline = Timeline::new(data_source.into_vec())?;
 
         let leverage = timeline
             .inner()
@@ -179,7 +179,7 @@ impl LocalExchange {
             .map(|v| (v.metadata.symbol.clone(), 1))
             .collect();
 
-        Self {
+        Ok(Self {
             inner: Arc::new(Mutex::new(LocalExchangeInner {
                 timeline,
                 klines: Vec::new(),
@@ -194,7 +194,7 @@ impl LocalExchange {
                 pacemaker: None,
                 exhausted: false,
             })),
-        }
+        })
     }
 
     /// Sets the starting cash balance (shared across all symbols).
@@ -1662,6 +1662,7 @@ mod tests {
     fn single_exchange() -> ExchangeWrapper {
         ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10),
         ))
@@ -1670,6 +1671,7 @@ mod tests {
     fn single_exchange_with(metadata: Metadata, kline_list: Vec<KLine>) -> ExchangeWrapper {
         ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![DataSource::new(metadata, kline_list)])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10),
         ))
@@ -1683,6 +1685,7 @@ mod tests {
                 DataSource::new(btc_metadata(), btc_klines()),
                 DataSource::new(eth_metadata(), eth_klines()),
             ])
+            .unwrap()
             .cash(10000.0)
             .leverage(10),
         ))
@@ -1986,6 +1989,7 @@ mod tests {
     #[tokio::test]
     async fn reduce_only_close_rejected_when_fee_precharge_cash_is_insufficient() {
         let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+            .unwrap()
             .cash(10.56)
             .leverage(10);
 
@@ -2027,6 +2031,7 @@ mod tests {
                 gen_kline(3, dec!(80.0), dec!(81.0), dec!(79.0), dec!(80.0)),
             ],
         )])
+        .unwrap()
         .cash(10.56)
         .leverage(10);
 
@@ -2762,6 +2767,7 @@ mod tests {
     #[tokio::test]
     async fn set_leverage_fails_when_cash_insufficient_for_new_margin() {
         let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+            .unwrap()
             .cash(11.0)
             .leverage(10);
 
@@ -2781,6 +2787,7 @@ mod tests {
     #[tokio::test]
     async fn trigger_limit_order_rejected_when_freeze_margin_fails() {
         let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+            .unwrap()
             .cash(1.0)
             .leverage(10);
 
@@ -2934,6 +2941,7 @@ mod tests {
     #[tokio::test]
     async fn set_leverage_failure_keeps_position_and_liquidation_unchanged() {
         let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+            .unwrap()
             .cash(11.0)
             .leverage(10);
 
@@ -3140,6 +3148,7 @@ mod tests {
                 gen_kline(4, dec!(1.0), dec!(1.0), dec!(0.3), dec!(0.5)),
             ],
         )])
+        .unwrap()
         .cash(10000.0)
         .leverage(1);
 
@@ -3187,6 +3196,7 @@ mod tests {
                 gen_kline(4, dec!(200.0), dec!(200.0), dec!(199.0), dec!(199.8)),
             ],
         )])
+        .unwrap()
         .cash(10000.0)
         .leverage(1);
 
@@ -3668,6 +3678,7 @@ mod tests {
 
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(20000.0)
                 .leverage(10),
         ));
@@ -3884,6 +3895,7 @@ mod tests {
 
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(30000.0)
                 .leverage(10),
         ));
@@ -4133,6 +4145,7 @@ mod tests {
     #[tokio::test]
     async fn limit_order_rejected_on_fee_shortage_refunds_frozen_margin() {
         let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+            .unwrap()
             .cash(10.51)
             .leverage(10);
 
@@ -4502,6 +4515,7 @@ mod tests {
     #[tokio::test]
     async fn market_order_rejected_on_margin_shortage_keeps_cash_unchanged() {
         let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+            .unwrap()
             .cash(1.0)
             .leverage(10);
 
@@ -4703,6 +4717,7 @@ mod tests {
         let data_source = DataSource::new(btc_metadata(), btc_klines());
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10)
                 .range(2, 4),
@@ -4801,6 +4816,7 @@ mod tests {
                 gen_kline(3, dec!(95.0), dec!(96.0), dec!(90.0), dec!(92.0)),
             ],
         )])
+        .unwrap()
         .cash(10.56)
         .leverage(10);
 
@@ -5497,6 +5513,7 @@ mod tests {
         );
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.02),
@@ -5523,6 +5540,7 @@ mod tests {
         );
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.02),
@@ -5582,6 +5600,7 @@ mod tests {
         );
         let buy_exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.005),
@@ -5602,6 +5621,7 @@ mod tests {
         );
         let sell_exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.005),
@@ -5646,6 +5666,7 @@ mod tests {
         );
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.02),
@@ -5673,6 +5694,7 @@ mod tests {
         );
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.02),
@@ -5704,6 +5726,7 @@ mod tests {
         );
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.05),
@@ -5757,6 +5780,7 @@ mod tests {
         let data_source = DataSource::new(btc_metadata(), btc_klines());
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10)
                 .range(2, 9999999999999),
@@ -6129,6 +6153,7 @@ mod tests {
             DataSource::new(btc_metadata(), btc_klines()),
             DataSource::new(eth_metadata(), eth_klines()),
         ])
+        .unwrap()
         .cash(10000.0)
         .leverage(10)
         .range(1, 3);
@@ -6152,6 +6177,7 @@ mod tests {
     async fn single_symbol_works_like_original() {
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10),
         ));
@@ -6263,6 +6289,7 @@ mod tests {
                 ],
             ),
         ])
+        .unwrap()
         .cash(10000.0)
         .leverage(10);
 
@@ -6507,6 +6534,7 @@ mod tests {
                 ],
             ),
         ])
+        .unwrap()
         .cash(10000.0)
         .leverage(10);
 
@@ -6691,6 +6719,7 @@ mod tests {
         );
         let exchange = ExchangeWrapper::new(Arc::new(
             LocalExchange::new(vec![data_source])
+                .unwrap()
                 .cash(10000.0)
                 .leverage(10)
                 .slippage(0.01),
@@ -6754,6 +6783,7 @@ mod tests {
                 ],
             ),
         ])
+        .unwrap()
         .cash(10000.0)
         .leverage(10);
 

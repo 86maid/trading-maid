@@ -141,6 +141,7 @@ async fn main() {
     .unwrap();
 
     let exchange = LocalExchange::new(data_source_1m.clone())
+        .unwrap()
         .cash(10000)
         .leverage(10)
         .slippage(0);
@@ -504,7 +505,7 @@ The target level must be an integer multiple of the source data level. Use `is_v
 Run a strategy across multiple symbols simultaneously. Pass an array of symbols to `run()` and use `cx.request()` to access other symbols' OHLCV data:
 
 ```rust
-let exchange = LocalExchange::new([btc_data, eth_data]);
+let exchange = LocalExchange::new([btc_data, eth_data])?;
 
 let mut engine = Engine::new(exchange, my_strategy);
 
@@ -632,6 +633,7 @@ async fn main() {
     .unwrap();
 
     let exchange = LocalExchange::new(data_source_1m.clone())
+        .unwrap()
         .cash(10000)
         .leverage(10)
         .slippage(0);
