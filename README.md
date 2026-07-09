@@ -674,7 +674,11 @@ use trading_maid::prelude::*;
 fn round_to_tick(price: Decimal) -> Decimal {
     let tick = dec!(0.1);
     let rounded = (price / tick).round_dp(0) * tick;
-    if rounded <= Decimal::ZERO { tick } else { rounded }
+    if rounded <= Decimal::ZERO {
+        tick
+    } else {
+        rounded
+    }
 }
 
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
@@ -691,12 +695,9 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 
     let body = (cx.open[0] - cx.close[0]).abs();
 
-    // Short: upper shadow >= 2x body + body >= 200
+    // 长上影线做空：上影线 >= 实体 2 倍
     let upper_shadow = cx.high[0] - cx.open[0].max(cx.close[0]);
-    if cx.close[0] < cx.open[0]
-        && upper_shadow >= body * dec!(2)
-        && body >= dec!(200)
-    {
+    if cx.close[0] < cx.open[0] && upper_shadow >= body * dec!(2) && body >= dec!(200) {
         let sl = round_to_tick(cx.high[0] + atr * dec!(0.5));
         let tp = round_to_tick(cx.low[0] - atr * dec!(3));
         cx.cancel_all_order("BTCUSDT").await?;
@@ -704,12 +705,9 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Long: lower shadow >= 2x body + body >= 200
+    // 长下影线做多：下影线 >= 实体 2 倍
     let lower_shadow = cx.open[0].min(cx.close[0]) - cx.low[0];
-    if cx.close[0] > cx.open[0]
-        && lower_shadow >= body * dec!(2)
-        && body >= dec!(200)
-    {
+    if cx.close[0] > cx.open[0] && lower_shadow >= body * dec!(2) && body >= dec!(200) {
         let sl = round_to_tick(cx.low[0] - atr * dec!(0.5));
         let tp = round_to_tick(cx.high[0] + atr * dec!(3));
         cx.cancel_all_order("BTCUSDT").await?;
@@ -724,6 +722,7 @@ async fn main() {
     let result = backtest("BTCUSDT", 12, my_strategy, Level::Hour4)
         .await
         .unwrap();
+
     println!("summary: {:#?}", result.summarize());
 }
 ```
@@ -742,15 +741,17 @@ async fn main() {
 A trend-following strategy that enters pullbacks in the direction of the larger trend (SMA50/200). Uses `atr()` for stop-loss and `rsi()` for overbought/oversold filtering.
 
 ```rust
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use std::collections::VecDeque;
 use trading_maid::prelude::*;
 
 fn round_to_tick(price: Decimal) -> Decimal {
     let tick = dec!(0.1);
     let rounded = (price / tick).round_dp(0) * tick;
-    if rounded <= Decimal::ZERO { tick } else { rounded }
+    if rounded <= Decimal::ZERO {
+        tick
+    } else {
+        rounded
+    }
 }
 
 struct PullbackStrategy {
@@ -760,7 +761,10 @@ struct PullbackStrategy {
 
 impl PullbackStrategy {
     fn new() -> Self {
-        PullbackStrategy { high_buf: VecDeque::new(), low_buf: VecDeque::new() }
+        PullbackStrategy {
+            high_buf: VecDeque::new(),
+            low_buf: VecDeque::new(),
+        }
     }
 }
 
@@ -770,24 +774,31 @@ impl Strategy for PullbackStrategy {
         self.high_buf.push_front(cx.high[0]);
         self.low_buf.push_front(cx.low[0]);
 
-        if self.high_buf.len() < 30 { return Ok(()); }
+        if self.high_buf.len() < 30 {
+            return Ok(());
+        }
 
         let sma50 = ma(cx.close, 50);
         let sma200 = ma(cx.close, 200);
         let atr_val = atr(cx.high, cx.low, cx.close, 14);
         let rsi_val = rsi(cx.close, 14);
         let (Some(sma50), Some(sma200), Some(_atr), Some(rsi)) = (sma50, sma200, atr_val, rsi_val)
-        else { return Ok(()); };
+        else {
+            return Ok(());
+        };
 
-        if cx.get_position("BTCUSDT").await?.is_some() { return Ok(()); }
+        if cx.get_position("BTCUSDT").await?.is_some() {
+            return Ok(());
+        }
 
         let low: Vec<Decimal> = self.low_buf.iter().copied().collect();
         let high: Vec<Decimal> = self.high_buf.iter().copied().collect();
 
-        // Long: uptrend + pullback near SMA50
+        // 仅在趋势方向交易
         if sma50 > sma200 {
             let near_sma50 = cx.low[0] <= sma50 * dec!(1.005) && cx.low[0] >= sma50 * dec!(0.99);
             let recent_low = low.iter().take(5).copied().fold(Decimal::MAX, Decimal::min);
+
             if near_sma50 && cx.close[0] > cx.open[0] && rsi > dec!(40) && rsi < dec!(65) {
                 let sl = round_to_tick(recent_low.min(cx.low[0]));
                 let tp = round_to_tick(cx.close[0] + (cx.close[0] - sl) * dec!(2));
@@ -797,10 +808,14 @@ impl Strategy for PullbackStrategy {
             }
         }
 
-        // Short: downtrend + pullback near SMA50
         if sma50 < sma200 {
             let near_sma50 = cx.high[0] >= sma50 * dec!(0.99) && cx.high[0] <= sma50 * dec!(1.005);
-            let recent_high = high.iter().take(5).copied().fold(Decimal::MIN, Decimal::max);
+            let recent_high = high
+                .iter()
+                .take(5)
+                .copied()
+                .fold(Decimal::MIN, Decimal::max);
+
             if near_sma50 && cx.close[0] < cx.open[0] && rsi > dec!(35) && rsi < dec!(60) {
                 let sl = round_to_tick(recent_high.max(cx.high[0]));
                 let tp = round_to_tick(cx.close[0] - (sl - cx.close[0]) * dec!(2));
@@ -818,6 +833,7 @@ async fn main() {
     let result = backtest("BTCUSDT", 12, PullbackStrategy::new(), Level::Hour4)
         .await
         .unwrap();
+
     println!("summary: {:#?}", result.summarize());
 }
 ```
@@ -827,21 +843,44 @@ async fn main() {
 A breakout strategy that implements **Donchian channels**, **volume ratio**, and **RMA (smoothed moving average)** entirely from scratch. Enters when price breaks the 20-period Donchian channel with 1.3x+ volume spike and price above/below the RMA trend filter.
 
 ```rust
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use std::collections::VecDeque;
 use trading_maid::prelude::*;
 
+fn round_to_tick(price: Decimal) -> Decimal {
+    let tick = dec!(0.1);
+    let rounded = (price / tick).round_dp(0) * tick;
+    if rounded <= Decimal::ZERO {
+        tick
+    } else {
+        rounded
+    }
+}
+
 fn donchian(high: &[Decimal], low: &[Decimal], period: usize) -> (Decimal, Decimal) {
-    let upper = high.iter().take(period).copied().fold(Decimal::MIN, Decimal::max);
-    let lower = low.iter().take(period).copied().fold(Decimal::MAX, Decimal::min);
+    let upper = high
+        .iter()
+        .take(period)
+        .copied()
+        .fold(Decimal::MIN, Decimal::max);
+    let lower = low
+        .iter()
+        .take(period)
+        .copied()
+        .fold(Decimal::MAX, Decimal::min);
     (upper, lower)
 }
 
 fn vol_ratio(volume: &[Decimal], period: usize) -> Option<Decimal> {
-    if volume.len() < period + 1 { return None; }
-    let avg: Decimal = volume.iter().skip(1).take(period).sum::<Decimal>() / Decimal::from(period);
-    if avg.is_zero() { None } else { Some(volume[0] / avg) }
+    if volume.len() < period + 1 {
+        return None;
+    }
+    let avg_vol: Decimal =
+        volume.iter().skip(1).take(period).sum::<Decimal>() / Decimal::from(period);
+    if avg_vol.is_zero() {
+        None
+    } else {
+        Some(volume[0] / avg_vol)
+    }
 }
 
 struct Rma {
@@ -851,7 +890,13 @@ struct Rma {
 }
 
 impl Rma {
-    fn new(period: usize) -> Self { Rma { period, buf: VecDeque::new(), value: None } }
+    fn new(period: usize) -> Self {
+        Rma {
+            period,
+            buf: VecDeque::new(),
+            value: None,
+        }
+    }
     fn update(&mut self, price: Decimal) -> Option<Decimal> {
         self.buf.push_front(price);
         if self.buf.len() < self.period {
@@ -881,46 +926,82 @@ struct VolumeBreakout {
 }
 
 impl VolumeBreakout {
-    fn new() -> Self { VolumeBreakout { high_buf: VecDeque::new(), low_buf: VecDeque::new(), vol_buf: VecDeque::new(), rma_close: Rma::new(20), rma_vol: Rma::new(20) } }
+    fn new() -> Self {
+        VolumeBreakout {
+            high_buf: VecDeque::new(),
+            low_buf: VecDeque::new(),
+            vol_buf: VecDeque::new(),
+            rma_close: Rma::new(20),
+            rma_vol: Rma::new(20),
+        }
+    }
 }
 
 #[async_trait(?Send)]
 impl Strategy for VolumeBreakout {
     async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
-        self.high_buf.push_front(cx.high[0]);
-        self.low_buf.push_front(cx.low[0]);
-        self.vol_buf.push_front(cx.volume[0]);
-        if self.high_buf.len() < 25 { self.rma_close.update(cx.close[0]); self.rma_vol.update(cx.volume[0]); return Ok(()); }
+        let high = cx.high[0];
+        let low = cx.low[0];
+        let vol = cx.volume[0];
+
+        self.high_buf.push_front(high);
+        self.low_buf.push_front(low);
+        self.vol_buf.push_front(vol);
+
+        if self.high_buf.len() < 25 {
+            self.rma_close.update(cx.close[0]);
+            self.rma_vol.update(vol);
+            return Ok(());
+        }
+
         let ma_price = self.rma_close.update(cx.close[0]);
-        let _ma_vol = self.rma_vol.update(cx.volume[0]);
-        let Some(ma_price) = ma_price else { return Ok(()) };
+        let _ma_vol = self.rma_vol.update(vol);
+        let Some(ma_price) = ma_price else {
+            return Ok(());
+        };
+
         let h: Vec<Decimal> = self.high_buf.iter().copied().collect();
         let l: Vec<Decimal> = self.low_buf.iter().copied().collect();
         let v: Vec<Decimal> = self.vol_buf.iter().copied().collect();
+
         let (dc_u, dc_l) = donchian(&h, &l, 20);
         let vr = vol_ratio(&v, 20);
-        if cx.get_position("BTCUSDT").await?.is_some() { return Ok(()); }
+
+        if cx.get_position("BTCUSDT").await?.is_some() {
+            return Ok(());
+        }
+
         let atr_val = atr(cx.high, cx.low, cx.close, 14);
         let Some(atr) = atr_val else { return Ok(()) };
+
+        // 多头：唐奇安上轨突破 + 放量 1.3x + 价格在均线上方
         let has_vol = vr.map_or(false, |r| r > dec!(1.3));
         if cx.high[0] >= dc_u && has_vol && cx.close[0] > ma_price {
             let sl = round_to_tick(ma_price - atr * dec!(0.5));
             let tp = round_to_tick(cx.close[0] + atr * dec!(4));
             cx.cancel_all_order("BTCUSDT").await?;
             _ = cx.buy_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
-        } else if cx.low[0] <= dc_l && has_vol && cx.close[0] < ma_price {
+            return Ok(());
+        }
+
+        // 空头：唐奇安下轨跌破 + 放量 1.3x + 价格在均线下方
+        if cx.low[0] <= dc_l && has_vol && cx.close[0] < ma_price {
             let sl = round_to_tick(ma_price + atr * dec!(0.5));
             let tp = round_to_tick(cx.close[0] - atr * dec!(4));
             cx.cancel_all_order("BTCUSDT").await?;
             _ = cx.sell_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
         }
+
         Ok(())
     }
 }
 
 #[tokio::main]
 async fn main() {
-    let result = backtest("BTCUSDT", 12, VolumeBreakout::new(), Level::Hour4).await.unwrap();
+    let result = backtest("BTCUSDT", 12, VolumeBreakout::new(), Level::Hour4)
+        .await
+        .unwrap();
+
     println!("summary: {:#?}", result.summarize());
 }
 ```
@@ -939,45 +1020,74 @@ async fn main() {
 A pure price-action strategy that implements **momentum scoring**, **volume spike detection**, and **average range** from scratch — no built-in indicators used at all. It enters when cumulative 3-bar momentum exceeds 2% with a volume spike of 1.5x+.
 
 ```rust
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use std::collections::VecDeque;
 use trading_maid::prelude::*;
 
 fn round_to_tick(price: Decimal) -> Decimal {
     let tick = dec!(0.1);
     let rounded = (price / tick).round_dp(0) * tick;
-    if rounded <= Decimal::ZERO { tick } else { rounded }
+    if rounded <= Decimal::ZERO {
+        tick
+    } else {
+        rounded
+    }
 }
 
+// 动量评分：最近 N 根 K 线的上涨力度总和
 fn momentum_score(close: &[Decimal], n: usize) -> Decimal {
-    if close.len() < n + 1 { return dec!(0); }
+    if close.len() < n + 1 {
+        return dec!(0);
+    }
     let mut score = dec!(0);
     for i in 0..n {
-        score = score + (close[i] - close[i + 1]) / close[i + 1] * dec!(100);
+        let change = (close[i] - close[i + 1]) / close[i + 1] * dec!(100);
+        score = score + change;
     }
     score
 }
 
+// 检测成交量爆发：当前成交量 vs 之前 N 根均值
 fn volume_spike(volume: &[Decimal], n: usize) -> Option<Decimal> {
-    if volume.len() < n + 1 { return None; }
+    if volume.len() < n + 1 {
+        return None;
+    }
     let avg: Decimal = volume.iter().skip(1).take(n).sum::<Decimal>() / Decimal::from(n);
-    if avg.is_zero() { None } else { Some(volume[0] / avg) }
+    if avg.is_zero() {
+        return None;
+    }
+    Some(volume[0] / avg)
 }
 
+// 平均真实波幅（简化版）
 fn avg_range(high: &[Decimal], low: &[Decimal], n: usize) -> Decimal {
-    if high.len() < n || low.len() < n { return dec!(300); }
-    let sum: Decimal = high.iter().zip(low.iter()).take(n).map(|(h, l)| h - l).sum();
+    if high.len() < n || low.len() < n {
+        return dec!(300);
+    }
+    let sum: Decimal = high
+        .iter()
+        .zip(low.iter())
+        .take(n)
+        .map(|(h, l)| h - l)
+        .sum();
     sum / Decimal::from(n)
 }
 
 struct Momentum {
-    close_buf: VecDeque<Decimal>, high_buf: VecDeque<Decimal>,
-    low_buf: VecDeque<Decimal>, vol_buf: VecDeque<Decimal>,
+    close_buf: VecDeque<Decimal>,
+    high_buf: VecDeque<Decimal>,
+    low_buf: VecDeque<Decimal>,
+    vol_buf: VecDeque<Decimal>,
 }
 
 impl Momentum {
-    fn new() -> Self { Momentum { close_buf: VecDeque::new(), high_buf: VecDeque::new(), low_buf: VecDeque::new(), vol_buf: VecDeque::new() } }
+    fn new() -> Self {
+        Momentum {
+            close_buf: VecDeque::new(),
+            high_buf: VecDeque::new(),
+            low_buf: VecDeque::new(),
+            vol_buf: VecDeque::new(),
+        }
+    }
 }
 
 #[async_trait(?Send)]
@@ -987,34 +1097,60 @@ impl Strategy for Momentum {
         self.high_buf.push_front(cx.high[0]);
         self.low_buf.push_front(cx.low[0]);
         self.vol_buf.push_front(cx.volume[0]);
-        if self.high_buf.len() < 8 { return Ok(()); }
+
+        if self.high_buf.len() < 8 {
+            return Ok(());
+        }
+
         let c: Vec<Decimal> = self.close_buf.iter().copied().collect();
         let h: Vec<Decimal> = self.high_buf.iter().copied().collect();
         let l: Vec<Decimal> = self.low_buf.iter().copied().collect();
         let v: Vec<Decimal> = self.vol_buf.iter().copied().collect();
-        if cx.get_position("BTCUSDT").await?.is_some() { return Ok(()); }
+
+        if cx.get_position("BTCUSDT").await?.is_some() {
+            return Ok(());
+        }
+
         let score = momentum_score(&c, 3);
         let spike = volume_spike(&v, 5);
         let range = avg_range(&h, &l, 5);
         let body = (cx.open[0] - cx.close[0]).abs();
-        if score > dec!(2) && body >= range && body >= dec!(200) && spike.map_or(false, |s| s > dec!(1.5)) {
+
+        // 多头：连续 3 根累积极动量 > 2% + 成交量爆发 1.5x + 实体大
+        if score > dec!(2)
+            && body >= range
+            && body >= dec!(200)
+            && spike.map_or(false, |s| s > dec!(1.5))
+        {
             let sl = round_to_tick(c[0] - range * dec!(1.5));
             let tp = round_to_tick(c[0] + range * dec!(3));
             cx.cancel_all_order("BTCUSDT").await?;
             _ = cx.buy_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
-        } else if score < dec!(-2) && body >= range && body >= dec!(200) && spike.map_or(false, |s| s > dec!(1.5)) {
+            return Ok(());
+        }
+
+        // 空头：连续 3 根累积极动量 < -2% + 成交量爆发
+        if score < dec!(-2)
+            && body >= range
+            && body >= dec!(200)
+            && spike.map_or(false, |s| s > dec!(1.5))
+        {
             let sl = round_to_tick(c[0] + range * dec!(1.5));
             let tp = round_to_tick(c[0] - range * dec!(3));
             cx.cancel_all_order("BTCUSDT").await?;
             _ = cx.sell_tp_sl("BTCUSDT", tp, sl, "0.01").await?;
         }
+
         Ok(())
     }
 }
 
 #[tokio::main]
 async fn main() {
-    let result = backtest("BTCUSDT", 12, Momentum::new(), Level::Hour4).await.unwrap();
+    let result = backtest("BTCUSDT", 12, Momentum::new(), Level::Hour4)
+        .await
+        .unwrap();
+
     println!("summary: {:#?}", result.summarize());
 }
 ```
@@ -1056,7 +1192,9 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 
     let sma50 = ma(cx.close, 50);
     let atr_val = atr(cx.high, cx.low, cx.close, 14);
-    let (Some(sma50), Some(atr)) = (sma50, atr_val) else { return Ok(()) };
+    let (Some(sma50), Some(atr)) = (sma50, atr_val) else {
+        return Ok(());
+    };
 
     let body0 = (cx.close[0] - cx.open[0]).abs();
 

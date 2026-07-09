@@ -32,6 +32,6 @@ async fn main() {
     // 回测结果汇总
     println!("summary: {:#?}", result.summarize());
 
-    // 回测结果可视化
+    // 数据重采样到所有级别后可视化
     result.resample_all_open_in_server().await.unwrap();
 }
