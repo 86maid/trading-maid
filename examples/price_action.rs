@@ -1,17 +1,21 @@
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use std::collections::VecDeque;
 use trading_maid::prelude::*;
 
 fn round_to_tick(price: Decimal) -> Decimal {
     let tick = dec!(0.1);
     let rounded = (price / tick).round_dp(0) * tick;
-    if rounded <= Decimal::ZERO { tick } else { rounded }
+    if rounded <= Decimal::ZERO {
+        tick
+    } else {
+        rounded
+    }
 }
 
 // 动量评分：最近 N 根 K 线的上涨力度总和
 fn momentum_score(close: &[Decimal], n: usize) -> Decimal {
-    if close.len() < n + 1 { return dec!(0); }
+    if close.len() < n + 1 {
+        return dec!(0);
+    }
     let mut score = dec!(0);
     for i in 0..n {
         let change = (close[i] - close[i + 1]) / close[i + 1] * dec!(100);
@@ -22,17 +26,27 @@ fn momentum_score(close: &[Decimal], n: usize) -> Decimal {
 
 // 检测成交量爆发：当前成交量 vs 之前 N 根均值
 fn volume_spike(volume: &[Decimal], n: usize) -> Option<Decimal> {
-    if volume.len() < n + 1 { return None; }
+    if volume.len() < n + 1 {
+        return None;
+    }
     let avg: Decimal = volume.iter().skip(1).take(n).sum::<Decimal>() / Decimal::from(n);
-    if avg.is_zero() { return None; }
+    if avg.is_zero() {
+        return None;
+    }
     Some(volume[0] / avg)
 }
 
 // 平均真实波幅（简化版）
 fn avg_range(high: &[Decimal], low: &[Decimal], n: usize) -> Decimal {
-    if high.len() < n || low.len() < n { return dec!(300); }
-    let sum: Decimal = high.iter().zip(low.iter()).take(n)
-        .map(|(h, l)| h - l).sum();
+    if high.len() < n || low.len() < n {
+        return dec!(300);
+    }
+    let sum: Decimal = high
+        .iter()
+        .zip(low.iter())
+        .take(n)
+        .map(|(h, l)| h - l)
+        .sum();
     sum / Decimal::from(n)
 }
 
@@ -81,7 +95,11 @@ impl Strategy for Momentum {
         let body = (cx.open[0] - cx.close[0]).abs();
 
         // 多头：连续 3 根累积极动量 > 2% + 成交量爆发 1.5x + 实体大
-        if score > dec!(2) && body >= range && body >= dec!(200) && spike.map_or(false, |s| s > dec!(1.5)) {
+        if score > dec!(2)
+            && body >= range
+            && body >= dec!(200)
+            && spike.map_or(false, |s| s > dec!(1.5))
+        {
             let sl = round_to_tick(c[0] - range * dec!(1.5));
             let tp = round_to_tick(c[0] + range * dec!(3));
             cx.cancel_all_order("BTCUSDT").await?;
@@ -90,7 +108,11 @@ impl Strategy for Momentum {
         }
 
         // 空头：连续 3 根累积极动量 < -2% + 成交量爆发
-        if score < dec!(-2) && body >= range && body >= dec!(200) && spike.map_or(false, |s| s > dec!(1.5)) {
+        if score < dec!(-2)
+            && body >= range
+            && body >= dec!(200)
+            && spike.map_or(false, |s| s > dec!(1.5))
+        {
             let sl = round_to_tick(c[0] + range * dec!(1.5));
             let tp = round_to_tick(c[0] - range * dec!(3));
             cx.cancel_all_order("BTCUSDT").await?;

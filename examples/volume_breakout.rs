@@ -1,24 +1,41 @@
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use std::collections::VecDeque;
 use trading_maid::prelude::*;
 
 fn round_to_tick(price: Decimal) -> Decimal {
     let tick = dec!(0.1);
     let rounded = (price / tick).round_dp(0) * tick;
-    if rounded <= Decimal::ZERO { tick } else { rounded }
+    if rounded <= Decimal::ZERO {
+        tick
+    } else {
+        rounded
+    }
 }
 
 fn donchian(high: &[Decimal], low: &[Decimal], period: usize) -> (Decimal, Decimal) {
-    let upper = high.iter().take(period).copied().fold(Decimal::MIN, Decimal::max);
-    let lower = low.iter().take(period).copied().fold(Decimal::MAX, Decimal::min);
+    let upper = high
+        .iter()
+        .take(period)
+        .copied()
+        .fold(Decimal::MIN, Decimal::max);
+    let lower = low
+        .iter()
+        .take(period)
+        .copied()
+        .fold(Decimal::MAX, Decimal::min);
     (upper, lower)
 }
 
 fn vol_ratio(volume: &[Decimal], period: usize) -> Option<Decimal> {
-    if volume.len() < period + 1 { return None; }
-    let avg_vol: Decimal = volume.iter().skip(1).take(period).sum::<Decimal>() / Decimal::from(period);
-    if avg_vol.is_zero() { None } else { Some(volume[0] / avg_vol) }
+    if volume.len() < period + 1 {
+        return None;
+    }
+    let avg_vol: Decimal =
+        volume.iter().skip(1).take(period).sum::<Decimal>() / Decimal::from(period);
+    if avg_vol.is_zero() {
+        None
+    } else {
+        Some(volume[0] / avg_vol)
+    }
 }
 
 struct Rma {
@@ -29,7 +46,11 @@ struct Rma {
 
 impl Rma {
     fn new(period: usize) -> Self {
-        Rma { period, buf: VecDeque::new(), value: None }
+        Rma {
+            period,
+            buf: VecDeque::new(),
+            value: None,
+        }
     }
     fn update(&mut self, price: Decimal) -> Option<Decimal> {
         self.buf.push_front(price);
@@ -90,7 +111,9 @@ impl Strategy for VolumeBreakout {
 
         let ma_price = self.rma_close.update(cx.close[0]);
         let _ma_vol = self.rma_vol.update(vol);
-        let Some(ma_price) = ma_price else { return Ok(()) };
+        let Some(ma_price) = ma_price else {
+            return Ok(());
+        };
 
         let h: Vec<Decimal> = self.high_buf.iter().copied().collect();
         let l: Vec<Decimal> = self.low_buf.iter().copied().collect();

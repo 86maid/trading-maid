@@ -1038,7 +1038,11 @@ use trading_maid::prelude::*;
 fn round_to_tick(price: rust_decimal::Decimal) -> rust_decimal::Decimal {
     let tick = rust_decimal_macros::dec!(0.1);
     let rounded = (price / tick).round_dp(0) * tick;
-    if rounded <= rust_decimal::Decimal::ZERO { tick } else { rounded }
+    if rounded <= rust_decimal::Decimal::ZERO {
+        tick
+    } else {
+        rounded
+    }
 }
 
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {

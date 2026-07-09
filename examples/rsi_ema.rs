@@ -3,7 +3,11 @@ use trading_maid::prelude::*;
 fn round_to_tick(price: rust_decimal::Decimal) -> rust_decimal::Decimal {
     let tick = rust_decimal_macros::dec!(0.1);
     let rounded = (price / tick).round_dp(0) * tick;
-    if rounded <= rust_decimal::Decimal::ZERO { tick } else { rounded }
+    if rounded <= rust_decimal::Decimal::ZERO {
+        tick
+    } else {
+        rounded
+    }
 }
 
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
@@ -17,7 +21,9 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 
     let sma50 = ma(cx.close, 50);
     let atr_val = atr(cx.high, cx.low, cx.close, 14);
-    let (Some(sma50), Some(atr)) = (sma50, atr_val) else { return Ok(()) };
+    let (Some(sma50), Some(atr)) = (sma50, atr_val) else {
+        return Ok(());
+    };
 
     let body0 = (cx.close[0] - cx.open[0]).abs();
 
