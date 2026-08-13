@@ -1301,13 +1301,7 @@ impl Exchange for LocalExchange {
             .history_order_list
             .get(id)
             .or(inner.pending_order_list.get(id))
-            .filter(|v| {
-                if cfg!(debug_assertions) || cfg!(test) {
-                    true
-                } else {
-                    v.kind.is_normal()
-                }
-            })
+            .filter(|v| v.kind.is_normal())
             .map(|v| v.to_order_message()))
     }
 
@@ -1341,11 +1335,7 @@ impl Exchange for LocalExchange {
             .filter(|v| {
                 v.symbol == symbol
                     && v.status == Status::Submitted
-                    && if cfg!(debug_assertions) || cfg!(test) {
-                        true
-                    } else {
-                        v.kind.is_normal()
-                    }
+                    && v.kind.is_normal()
             })
             .map(|v| v.to_order_message())
             .collect())
@@ -1690,6 +1680,59 @@ mod tests {
             .leverage(10),
         ))
     }
+
+    // ---- raw accessors: public API 会过滤强平等非普通订单，测试需要直接读取内部状态 ----
+
+    fn single_exchange_raw() -> (ExchangeWrapper, Arc<LocalExchange>) {
+        single_exchange_with_raw(btc_metadata(), btc_klines())
+    }
+
+    fn single_exchange_with_raw(
+        metadata: Metadata,
+        kline_list: Vec<KLine>,
+    ) -> (ExchangeWrapper, Arc<LocalExchange>) {
+        let raw: Arc<LocalExchange> = Arc::new(
+            LocalExchange::new(vec![DataSource::new(metadata, kline_list)])
+                .unwrap()
+                .cash(10000.0)
+                .leverage(10),
+        );
+        (ExchangeWrapper::new(raw.clone()), raw)
+    }
+
+    fn multi_exchange_raw() -> (ExchangeWrapper, Arc<LocalExchange>) {
+        let raw: Arc<LocalExchange> = Arc::new(
+            LocalExchange::new(vec![
+                DataSource::new(btc_metadata(), btc_klines()),
+                DataSource::new(eth_metadata(), eth_klines()),
+            ])
+            .unwrap()
+            .cash(10000.0)
+            .leverage(10),
+        );
+        (ExchangeWrapper::new(raw.clone()), raw)
+    }
+
+    async fn pending_orders_all(exchange: &LocalExchange, symbol: &str) -> Vec<OrderMessage> {
+        exchange
+            .inner
+            .lock()
+            .await
+            .pending_order_list
+            .values()
+            .filter(|v| v.symbol == symbol)
+            .map(|v| v.to_order_message())
+            .collect()
+    }
+
+    async fn get_order_all(exchange: &LocalExchange, id: &str) -> Option<OrderMessage> {
+        let inner = exchange.inner.lock().await;
+        inner
+            .history_order_list
+            .get(id)
+            .or(inner.pending_order_list.get(id))
+            .map(|v| v.to_order_message())
+    }
     // 验证市价单在下一根 K 线按开盘价成交并生成仓位。
     #[tokio::test]
     async fn market_order_fills_on_next_kline() {
@@ -1760,7 +1803,7 @@ mod tests {
     // 验证触发市价单立即执行：触发后在同一根 K 线立即成交。
     #[tokio::test]
     async fn trigger_market_order_is_two_stage_filled() {
-        let exchange = single_exchange();
+        let (exchange, raw) = single_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
@@ -1777,7 +1820,7 @@ mod tests {
         assert_eq!(position.quantity, 1.0);
 
         // 仓位创建后会有强平单
-        let pending = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending = pending_orders_all(&raw, BTC).await;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].kind, Kind::Liquidation);
     }
@@ -1824,7 +1867,7 @@ mod tests {
     // 验证追加保证金接口的边界校验和现金/保证金更新逻辑。
     #[tokio::test]
     async fn append_position_margin_checks_and_updates_cash() {
-        let exchange = single_exchange();
+        let (exchange, raw) = single_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
@@ -1839,10 +1882,8 @@ mod tests {
 
         let cash_before = exchange.get_cash().await.unwrap();
         let margin_before = exchange.get_position(BTC).await.unwrap().unwrap().margin;
-        let liquidation_price_before = exchange
-            .get_pending_order_list(BTC)
+        let liquidation_price_before = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.price)
@@ -1853,10 +1894,8 @@ mod tests {
         let cash_after = exchange.get_cash().await.unwrap();
         let position_after = exchange.get_position(BTC).await.unwrap().unwrap();
         let margin_after = position_after.margin;
-        let liquidation_price_after = exchange
-            .get_pending_order_list(BTC)
+        let liquidation_price_after = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.price)
@@ -2170,13 +2209,13 @@ mod tests {
     // 验证开仓后会自动生成对应的强平保护订单。
     #[tokio::test]
     async fn liquidation_order_created_on_open() {
-        let exchange = single_exchange();
+        let (exchange, raw) = single_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let pending = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending = pending_orders_all(&raw, BTC).await;
 
         assert!(pending.iter().any(|v| v.kind == Kind::Liquidation));
     }
@@ -2310,7 +2349,7 @@ mod tests {
         metadata.tick_size = dec!(0.1);
         metadata.min_size = dec!(0.00000001);
 
-        let exchange = single_exchange_with(
+        let (exchange, raw) = single_exchange_with_raw(
             metadata.clone(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(100.5), dec!(99.8), dec!(100.1)),
@@ -2363,7 +2402,7 @@ mod tests {
 
         let open_order = exchange.get_order(&open_id).await.unwrap().unwrap();
         let mut position = exchange.get_position(BTC).await.unwrap().unwrap();
-        let pending_s2 = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_s2 = pending_orders_all(&raw, BTC).await;
 
         let open_fill = dec!(100.6);
         let margin_s2 = open_fill * entry_qty / dec!(10.0);
@@ -2391,7 +2430,7 @@ mod tests {
 
         assert_eq!(exchange.get_cash().await.unwrap(), cash_s2);
         assert_eq!(exchange.get_equity().await.unwrap(), equity_s2);
-        assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 2);
+        assert_eq!(pending_orders_all(&raw, BTC).await.len(), 2);
 
         // Step 3: 触发单触发并立即执行（sell 且 price<=open，按 low 成交）。
         exchange.next(BTC, Level::Minute1).await.unwrap();
@@ -2401,7 +2440,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let pending_s3 = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_s3 = pending_orders_all(&raw, BTC).await;
         position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         let reduce_limit_fill = dec!(100.3); // kline 3 low
@@ -2426,7 +2465,7 @@ mod tests {
         // Step 4: 无新订单成交，仅推进 K 线。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let pending_s4 = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_s4 = pending_orders_all(&raw, BTC).await;
         let history_pos_s4 = exchange.get_history_position_list(BTC).await.unwrap();
         let position_s4 = exchange.get_position(BTC).await.unwrap().unwrap();
 
@@ -2459,7 +2498,7 @@ mod tests {
 
         assert_eq!(exchange.get_cash().await.unwrap(), cash_after_readd_place);
         assert_eq!(exchange.get_equity().await.unwrap(), equity_s4);
-        assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 2);
+        assert_eq!(pending_orders_all(&raw, BTC).await.len(), 2);
 
         exchange.cancel_order(BTC, &readd_id).await.unwrap();
 
@@ -2467,7 +2506,7 @@ mod tests {
         assert_eq!(canceled.status, Status::Canceled);
         assert_eq!(exchange.get_cash().await.unwrap(), cash_s3);
         assert_eq!(exchange.get_equity().await.unwrap(), equity_s4);
-        assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 1);
+        assert_eq!(pending_orders_all(&raw, BTC).await.len(), 1);
     }
 
     // 验证多个浮点算术限价单在“部分成交+保留挂单+撤单+平仓”路径中的逐步状态一致性。
@@ -2477,7 +2516,7 @@ mod tests {
         metadata.tick_size = dec!(0.1);
         metadata.min_size = dec!(0.00000001);
 
-        let exchange = single_exchange_with(
+        let (exchange, raw) = single_exchange_with_raw(
             metadata.clone(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(100.4), dec!(99.8), dec!(100.0)),
@@ -2545,7 +2584,7 @@ mod tests {
 
         assert_eq!(exchange.get_cash().await.unwrap(), cash_s2);
         assert_eq!(exchange.get_equity().await.unwrap(), equity_s2);
-        assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 2);
+        assert_eq!(pending_orders_all(&raw, BTC).await.len(), 2);
 
         // 撤掉仍 pending 的普通限价单，现金回补，但总权益应保持不变。
         exchange.cancel_order(BTC, &id_pending).await.unwrap();
@@ -2557,21 +2596,21 @@ mod tests {
         assert_eq!(canceled_pending.status, Status::Canceled);
         assert_eq!(exchange.get_cash().await.unwrap(), cash_after_cancel);
         assert_eq!(exchange.get_equity().await.unwrap(), equity_after_cancel);
-        assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 1);
+        assert_eq!(pending_orders_all(&raw, BTC).await.len(), 1);
 
         // 下由浮点算术构造的 reduce-only 市价平仓单。
         let close_qty = dec!(0.1) + dec!(0.2);
         let close_id = exchange.sell_reduce_only(BTC, close_qty).await.unwrap();
 
         assert_eq!(exchange.get_cash().await.unwrap(), cash_after_cancel);
-        assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 2);
+        assert_eq!(pending_orders_all(&raw, BTC).await.len(), 2);
 
         // Step 3: 第三根 K 市价平仓成交。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let close_order = exchange.get_order(&close_id).await.unwrap().unwrap();
         let history = exchange.get_history_position_list(BTC).await.unwrap();
-        let pending_s3 = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_s3 = pending_orders_all(&raw, BTC).await;
 
         let close_avg = dec!(100.4);
         let close_profit = (close_avg - fill_avg) * close_qty;
@@ -2653,21 +2692,21 @@ mod tests {
     // 验证 cancel_all_order 仅取消普通 Submitted 订单，不影响强平保护单。
     #[tokio::test]
     async fn cancel_all_order_only_cancels_submitted_normal_orders() {
-        let exchange = single_exchange();
+        let (exchange, raw) = single_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         exchange.buy_limit(BTC, 90.0, 1.0).await.unwrap();
-        let pending_before = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_before = pending_orders_all(&raw, BTC).await;
         assert_eq!(pending_before.len(), 2);
         assert!(pending_before.iter().any(|v| v.kind == Kind::Limit));
         assert!(pending_before.iter().any(|v| v.kind == Kind::Liquidation));
 
         exchange.cancel_all_order(BTC).await.unwrap();
 
-        let pending_after = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_after = pending_orders_all(&raw, BTC).await;
         let history = exchange.get_history_order_list(BTC).await.unwrap();
 
         assert_eq!(pending_after.len(), 1);
@@ -2725,7 +2764,7 @@ mod tests {
     // 验证调低杠杆倍率（更高保证金要求）时会重算仓位保证金与可用现金。
     #[tokio::test]
     async fn set_leverage_recalculates_position_margin_and_cash() {
-        let exchange = single_exchange();
+        let (exchange, raw) = single_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
@@ -2733,10 +2772,8 @@ mod tests {
 
         let cash_before = exchange.get_cash().await.unwrap();
         let position_before = exchange.get_position(BTC).await.unwrap().unwrap();
-        let liquidation_price_before = exchange
-            .get_pending_order_list(BTC)
+        let liquidation_price_before = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.price)
@@ -2746,10 +2783,8 @@ mod tests {
 
         let cash_after = exchange.get_cash().await.unwrap();
         let position_after = exchange.get_position(BTC).await.unwrap().unwrap();
-        let liquidation_price_after = exchange
-            .get_pending_order_list(BTC)
+        let liquidation_price_after = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.price)
@@ -2843,7 +2878,7 @@ mod tests {
     // 验证反向开仓后，强平保护单方向与价格会同步到新仓位。
     #[tokio::test]
     async fn reverse_position_updates_liquidation_order_side_and_price() {
-        let exchange = single_exchange_with(
+        let (exchange, raw) = single_exchange_with_raw(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -2860,7 +2895,7 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
-        let pending = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending = pending_orders_all(&raw, BTC).await;
         let liquidation = pending
             .iter()
             .find(|v| v.kind == Kind::Liquidation)
@@ -2874,36 +2909,30 @@ mod tests {
     // 验证追加保证金后强平价下降、再减少保证金后强平价回升（多仓场景）。
     #[tokio::test]
     async fn append_and_reduce_margin_moves_liquidation_price_monotonic() {
-        let exchange = single_exchange();
+        let (exchange, raw) = single_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let liq_before = exchange
-            .get_pending_order_list(BTC)
+        let liq_before = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.price)
             .unwrap();
 
         exchange.append_position_margin(BTC, 2.0).await.unwrap();
-        let liq_after_add = exchange
-            .get_pending_order_list(BTC)
+        let liq_after_add = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.price)
             .unwrap();
 
         exchange.append_position_margin(BTC, -1.0).await.unwrap();
-        let liq_after_reduce = exchange
-            .get_pending_order_list(BTC)
+        let liq_after_reduce = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.price)
@@ -2916,19 +2945,19 @@ mod tests {
     // 验证仅存在强平保护单时允许调杠杆，且挂单数量不变化。
     #[tokio::test]
     async fn set_leverage_allowed_with_only_liquidation_order() {
-        let exchange = single_exchange();
+        let (exchange, raw) = single_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let pending_before = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_before = pending_orders_all(&raw, BTC).await;
         assert_eq!(pending_before.len(), 1);
         assert_eq!(pending_before[0].kind, Kind::Liquidation);
 
         exchange.set_leverage(BTC, 5).await.unwrap();
 
-        let pending_after = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_after = pending_orders_all(&raw, BTC).await;
         let position_after = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(exchange.get_leverage(BTC).await.unwrap(), 5);
@@ -2940,22 +2969,22 @@ mod tests {
     // 验证调杠杆失败时，仓位保证金与强平价格不会被污染。
     #[tokio::test]
     async fn set_leverage_failure_keeps_position_and_liquidation_unchanged() {
-        let exchange = LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
-            .unwrap()
-            .cash(11.0)
-            .leverage(10);
+        let raw: Arc<LocalExchange> = Arc::new(
+            LocalExchange::new(vec![DataSource::new(btc_metadata(), btc_klines())])
+                .unwrap()
+                .cash(11.0)
+                .leverage(10),
+        );
 
-        let exchange = ExchangeWrapper::new(Arc::new(exchange));
+        let exchange = ExchangeWrapper::new(raw.clone());
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let position_before = exchange.get_position(BTC).await.unwrap().unwrap();
-        let liquidation_before = exchange
-            .get_pending_order_list(BTC)
+        let liquidation_before = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -2963,10 +2992,8 @@ mod tests {
         let _ = exchange.set_leverage(BTC, 1).await.unwrap_err();
 
         let position_after = exchange.get_position(BTC).await.unwrap().unwrap();
-        let liquidation_after = exchange
-            .get_pending_order_list(BTC)
+        let liquidation_after = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -3104,7 +3131,7 @@ mod tests {
     // 验证强平订单被触发后会平掉仓位，并在历史仓位中标记为强平。
     #[tokio::test]
     async fn liquidation_order_closes_position_and_records_liquidation_history() {
-        let exchange = single_exchange_with(
+        let (exchange, raw) = single_exchange_with_raw(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -3117,10 +3144,8 @@ mod tests {
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let liq_order = exchange
-            .get_pending_order_list(BTC)
+        let liq_order = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -3139,30 +3164,30 @@ mod tests {
     // 验证 1x 多仓强平价受 maintenance 约束，并在触及阈值时执行强平。
     #[tokio::test]
     async fn one_x_long_liquidation_price_respects_maintenance() {
-        let exchange = LocalExchange::new(vec![DataSource::new(
-            btc_metadata(),
-            vec![
-                gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
-                gen_kline(2, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
-                gen_kline(3, dec!(60.0), dec!(61.0), dec!(1.0), dec!(10.0)),
-                gen_kline(4, dec!(1.0), dec!(1.0), dec!(0.3), dec!(0.5)),
-            ],
-        )])
-        .unwrap()
-        .cash(10000.0)
-        .leverage(1);
+        let raw: Arc<LocalExchange> = Arc::new(
+            LocalExchange::new(vec![DataSource::new(
+                btc_metadata(),
+                vec![
+                    gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                    gen_kline(2, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                    gen_kline(3, dec!(60.0), dec!(61.0), dec!(1.0), dec!(10.0)),
+                    gen_kline(4, dec!(1.0), dec!(1.0), dec!(0.3), dec!(0.5)),
+                ],
+            )])
+            .unwrap()
+            .cash(10000.0)
+            .leverage(1),
+        );
 
-        let exchange = ExchangeWrapper::new(Arc::new(exchange));
+        let exchange = ExchangeWrapper::new(raw.clone());
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let position_after_open = exchange.get_position(BTC).await.unwrap().unwrap();
-        let liq_after_open = exchange
-            .get_pending_order_list(BTC)
+        let liq_after_open = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -3187,30 +3212,30 @@ mod tests {
     // 验证 1x 空仓强平价受 maintenance 约束，并在触及阈值时执行强平。
     #[tokio::test]
     async fn one_x_short_liquidation_price_respects_maintenance() {
-        let exchange = LocalExchange::new(vec![DataSource::new(
-            btc_metadata(),
-            vec![
-                gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
-                gen_kline(2, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
-                gen_kline(3, dec!(180.0), dec!(181.0), dec!(179.0), dec!(180.0)),
-                gen_kline(4, dec!(200.0), dec!(200.0), dec!(199.0), dec!(199.8)),
-            ],
-        )])
-        .unwrap()
-        .cash(10000.0)
-        .leverage(1);
+        let raw: Arc<LocalExchange> = Arc::new(
+            LocalExchange::new(vec![DataSource::new(
+                btc_metadata(),
+                vec![
+                    gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                    gen_kline(2, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                    gen_kline(3, dec!(180.0), dec!(181.0), dec!(179.0), dec!(180.0)),
+                    gen_kline(4, dec!(200.0), dec!(200.0), dec!(199.0), dec!(199.8)),
+                ],
+            )])
+            .unwrap()
+            .cash(10000.0)
+            .leverage(1),
+        );
 
-        let exchange = ExchangeWrapper::new(Arc::new(exchange));
+        let exchange = ExchangeWrapper::new(raw.clone());
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.sell(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let position_after_open = exchange.get_position(BTC).await.unwrap().unwrap();
-        let liq_after_open = exchange
-            .get_pending_order_list(BTC)
+        let liq_after_open = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -3518,7 +3543,7 @@ mod tests {
     // 验证逐根 next 的状态严格一致：现金、权益、仓位、挂单和历史记录均符合精确公式。
     #[tokio::test]
     async fn strict_step_by_step_state_assertions_on_each_next() {
-        let exchange = single_exchange_with(
+        let (exchange, raw) = single_exchange_with_raw(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.1), dec!(101.2), dec!(99.4), dec!(100.5)),
@@ -3566,7 +3591,7 @@ mod tests {
 
         let open_order = exchange.get_order(&open_id).await.unwrap().unwrap();
         let position_after_open = exchange.get_position(BTC).await.unwrap().unwrap();
-        let pending_after_open = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_after_open = pending_orders_all(&raw, BTC).await;
 
         let open_margin = open_fill_price * qty / leverage;
         let open_fee = open_fill_price * qty * md.taker_fee;
@@ -3622,12 +3647,12 @@ mod tests {
             position_after_bar3.profit,
             (bar3_close - open_fill_price) * qty,
         );
-        assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 1);
+        assert_eq!(pending_orders_all(&raw, BTC).await.len(), 1);
 
         // 提交 reduce-only 平仓单：撮合前资金不变，挂单增加。
         let close_id = exchange.sell_reduce_only(BTC, 1.0).await.unwrap();
         assert_eq!(exchange.get_cash().await.unwrap(), expected_cash_after_bar3);
-        assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 2);
+        assert_eq!(pending_orders_all(&raw, BTC).await.len(), 2);
 
         // Step 4: 第四根 K 线撮合平仓。
         exchange.next(BTC, Level::Minute1).await.unwrap();
@@ -3676,12 +3701,14 @@ mod tests {
             ],
         );
 
-        let exchange = ExchangeWrapper::new(Arc::new(
+        let raw: Arc<LocalExchange> = Arc::new(
             LocalExchange::new(vec![data_source])
                 .unwrap()
                 .cash(20000.0)
                 .leverage(10),
-        ));
+        );
+
+        let exchange = ExchangeWrapper::new(raw.clone());
 
         let md = btc_metadata();
 
@@ -3727,7 +3754,7 @@ mod tests {
 
         let open_order = exchange.get_order(&market_open_id).await.unwrap().unwrap();
         let mut position = exchange.get_position(BTC).await.unwrap().unwrap();
-        let pending_after_open = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_after_open = pending_orders_all(&raw, BTC).await;
 
         let open_margin_10 = p_open_long * qty_long / dec!(10.0);
         let open_fee = p_open_long * qty_long * md.taker_fee;
@@ -3778,7 +3805,7 @@ mod tests {
             .sell_trigger_market(BTC, 110.5, qty_reverse_order)
             .await
             .unwrap();
-        assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 2);
+        assert_eq!(pending_orders_all(&raw, BTC).await.len(), 2);
 
         // Step 3: 条件单触发并撮合成交
         exchange.next(BTC, Level::Minute1).await.unwrap();
@@ -3796,7 +3823,7 @@ mod tests {
         let liq_short = p_open_reverse * (1.0 + 1.0 / 8.0 - md.maintenance);
 
         let history_after_reverse = exchange.get_history_position_list(BTC).await.unwrap();
-        let pending_after_reverse = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_after_reverse = pending_orders_all(&raw, BTC).await;
         position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(position.side, Side::Sell);
@@ -3827,7 +3854,7 @@ mod tests {
             .buy_limit_reduce_only(BTC, 104.0, qty_limit_reduce)
             .await
             .unwrap();
-        assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 2);
+        assert_eq!(pending_orders_all(&raw, BTC).await.len(), 2);
         assert_eq!(exchange.get_cash().await.unwrap(), cash_after_reverse);
 
         // Step 5: 限价减仓成交（买价>=open，按 high 成交），并更新历史与仓位。
@@ -3835,7 +3862,7 @@ mod tests {
 
         let close_limit_order = exchange.get_order(&limit_reduce_id).await.unwrap().unwrap();
         let history_after_limit = exchange.get_history_position_list(BTC).await.unwrap();
-        let pending_after_limit = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_after_limit = pending_orders_all(&raw, BTC).await;
         position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         let close_margin_short = reverse_margin_8 * (qty_limit_reduce / qty_reverse_short);
@@ -3893,12 +3920,14 @@ mod tests {
             ],
         );
 
-        let exchange = ExchangeWrapper::new(Arc::new(
+        let raw: Arc<LocalExchange> = Arc::new(
             LocalExchange::new(vec![data_source])
                 .unwrap()
                 .cash(30000.0)
                 .leverage(10),
-        ));
+        );
+
+        let exchange = ExchangeWrapper::new(raw.clone());
 
         let md = btc_metadata();
 
@@ -3951,7 +3980,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let mut position = exchange.get_position(BTC).await.unwrap().unwrap();
-        let pending_s2 = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_s2 = pending_orders_all(&raw, BTC).await;
 
         let avg_long = (q_market_open * p_market_open + q_limit_open * p_limit_open) / q_long;
         let margin_long = q_market_open * p_market_open / 10.0 + q_limit_open * p_limit_open / 10.0;
@@ -3999,7 +4028,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let pending_s3 = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_s3 = pending_orders_all(&raw, BTC).await;
         position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         // 计算平多开空后的现金与保证金
@@ -4035,7 +4064,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let pending_s4 = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_s4 = pending_orders_all(&raw, BTC).await;
         let history_s4 = exchange.get_history_position_list(BTC).await.unwrap();
         position = exchange.get_position(BTC).await.unwrap().unwrap();
 
@@ -4066,7 +4095,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let pending_s5 = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_s5 = pending_orders_all(&raw, BTC).await;
         position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         let upnl_s5 = (p_trigger_reverse - 103.1) * q_short_left;
@@ -4125,7 +4154,7 @@ mod tests {
         let cash_final = cash_lev5_adj - fee_final + margin_lev5_adj + profit_final;
 
         let history_final = exchange.get_history_position_list(BTC).await.unwrap();
-        let pending_final = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending_final = pending_orders_all(&raw, BTC).await;
 
         assert!(exchange.get_position(BTC).await.unwrap().is_none());
         assert!(pending_final.is_empty());
@@ -4168,16 +4197,14 @@ mod tests {
     // 验证按 ID 撤单不会允许撤掉强平保护单。
     #[tokio::test]
     async fn cancel_order_rejects_liquidation_order() {
-        let exchange = single_exchange();
+        let (exchange, raw) = single_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let liq_id = exchange
-            .get_pending_order_list(BTC)
+        let liq_id = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.id)
@@ -4187,7 +4214,7 @@ mod tests {
 
         assert!(result.to_string().contains("non-normal order"));
 
-        let pending = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending = pending_orders_all(&raw, BTC).await;
         assert!(pending.iter().any(|v| v.kind == Kind::Liquidation));
     }
 
@@ -4560,7 +4587,7 @@ mod tests {
     // 验证多仓被强平后，保证金损失、手续费与余额变化符合公式。
     #[tokio::test]
     async fn liquidation_long_pnl_margin_and_cash_match_formula() {
-        let exchange = single_exchange_with(
+        let (exchange, raw) = single_exchange_with_raw(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -4577,10 +4604,8 @@ mod tests {
         exchange.buy(BTC, qty).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let liq_price = exchange
-            .get_pending_order_list(BTC)
+        let liq_price = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.price)
@@ -4608,7 +4633,7 @@ mod tests {
     // 验证空仓被强平后，保证金损失、手续费与余额变化符合公式。
     #[tokio::test]
     async fn liquidation_short_pnl_margin_and_cash_match_formula() {
-        let exchange = single_exchange_with(
+        let (exchange, raw) = single_exchange_with_raw(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -4625,10 +4650,8 @@ mod tests {
         exchange.sell(BTC, qty).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let liq_price = exchange
-            .get_pending_order_list(BTC)
+        let liq_price = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.price)
@@ -4808,19 +4831,21 @@ mod tests {
     // 验证强平单在手续费不足时仍会执行平仓，避免仓位残留。
     #[tokio::test]
     async fn liquidation_executes_even_when_fee_cash_is_insufficient() {
-        let exchange = LocalExchange::new(vec![DataSource::new(
-            btc_metadata(),
-            vec![
-                gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
-                gen_kline(2, dec!(105.0), dec!(106.0), dec!(104.0), dec!(105.0)),
-                gen_kline(3, dec!(95.0), dec!(96.0), dec!(90.0), dec!(92.0)),
-            ],
-        )])
-        .unwrap()
-        .cash(10.56)
-        .leverage(10);
+        let raw: Arc<LocalExchange> = Arc::new(
+            LocalExchange::new(vec![DataSource::new(
+                btc_metadata(),
+                vec![
+                    gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                    gen_kline(2, dec!(105.0), dec!(106.0), dec!(104.0), dec!(105.0)),
+                    gen_kline(3, dec!(95.0), dec!(96.0), dec!(90.0), dec!(92.0)),
+                ],
+            )])
+            .unwrap()
+            .cash(10.56)
+            .leverage(10),
+        );
 
-        let exchange = ExchangeWrapper::new(Arc::new(exchange));
+        let exchange = ExchangeWrapper::new(raw.clone());
 
         let md = btc_metadata();
         let open_price = dec!(105.0);
@@ -4830,10 +4855,8 @@ mod tests {
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let liq_price = exchange
-            .get_pending_order_list(BTC)
+        let liq_price = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .map(|v| v.price)
@@ -4898,7 +4921,7 @@ mod tests {
     // 验证“调杠杆 + 调保证金”交替操作后，仓位与强平挂单价格始终同步。
     #[tokio::test]
     async fn leverage_and_margin_sequence_keeps_liquidation_in_sync() {
-        let exchange = single_exchange();
+        let (exchange, raw) = single_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
@@ -4910,10 +4933,8 @@ mod tests {
         exchange.set_leverage(BTC, 20).await.unwrap();
         let position_1 = exchange.get_position(BTC).await.unwrap().unwrap();
         let liq_1 = position_1.liquidation_price;
-        let liq_order_1 = exchange
-            .get_pending_order_list(BTC)
+        let liq_order_1 = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -4924,10 +4945,8 @@ mod tests {
         exchange.append_position_margin(BTC, 2.0).await.unwrap();
         let position_2 = exchange.get_position(BTC).await.unwrap().unwrap();
         let liq_2 = position_2.liquidation_price;
-        let liq_order_2 = exchange
-            .get_pending_order_list(BTC)
+        let liq_order_2 = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -4938,10 +4957,8 @@ mod tests {
         exchange.append_position_margin(BTC, -1.0).await.unwrap();
         let position_3 = exchange.get_position(BTC).await.unwrap().unwrap();
         let liq_3 = position_3.liquidation_price;
-        let liq_order_3 = exchange
-            .get_pending_order_list(BTC)
+        let liq_order_3 = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -5054,7 +5071,7 @@ mod tests {
     // 验证部分平仓后，仓位强平价与强平挂单价格保持同步一致。
     #[tokio::test]
     async fn partial_close_keeps_liquidation_order_price_synced() {
-        let exchange = single_exchange_with(
+        let (exchange, raw) = single_exchange_with_raw(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -5071,10 +5088,8 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
-        let liq_order = exchange
-            .get_pending_order_list(BTC)
+        let liq_order = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -5282,7 +5297,7 @@ mod tests {
     // 验证反向开仓会正确结算旧仓历史，并仅将超出部分作为新仓位。
     #[tokio::test]
     async fn reverse_order_splits_history_and_new_position_consistently() {
-        let exchange = single_exchange_with(
+        let (exchange, raw) = single_exchange_with_raw(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -5302,10 +5317,8 @@ mod tests {
 
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
         let history = exchange.get_history_position_list(BTC).await.unwrap();
-        let liq_order = exchange
-            .get_pending_order_list(BTC)
+        let liq_order = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -5838,7 +5851,7 @@ mod tests {
     // 压测：反向开仓 + 杠杆切换 + 保证金调整混合路径下，仓位与强平挂单始终同步且资金值有效。
     #[tokio::test]
     async fn stress_mixed_reverse_leverage_margin_path_keeps_invariants() {
-        let exchange = single_exchange_with(
+        let (exchange, raw) = single_exchange_with_raw(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
@@ -5891,10 +5904,8 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
-        let liquidation = exchange
-            .get_pending_order_list(BTC)
+        let liquidation = pending_orders_all(&raw, BTC)
             .await
-            .unwrap()
             .into_iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
@@ -6479,7 +6490,7 @@ mod tests {
     // 验证不同 symbol 的强平单各自独立且方向正确。
     #[tokio::test]
     async fn cross_symbol_liquidation_orders_are_independent() {
-        let exchange = multi_exchange();
+        let (exchange, raw) = multi_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.next(ETH, Level::Minute1).await.unwrap();
@@ -6490,8 +6501,8 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.next(ETH, Level::Minute1).await.unwrap();
 
-        let btc_pending = exchange.get_pending_order_list(BTC).await.unwrap();
-        let eth_pending = exchange.get_pending_order_list(ETH).await.unwrap();
+        let btc_pending = pending_orders_all(&raw, BTC).await;
+        let eth_pending = pending_orders_all(&raw, ETH).await;
 
         let btc_liq = btc_pending
             .iter()
@@ -6638,25 +6649,49 @@ mod tests {
         );
     }
 
-    // 验证在 test 模式下 get_order 可以查到强平订单（cfg!(test) 分支）。
+    // 验证 get_order 会过滤强平单（非普通订单对用户不可见），但内部仍保留该订单。
     #[tokio::test]
-    async fn get_order_includes_liquidation_orders_in_test_mode() {
-        let exchange = single_exchange();
+    async fn get_order_filters_out_liquidation_orders() {
+        let (exchange, raw) = single_exchange_raw();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let pending = exchange.get_pending_order_list(BTC).await.unwrap();
+        let pending = pending_orders_all(&raw, BTC).await;
         let liq = pending
             .iter()
             .find(|v| v.kind == Kind::Liquidation)
             .unwrap();
 
-        // test 模式下 get_order 应能查到强平单
-        let order = exchange.get_order(&liq.id).await.unwrap();
+        // 公开 API 过滤强平单，用户不可见
+        assert!(exchange.get_order(&liq.id).await.unwrap().is_none());
+
+        // 内部仍保留强平单
+        let order = get_order_all(&raw, &liq.id).await;
         assert!(order.is_some());
         assert_eq!(order.unwrap().kind, Kind::Liquidation);
+    }
+
+    // 验证 get_pending_order_list 同样过滤强平单：只返回普通挂单，内部保留强平单。
+    #[tokio::test]
+    async fn get_pending_order_list_filters_out_liquidation_orders() {
+        let (exchange, raw) = single_exchange_raw();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 1.0).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy_limit(BTC, 90.0, 1.0).await.unwrap();
+
+        // 内部挂单：强平单 + 限价单
+        let all = pending_orders_all(&raw, BTC).await;
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|v| v.kind == Kind::Liquidation));
+
+        // 公开 API 只返回普通限价单，强平单被过滤
+        let visible = exchange.get_pending_order_list(BTC).await.unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].kind, Kind::Limit);
     }
 
     // 验证 set_leverage 设置为相同值可以实现无副作用通过。

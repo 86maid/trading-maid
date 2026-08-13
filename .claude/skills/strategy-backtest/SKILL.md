@@ -1,11 +1,11 @@
 ---
 name: strategy-backtest
-description: AI 编写交易策略并通过回测迭代优化，直到策略收益为正
+description: AI 编写交易策略并通过回测迭代优化，直到策略满足合格标准（见 SKILL 的迭代终止条件）
 ---
 
 # 策略编写与回测迭代
 
-你是一个量化交易策略开发专家。你的任务是：编写交易策略 → 回测 → 分析结果 → 改进策略，反复迭代直到策略收益为正。
+你是一个量化交易策略开发专家。你的任务是：编写交易策略 → 回测 → 分析结果 → 改进策略，反复迭代直到策略满足「迭代终止条件」中的全部合格标准。
 
 ## 项目背景
 
@@ -13,7 +13,7 @@ description: AI 编写交易策略并通过回测迭代优化，直到策略收�
 - 币安数据下载与回测
 - 保证金/杠杆/爆仓模拟
 - 多级别 K 线（1m, 5m, 15m, 1h, 4h, 1d 等）
-- 技术指标库
+- 技术指标库与原始 OHLCV 数据（任意技术策略均可实现）
 
 ## 项目 API 速查
 
@@ -36,33 +36,9 @@ async fn main() {
 ```
 
 
-## 可用的技术指标
+## 技术指标
 
-```rust
-// 移动平均
-ma(&series, length) -> Option<Decimal>          // SMA
-ema(&series, length) -> Option<Decimal>         // EMA
-EMACache::new(length)                            // 增量 EMA 缓存（用于 struct 策略）
-
-// 震荡指标
-rsi(&series, length) -> Option<Decimal>          // RSI
-cci(high, low, close, length) -> Option<Decimal> // CCI
-macd(&series, fast, slow, signal)                // MACD → (macd, signal, histogram)
-
-// 布林带
-bollinger(&series, length, multiplier)           // → (middle, upper, lower)
-
-// 极值与形态
-highest(&series, length) -> Option<Decimal>      // 区间最高价
-lowest(&series, length) -> Option<Decimal>       // 区间最低价
-swing_high(&series, left, right)                 // 摆动高点 → (mid, left_min, right_min)
-swing_low(&series, left, right)                  // 摆动低点 → (mid, left_max, right_max)
-atr(high, low, close, length) -> Option<Decimal> // 平均真实波幅
-
-// 交叉检测（需要 >= 2 个数据点）
-cross_over(fast, slow) -> bool                   // 金叉（fast[0] > slow[0] && fast[1] <= slow[1]）
-cross_under(fast, slow) -> bool                  // 死叉（fast[0] < slow[0] && fast[1] >= slow[1]）
-```
+内置指标库提供常用技术指标（均线、RSI、MACD、布林带、ATR、摆动点等），完整签名见项目 README 的「Indicators」章节。**不要以为只能用这些指标**：任何技术策略思路都可以实现——可以自由组合任意指标，可以基于 `cx` 的原始 OHLCV 数据（`open/high/low/close/volume/time`）直接计算自实现指标，也可以使用 K 线形态、量价关系、支撑阻力、通道、统计方法等任何策略逻辑。框架不限制策略形式，只提供数据与下单能力。
 
 ## Context（策略上下文）可用字段
 
@@ -142,7 +118,7 @@ async fn main() {
 - 只做 BTCUSDT 单交易对
 - 每次只持有一个方向的仓位（开仓前检查 `get_position` 是否为 `None`）
 - 必须设置止盈止损（用 `sell_tp_sl` / `buy_tp_sl`）
-- 使用多个技术指标组合确认信号，减少假突破
+- 综合多个信号源确认（技术指标、K 线形态、量价关系等均可），减少假突破
 - 避免过于频繁的交易（手续费 taker 0.05% 会严重侵蚀利润）
 
 ### 第三步：编译运行
@@ -158,14 +134,16 @@ cargo run --release
 | 字段 | 含义 | 目标 |
 |------|------|------|
 | `total_profit` | 总利润（USDT） | **> 0**（核心指标） |
-| `total_trades` | 总交易次数 | >= 20 |
-| `win_rate` | 胜率 (0-1) | > 0.4 |
+| `total_trades` | 总交易次数 | >= 回测月数 * 2（至少每月 2 单）|
+| `win_rate` | 胜率 (0-1) | > 0.5 |
 | `profit_loss_ratio` | 盈亏比 | > 1.0 |
 | `total_fee` | 总手续费 | 相对利润尽量小 |
 | `gross_profit` | 毛利润 | |
 | `gross_loss_abs` | 毛亏损（绝对值）| |
 | `best_trade` | 最佳单笔 | |
 | `worst_trade` | 最差单笔 | |
+
+> 表格中的目标数值即合格标准，完整定义见「迭代终止条件」。
 
 ### 第五步：迭代改进
 
@@ -179,7 +157,7 @@ cargo run --release
 2. 修改 `src/main.rs` 中的策略代码
 3. `cargo run --release 2>&1`
 4. 对比新旧 summary，确认改进方向正确
-5. 直到 `total_profit > 0`, `win_rate > 0.5`, `profit_loss_ratio > 1`, `total_trades >= 20`
+5. 直到满足「迭代终止条件」中的全部合格标准
 
 ## 两种策略写法
 
@@ -226,7 +204,7 @@ impl Strategy for MyStrategy {
 - `total_profit > 0`（总利润为正）
 - `win_rate > 0.5`（胜率至少 50%）
 - `profit_loss_ratio > 1`（盈亏比大于 1）
-- `total_trades >= 20`（足够样本量）
+- `total_trades >= 回测月数 * 2`（至少每月 2 单，即 `backtest()` 传入的 `month_count * 2`；如 12 个月回测需 >= 24 笔，保证足够样本量）
 - 策略逻辑清晰、不严重过拟合
 
 达到目标后，输出最终策略的完整代码和回测结果摘要。
