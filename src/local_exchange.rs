@@ -94,9 +94,12 @@ impl PositionEx {
     fn calc_max_quantity(&self) -> Decimal {
         let mut max_quantity = None;
         let mut sum = Decimal::ZERO;
+
         for v in self.log.iter() {
             sum += v.quantity * v.side;
+
             let exposure = sum.abs();
+
             if let Some(max_quantity) = &mut max_quantity {
                 if exposure > *max_quantity {
                     *max_quantity = exposure;
@@ -105,6 +108,7 @@ impl PositionEx {
                 max_quantity = Some(exposure);
             }
         }
+
         max_quantity.unwrap_or(Decimal::ZERO)
     }
 
@@ -131,7 +135,7 @@ impl ToDataSourceVec for DataSource {
     }
 }
 
-trait IntoDataSource {
+pub trait IntoDataSource {
     fn into_ds(self) -> DataSource;
 }
 
@@ -317,6 +321,7 @@ impl LocalExchangeInner {
         }
 
         order.freeze_margin = filled_margin;
+
         Ok(())
     }
 
@@ -750,6 +755,7 @@ impl LocalExchangeInner {
 
         self.pending_order_list
             .shift_remove(&position.liquidation_order_id);
+
         if let Some(index) = self.position.iter().position(|(v, _)| v == &symbol) {
             self.position.swap_remove(index);
         }
@@ -1543,6 +1549,7 @@ impl Exchange for LocalExchange {
         let (append_margin, new_margin) =
             if let Some((_, v)) = inner.position.iter().find(|(v, _)| v == symbol) {
                 let new_margin = calc_initial_margin(v.open_avg_price, v.quantity, leverage);
+
                 (new_margin - v.margin, new_margin)
             } else {
                 (Decimal::ZERO, Decimal::ZERO)
