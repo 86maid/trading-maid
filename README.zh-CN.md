@@ -723,15 +723,6 @@ async fn main() {
 }
 ```
 
-**回测结果（12 个月，BTCUSDT，4H）：**
-
-| 指标 | 值 |
-|------|------|
-| total_profit | **252 USDT** |
-| total_trades | **57** |
-| win_rate | **35%** |
-| profit_loss_ratio | **2.49** |
-
 ### 📊 回调趋势策略 — SMA + ATR + RSI（使用内置指标）
 
 趋势跟踪策略，在大趋势方向（SMA50/200）上寻找回调入场。使用 `atr()` 计算止损，`rsi()` 过滤超买超卖。
@@ -1002,15 +993,6 @@ async fn main() {
 }
 ```
 
-**回测结果（12 个月，BTCUSDT，4H）：**
-
-| 指标 | 值 |
-|------|------|
-| total_profit | **547 USDT** |
-| total_trades | **39** |
-| win_rate | **61.5%** |
-| profit_loss_ratio | **1.18** |
-
 ### 📊 动量突破策略 — Price Action（自实现指标）
 
 纯裸 K 策略，完全自实现**动量评分**、**成交量爆发检测**和**平均波幅**，未使用任何内置指标。3 根 K 线累积极动量超过 2% 且成交量爆发 1.5 倍时入场。
@@ -1151,15 +1133,6 @@ async fn main() {
 }
 ```
 
-**回测结果（12 个月，BTCUSDT，4H）：**
-
-| 指标 | 值 |
-|------|------|
-| total_profit | **383 USDT** |
-| total_trades | **68** |
-| win_rate | **42.6%** |
-| profit_loss_ratio | **1.95** |
-
 ### 📊 RSI EMA 突破策略 — Consecutive Candle Breakout（使用内置指标）
 
 趋势跟踪策略，通过**连续阳线/阴线** + **成交量确认** + **SMA50 趋势过滤**判断强势方向动量。使用内置的 `atr()`、`ma()`。
@@ -1241,15 +1214,6 @@ async fn main() {
     println!("summary: {:#?}", result.summarize());
 }
 ```
-
-**回测结果（12 个月，BTCUSDT，4H）：**
-
-| 指标 | 值 |
-|------|------|
-| total_profit | **640 USDT** |
-| total_trades | **69** |
-| win_rate | **50.7%** |
-| profit_loss_ratio | **1.65** |
 
 ### 📊 Vegas 马丁格尔策略 — Vegas Tunnel + RSI/MACD（使用内置指标）
 
@@ -1378,15 +1342,6 @@ async fn main() {
     result.resample_all_open_in_server().await.unwrap();
 }
 ```
-
-**回测结果（48 个月，BTCUSDT，4H）：**
-
-| 指标 | 值 |
-|------|------|
-| total_profit | **162 USDT** |
-| total_trades | **49** |
-| win_rate | **38.8%** |
-| profit_loss_ratio | **2.69** |
 
 运行示例：
 ```bash

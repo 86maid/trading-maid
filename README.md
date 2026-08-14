@@ -695,7 +695,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 
     let body = (cx.open[0] - cx.close[0]).abs();
 
-    // 长上影线做空：上影线 >= 实体 2 倍
+    // Short on long upper shadow: upper shadow >= 2x the body
     let upper_shadow = cx.high[0] - cx.open[0].max(cx.close[0]);
     if cx.close[0] < cx.open[0] && upper_shadow >= body * dec!(2) && body >= dec!(200) {
         let sl = round_to_tick(cx.high[0] + atr * dec!(0.5));
@@ -705,7 +705,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // 长下影线做多：下影线 >= 实体 2 倍
+    // Long on long lower shadow: lower shadow >= 2x the body
     let lower_shadow = cx.open[0].min(cx.close[0]) - cx.low[0];
     if cx.close[0] > cx.open[0] && lower_shadow >= body * dec!(2) && body >= dec!(200) {
         let sl = round_to_tick(cx.low[0] - atr * dec!(0.5));
@@ -726,15 +726,6 @@ async fn main() {
     println!("summary: {:#?}", result.summarize());
 }
 ```
-
-**Backtest result (12 months, BTCUSDT, 4H):**
-
-| Metric | Value |
-|--------|-------|
-| total_profit | **252 USDT** |
-| total_trades | **57** |
-| win_rate | **35%** |
-| profit_loss_ratio | **2.49** |
 
 ### 📊 Pullback Trend — SMA + ATR + RSI (built-in indicators)
 
@@ -794,7 +785,7 @@ impl Strategy for PullbackStrategy {
         let low: Vec<Decimal> = self.low_buf.iter().copied().collect();
         let high: Vec<Decimal> = self.high_buf.iter().copied().collect();
 
-        // 仅在趋势方向交易
+        // Only trade in the direction of the trend
         if sma50 > sma200 {
             let near_sma50 = cx.low[0] <= sma50 * dec!(1.005) && cx.low[0] >= sma50 * dec!(0.99);
             let recent_low = low.iter().take(5).copied().fold(Decimal::MAX, Decimal::min);
@@ -974,7 +965,7 @@ impl Strategy for VolumeBreakout {
         let atr_val = atr(cx.high, cx.low, cx.close, 14);
         let Some(atr) = atr_val else { return Ok(()) };
 
-        // 多头：唐奇安上轨突破 + 放量 1.3x + 价格在均线上方
+        // Long: Donchian upper breakout + volume spike 1.3x + price above MA
         let has_vol = vr.map_or(false, |r| r > dec!(1.3));
         if cx.high[0] >= dc_u && has_vol && cx.close[0] > ma_price {
             let sl = round_to_tick(ma_price - atr * dec!(0.5));
@@ -984,7 +975,7 @@ impl Strategy for VolumeBreakout {
             return Ok(());
         }
 
-        // 空头：唐奇安下轨跌破 + 放量 1.3x + 价格在均线下方
+        // Short: Donchian lower breakdown + volume spike 1.3x + price below MA
         if cx.low[0] <= dc_l && has_vol && cx.close[0] < ma_price {
             let sl = round_to_tick(ma_price + atr * dec!(0.5));
             let tp = round_to_tick(cx.close[0] - atr * dec!(4));
@@ -1006,15 +997,6 @@ async fn main() {
 }
 ```
 
-**Backtest result (12 months, BTCUSDT, 4H):**
-
-| Metric | Value |
-|--------|-------|
-| total_profit | **547 USDT** |
-| total_trades | **39** |
-| win_rate | **61.5%** |
-| profit_loss_ratio | **1.18** |
-
 ### 📊 Price Action — Momentum Breakout (custom indicators)
 
 A pure price-action strategy that implements **momentum scoring**, **volume spike detection**, and **average range** from scratch — no built-in indicators used at all. It enters when cumulative 3-bar momentum exceeds 2% with a volume spike of 1.5x+.
@@ -1033,7 +1015,7 @@ fn round_to_tick(price: Decimal) -> Decimal {
     }
 }
 
-// 动量评分：最近 N 根 K 线的上涨力度总和
+// Momentum score: total upside strength over the last N bars
 fn momentum_score(close: &[Decimal], n: usize) -> Decimal {
     if close.len() < n + 1 {
         return dec!(0);
@@ -1046,7 +1028,7 @@ fn momentum_score(close: &[Decimal], n: usize) -> Decimal {
     score
 }
 
-// 检测成交量爆发：当前成交量 vs 之前 N 根均值
+// Detect volume spike: current volume vs the average of the previous N bars
 fn volume_spike(volume: &[Decimal], n: usize) -> Option<Decimal> {
     if volume.len() < n + 1 {
         return None;
@@ -1058,7 +1040,7 @@ fn volume_spike(volume: &[Decimal], n: usize) -> Option<Decimal> {
     Some(volume[0] / avg)
 }
 
-// 平均真实波幅（简化版）
+// Average true range (simplified)
 fn avg_range(high: &[Decimal], low: &[Decimal], n: usize) -> Decimal {
     if high.len() < n || low.len() < n {
         return dec!(300);
@@ -1116,7 +1098,7 @@ impl Strategy for Momentum {
         let range = avg_range(&h, &l, 5);
         let body = (cx.open[0] - cx.close[0]).abs();
 
-        // 多头：连续 3 根累积极动量 > 2% + 成交量爆发 1.5x + 实体大
+        // Long: 3-bar cumulative momentum > 2% + volume spike 1.5x + large body
         if score > dec!(2)
             && body >= range
             && body >= dec!(200)
@@ -1129,7 +1111,7 @@ impl Strategy for Momentum {
             return Ok(());
         }
 
-        // 空头：连续 3 根累积极动量 < -2% + 成交量爆发
+        // Short: 3-bar cumulative momentum < -2% + volume spike
         if score < dec!(-2)
             && body >= range
             && body >= dec!(200)
@@ -1154,15 +1136,6 @@ async fn main() {
     println!("summary: {:#?}", result.summarize());
 }
 ```
-
-**Backtest result (12 months, BTCUSDT, 4H):**
-
-| Metric | Value |
-|--------|-------|
-| total_profit | **383 USDT** |
-| total_trades | **68** |
-| win_rate | **42.6%** |
-| profit_loss_ratio | **1.95** |
 
 ### 📊 RSI EMA — Consecutive Candle Breakout (built-in indicators)
 
@@ -1245,15 +1218,6 @@ async fn main() {
     println!("summary: {:#?}", result.summarize());
 }
 ```
-
-**Backtest result (12 months, BTCUSDT, 4H):**
-
-| Metric | Value |
-|--------|-------|
-| total_profit | **640 USDT** |
-| total_trades | **69** |
-| win_rate | **50.7%** |
-| profit_loss_ratio | **1.65** |
 
 ### 📊 Vegas Martingale — Vegas Tunnel + RSI/MACD (built-in indicators)
 
@@ -1382,15 +1346,6 @@ async fn main() {
     result.resample_all_open_in_server().await.unwrap();
 }
 ```
-
-**Backtest result (48 months, BTCUSDT, 4H):**
-
-| Metric | Value |
-|--------|-------|
-| total_profit | **162 USDT** |
-| total_trades | **49** |
-| win_rate | **38.8%** |
-| profit_loss_ratio | **2.69** |
 
 Run any example with:
 

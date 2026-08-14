@@ -1623,17 +1623,9 @@ pub async fn backtest(
 }
 
 /// Rounds a given price to the nearest valid tick size.
-pub fn round_to_tick(price: impl TryInto<Decimal>, tick_size: impl TryInto<Decimal>) -> Decimal {
-    let price = price
-        .try_into()
-        .ok()
-        .expect("Failed to convert price to Decimal");
-
-    let tick_size = tick_size
-        .try_into()
-        .ok()
-        .expect("Failed to convert tick_size to Decimal");
-
+pub fn round_to_tick(price: impl Into<Decimal>, tick_size: impl Into<Decimal>) -> Decimal {
+    let price = price.into();
+    let tick_size = tick_size.into();
     let rounded = (price / tick_size).round_dp(0) * tick_size;
 
     if rounded <= Decimal::ZERO {

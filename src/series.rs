@@ -209,6 +209,7 @@ overload!((a: String) - (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() 
 overload!((a: String) * (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() * b[0] });
 overload!((a: String) / (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() / b[0] });
 overload!((a: String) % (b: &Series) -> Decimal { Decimal::try_from(a).unwrap() % b[0] });
+
 overload_all_op_left!(isize, &Series);
 overload_all_op_left!(i8, &Series);
 overload_all_op_left!(i16, &Series);

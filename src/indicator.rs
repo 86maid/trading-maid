@@ -162,23 +162,20 @@ impl EMACache {
         }
     }
 
-    pub fn with_ema(length: usize, ema: impl TryInto<Decimal>) -> Self {
+    pub fn with_ema(length: usize, ema: impl Into<Decimal>) -> Self {
         let multiplier = dec!(2) / (Decimal::from(length) + dec!(1));
 
         EMACache {
             length,
             multiplier,
-            current_ema: Some(ema.try_into().ok().expect("failed to convert EMA value")),
+            current_ema: Some(ema.into()),
             count: usize::MAX,
             sum: dec!(0),
         }
     }
 
-    pub fn update(&mut self, price: impl TryInto<Decimal>) -> Option<Decimal> {
-        let price = price
-            .try_into()
-            .ok()
-            .expect("failed to convert price to Decimal");
+    pub fn update(&mut self, price: impl Into<Decimal>) -> Option<Decimal> {
+        let price = price.into();
 
         self.count = self.count.saturating_add(1);
 
@@ -239,11 +236,8 @@ impl RSICache {
         }
     }
 
-    pub fn update(&mut self, price: impl TryInto<Decimal>) -> Option<Decimal> {
-        let price = price
-            .try_into()
-            .ok()
-            .expect("failed to convert price to Decimal");
+    pub fn update(&mut self, price: impl Into<Decimal>) -> Option<Decimal> {
+        let price = price.into();
 
         if self.length == 0 {
             return None;
@@ -429,12 +423,9 @@ pub fn bollinger<T>(
     multiplier: T,
 ) -> (Option<Decimal>, Option<Decimal>, Option<Decimal>)
 where
-    T: TryInto<Decimal>,
-    <T as TryInto<Decimal>>::Error: std::fmt::Debug,
+    T: Into<Decimal>,
 {
-    let multiplier = multiplier
-        .try_into()
-        .expect("failed to convert multiplier to Decimal");
+    let multiplier = multiplier.into();
 
     if length == 0 || series.len() < length {
         return (None, None, None);
