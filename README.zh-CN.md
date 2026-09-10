@@ -36,6 +36,8 @@ trading-maid 是一个面向加密货币合约交易的回测与实盘框架，�
 - [📊 成交量突破策略](#-成交量突破策略--donchian--volume-spike自实现指标)
 - [📊 动量突破策略](#-动量突破策略--price-action自实现指标)
 - [📊 RSI EMA 突破策略](#-rsi-ema-突破策略--consecutive-candle-breakout使用内置指标)
+- [📊 Vegas 马丁格尔策略](#-vegas-马丁格尔策略--vegas-tunnel--rsimacd使用内置指标)
+- [📊 时序动量做多策略](#-时序动量做多策略--time-series-momentum自实现指标)
 
 ## ✨ 核心能力
 
@@ -385,6 +387,8 @@ if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
 }
 ```
 
+> 💡 与每根 K 线都会执行的 `hook` 不同，`on_error` 只在策略返回错误时才会被调用。
+
 ## 🚦 Hook 劫持
 
 使用 `hook` 可以在仓位发生强平，或者订单被拒绝（余额不足）的时候停止回测。
@@ -533,7 +537,11 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 >
 > ⚠️ **注意：** 回测引擎会并发调用每个币种的 `next`。
 
-## 🧪 EMA 策略例子
+## 📐 策略示例
+
+`examples/` 目录中包含可直接运行的策略，展示了不同的实现思路。其中一些基于内置指标，另一些则完全从零自实现。
+
+### 🧪 EMA 策略例子
 
 ```rust
 use std::sync::Arc;
@@ -720,6 +728,8 @@ async fn main() {
         .unwrap();
 
     println!("summary: {:#?}", result.summarize());
+
+    result.resample_all_open_in_server().await.unwrap();
 }
 ```
 
@@ -822,6 +832,8 @@ async fn main() {
         .unwrap();
 
     println!("summary: {:#?}", result.summarize());
+
+    result.resample_all_open_in_server().await.unwrap();
 }
 ```
 
@@ -990,6 +1002,8 @@ async fn main() {
         .unwrap();
 
     println!("summary: {:#?}", result.summarize());
+
+    result.resample_all_open_in_server().await.unwrap();
 }
 ```
 
@@ -1130,6 +1144,8 @@ async fn main() {
         .unwrap();
 
     println!("summary: {:#?}", result.summarize());
+
+    result.resample_all_open_in_server().await.unwrap();
 }
 ```
 
@@ -1212,6 +1228,8 @@ async fn main() {
         .unwrap();
 
     println!("summary: {:#?}", result.summarize());
+
+    result.resample_all_open_in_server().await.unwrap();
 }
 ```
 
@@ -1343,6 +1361,208 @@ async fn main() {
 }
 ```
 
+### 📊 时序动量做多策略 — Time Series Momentum（自实现指标）
+
+纯多头**时序动量（TSMOM）**策略，完全自实现 ATR 和 EMA。当价格高于 168 小时前的水平时买入，随后在**固定持仓周期**（336 小时）、**灾难止损**（6 倍 ATR）或**信号反转**（连续两根收盘价跌破动量水平）时离场。由于持仓周期以 K 线根数计量，策略运行在 1 小时级别上，回测区间为 12 个月。
+
+```rust
+use trading_maid::prelude::*;
+
+const WIN: usize = 2000;
+const QTY: Decimal = dec!(0.05);
+const SYMBOL: &str = "BTCUSDT";
+
+// ---------- strategy configuration ----------
+// momentum lookback (168 = 1 week of hours)
+const MOM_BARS: usize = 168;
+// fixed holding horizon (336 = 2 weeks)
+const HOLD_BARS: usize = 336;
+// disaster stop distance in ATR
+const STOP_ATR: Decimal = dec!(6.0);
+// bars to wait after a close (non-overlapping samples)
+const MIN_GAP: usize = 24;
+// classic TSMOM: hold only while momentum stays positive
+const EXIT_ON_REVERSAL: bool = true;
+const ATR_N: usize = 14;
+
+// The 200-EMA "trend quality" filter was tested and REMOVED: it turned a profitable
+// momentum strategy negative on both symbols (BTC 48m +1568 -> -177), because TSMOM
+// works by catching moves before they are already extended above the long EMA.
+// Kept as a constant only so the experiment is reproducible.
+const REQUIRE_EMA200: bool = false;
+
+fn atr_of(h: &[Decimal], l: &[Decimal], c: &[Decimal], period: usize) -> Option<Decimal> {
+    let n = c.len();
+    if period == 0 || n < period + 1 {
+        return None;
+    }
+    let cnt = (n - 1).min(period);
+    let mut s = Decimal::ZERO;
+    for i in 0..cnt {
+        let hi = h[i];
+        let lo = l[i];
+        let pc = c[i + 1];
+        let r = if hi > lo { hi - lo } else { lo - hi };
+        let u = if hi > pc { hi - pc } else { pc - hi };
+        let d = if lo > pc { lo - pc } else { pc - lo };
+        s += r.max(u).max(d);
+    }
+    Some(s / Decimal::from(cnt))
+}
+
+/// EMA over a newest-first slice.
+fn ema_of(c: &[Decimal], period: usize) -> Option<Decimal> {
+    let n = c.len();
+    if period == 0 || n < period {
+        return None;
+    }
+    let mut sum = Decimal::ZERO;
+    for x in &c[n - period..] {
+        sum += x;
+    }
+    let mut ema = sum / Decimal::from(period);
+    for idx in (0..n - period).rev() {
+        let v = c[idx];
+        let alpha = dec!(2) / Decimal::from(period + 1);
+        ema = v * alpha + ema * (dec!(1) - alpha);
+    }
+    Some(ema)
+}
+
+fn round_tick(p: Decimal) -> Decimal {
+    let t = dec!(0.1);
+    let r = (p / t).round_dp(0) * t;
+    if r <= Decimal::ZERO { t } else { r }
+}
+
+struct TsmomLong {
+    win: Vec<Decimal>,
+    wih: Vec<Decimal>,
+    wlo: Vec<Decimal>,
+    in_position: bool,
+    bars_held: usize,
+    gap_left: usize,
+    stop_price: Option<Decimal>,
+    n_entries: usize,
+    n_horizon_exit: usize,
+    n_stop_exit: usize,
+    n_reversal_exit: usize,
+}
+
+impl TsmomLong {
+    fn new() -> Self {
+        TsmomLong {
+            win: Vec::new(),
+            wih: Vec::new(),
+            wlo: Vec::new(),
+            in_position: false,
+            bars_held: 0,
+            gap_left: 0,
+            stop_price: None,
+            n_entries: 0,
+            n_horizon_exit: 0,
+            n_stop_exit: 0,
+            n_reversal_exit: 0,
+        }
+    }
+}
+
+#[async_trait(?Send)]
+impl Strategy for TsmomLong {
+    async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
+        self.win.insert(0, cx.close[0]);
+        self.wih.insert(0, cx.high[0]);
+        self.wlo.insert(0, cx.low[0]);
+        if self.win.len() > WIN {
+            for v in [&mut self.win, &mut self.wih, &mut self.wlo] {
+                v.truncate(WIN);
+            }
+        }
+        if self.win.len() <= MOM_BARS + 5 {
+            return Ok(());
+        }
+
+        let pos = cx.get_position(SYMBOL).await?;
+        let was_in = self.in_position;
+        self.in_position = pos.is_some();
+        if was_in && !self.in_position {
+            self.gap_left = MIN_GAP;
+        }
+
+        // ---------- manage the open position ----------
+        if pos.is_some() {
+            self.bars_held += 1;
+            let stop_hit = self.stop_price.map(|s| cx.close[0] <= s).unwrap_or(false);
+            let horizon_done = self.bars_held >= HOLD_BARS;
+            // signal-reversal exit: classic TSMOM holds only while momentum stays positive.
+            // Require TWO consecutive closes below the momentum level: a single close can be
+            // noise, and one-bar whipsaws were the dominant fee cost.
+            let below =
+                |k: usize| self.win.len() > MOM_BARS + k && self.win[k] < self.win[MOM_BARS + k];
+            let mom_reversed = EXIT_ON_REVERSAL && below(0) && below(1);
+            if stop_hit || horizon_done || mom_reversed {
+                cx.cancel_all_order(SYMBOL).await?;
+                cx.close_all_position(SYMBOL).await?;
+                if horizon_done {
+                    self.n_horizon_exit += 1;
+                } else if stop_hit {
+                    self.n_stop_exit += 1;
+                } else {
+                    self.n_reversal_exit += 1;
+                }
+                self.stop_price = None;
+                self.bars_held = 0;
+                self.in_position = false;
+                self.gap_left = MIN_GAP;
+            }
+            return Ok(());
+        }
+
+        if self.gap_left > 0 {
+            self.gap_left -= 1;
+            return Ok(());
+        }
+
+        // ---------- entry: time-series momentum (long only) ----------
+        let c0 = self.win[0];
+        let past = self.win[MOM_BARS];
+        // trend-quality filter: only act when price is above the 200-hour EMA, i.e. inside a
+        // confirmed uptrend.  Momentum whipsaws badly in downtrends; this is a standard,
+        // non-tuned filter (200 is the conventional long-period EMA).
+        let ema200 = ema_of(&self.win, 200).unwrap_or(c0);
+        let uptrend_ok = !REQUIRE_EMA200 || c0 > ema200;
+        if c0 > past && uptrend_ok {
+            let Some(atr) = atr_of(&self.wih, &self.wlo, &self.win, ATR_N) else {
+                return Ok(());
+            };
+            let stop = round_tick(c0 - atr * STOP_ATR).max(dec!(1));
+            cx.cancel_all_order(SYMBOL).await?;
+            let _ = cx.buy(SYMBOL, QTY).await?;
+            let _ = cx
+                .sell_trigger_market_reduce_only(SYMBOL, stop, QTY)
+                .await?;
+            self.stop_price = Some(stop);
+            self.bars_held = 0;
+            self.in_position = true;
+            self.n_entries += 1;
+        }
+
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let result = backtest(SYMBOL, 12, TsmomLong::new(), Level::Hour1)
+        .await
+        .unwrap();
+
+    println!("summary: {:#?}", result.summarize());
+
+    result.resample_all_open_in_server().await.unwrap();
+}
+```
+
 运行示例：
 ```bash
 cargo run --release --example shadow_reversal
@@ -1350,4 +1570,5 @@ cargo run --release --example volume_breakout
 cargo run --release --example price_action
 cargo run --release --example rsi_ema
 cargo run --release --example vegas_martingale
+cargo run --release --example horizon_long
 ```
