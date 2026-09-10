@@ -53,4 +53,6 @@ async fn main() {
         .unwrap();
 
     println!("summary: {:#?}", result.summarize());
+
+    result.resample_all_open_in_server().await.unwrap();
 }

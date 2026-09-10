@@ -1427,14 +1427,15 @@ pub async fn open_in_server(
         .unwrap()
         .as_millis() as u64;
 
-    let notify = Arc::new(Notify::new());
+    let shutdown = Arc::new(Notify::new());
+    let skip_open = Arc::new(Notify::new());
 
     let root = warp::path::end().and_then({
         let hash = hash.clone();
         let data_source = data_source.clone();
         let history_position = history_position.clone();
         let history_order = history_order.clone();
-        let notify = notify.clone();
+        let shutdown = shutdown.clone();
 
         move || {
             let hash = hash.clone();
@@ -1442,7 +1443,7 @@ pub async fn open_in_server(
             let history_position = history_position.clone();
             let history_order = history_order.clone();
 
-            notify.notify_waiters();
+            shutdown.notify_waiters();
 
             let text = format!(
                 "<script>window.hash={};window.state={};window.dataSourceList={};window.historyPositionList={};window.historyOrderList={}</script>",
@@ -1462,19 +1463,22 @@ pub async fn open_in_server(
     });
 
     let update = warp::path!("update" / String / u64).and_then({
-        let notify = notify.clone();
+        let shutdown = shutdown.clone();
+        let skip_open = skip_open.clone();
 
         move |client_hash: String, client_state: u64| {
             let hash = hash.clone();
             let history_position = history_position.clone();
             let history_order = history_order.clone();
-            let notify = notify.clone();
-
-            notify.notify_waiters();
+            let shutdown = shutdown.clone();
+            let skip_open = skip_open.clone();
 
             async move {
                 if client_hash == *hash {
                     if client_state != state {
+                        shutdown.notify_waiters();
+                        skip_open.notify_waiters();
+
                         Ok::<Box<dyn Reply>, warp::Rejection>(Box::new(warp::reply::with_header(
                             format!(
                                 "window.historyPositionList={};window.historyOrderList={}",
@@ -1485,12 +1489,17 @@ pub async fn open_in_server(
                             "application/javascript; charset=utf-8",
                         )))
                     } else {
+                        shutdown.notify_waiters();
+                        skip_open.notify_waiters();
+
                         Ok::<Box<dyn Reply>, warp::Rejection>(Box::new(warp::reply::with_status(
                             "",
                             StatusCode::NOT_MODIFIED,
                         )))
                     }
                 } else {
+                    skip_open.notify_waiters();
+
                     Ok::<Box<dyn Reply>, warp::Rejection>(Box::new(warp::reply::with_status(
                         "",
                         StatusCode::RESET_CONTENT,
@@ -1510,21 +1519,26 @@ pub async fn open_in_server(
         .find(|&port| !is_port_in_use(port))
         .context("no available port found")?;
 
-    let task = tokio::spawn(
-        warp::serve(route)
-            .bind(([0, 0, 0, 0], port))
-            .await
-            .graceful({
-                let notify = notify.clone();
+    let task = tokio::spawn({
+        let shutdown = shutdown.clone();
 
-                async move {
-                    notify.notified().await;
-                }
-            })
-            .run(),
-    );
+        async move {
+            warp::serve(route)
+                .bind(([0, 0, 0, 0], port))
+                .await
+                .graceful({
+                    let shutdown = shutdown.clone();
 
-    if timeout(std::time::Duration::from_secs(1), notify.notified())
+                    async move {
+                        shutdown.notified().await;
+                    }
+                })
+                .run()
+                .await;
+        }
+    });
+
+    if timeout(std::time::Duration::from_secs(1), skip_open.notified())
         .await
         .is_err()
     {
