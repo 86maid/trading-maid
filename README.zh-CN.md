@@ -31,6 +31,8 @@ trading-maid 是一个面向加密货币合约交易的回测与实盘框架，�
 - [📊 自定义系列](#-自定义系列)
 - [🔄 获取其他级别的数据](#-获取其他级别的数据)
 - [🌐 多币种策略](#-多币种策略)
+- [💰 交易所账户方法](#-交易所账户方法)
+- [🧰 常用工具函数](#-常用工具函数)
 - [🧪 EMA 策略例子](#-ema-策略例子)
 - [📊 影线反转策略](#-影线反转策略--candle-wick-reversal使用内置指标)
 - [📊 成交量突破策略](#-成交量突破策略--donchian--volume-spike自实现指标)
@@ -536,6 +538,158 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 > ⚠️ **注意：** 所有币种必须使用相同的级别，且数据时间范围必须有交集——只有当所有币种在当前 K 线都有数据时，策略才会触发。
 >
 > ⚠️ **注意：** 回测引擎会并发调用每个币种的 `next`。
+
+## 💰 交易所账户方法
+
+### 查询账户状态
+
+```rust
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    // 总权益 = 现金 + 所有仓位的未实现盈亏。
+    let equity = cx.get_equity().await?;
+
+    // 可用现金余额。
+    let cash = cx.get_cash().await?;
+
+    // 该交易对当前配置的杠杆。
+    let leverage = cx.get_leverage("BTCUSDT").await?;
+
+    println!("equity: {}, cash: {}, leverage: {}x", equity, cash, leverage);
+
+    Ok(())
+}
+```
+
+> 💡 `get_equity` 计入**未实现**盈亏，因此每一根 K 线都会随价格变动；而 `get_cash` 只反映已实现的变化。所以 `equity - cash` 可以快速反映当前持仓的浮动表现。
+
+### 调整杠杆
+
+`set_leverage` 会修改杠杆，并**立即根据开仓均价和数量重新计算仓位保证金**。提高杠杆会把多余保证金释放回现金；降低杠杆则需要追加现金。
+
+```rust
+// 将仓位的杠杆调整为 20x。
+cx.set_leverage("BTCUSDT", 20).await?;
+```
+
+由于保证金会被重算，`set_leverage` 有可能失败。请处理这些错误，不要直接 unwrap：
+
+- **挂单会阻止调用**：如果该交易对存在任何未成交订单，则无法修改杠杆。请先用 `cx.cancel_all_order(symbol).await?` 撤销。
+- **现金不足**：降低杠杆会增加所需保证金；若 `cash` 无法覆盖差额，调用失败且仓位保持原样。
+
+### 调整仓位保证金以避免强平
+
+`append_position_margin` 为已有仓位增加保证金。增加保证金会使**强平价远离**当前价格，这是把正在逼近强平的仓位「救回来」的标准做法。
+
+开仓前强平价会落在哪里，可以用 `calc_liquidation_price` 预测。它的参数依次为杠杆、来自交易对 metadata 的维持保证金率、仓位方向、开仓价、数量，以及仓位总保证金：
+
+```rust
+let metadata = cx.get_metadata("BTCUSDT").await?;
+
+let liquidation_price = calc_liquidation_price(
+    20,                       // 杠杆
+    metadata.maintenance,     // 维持保证金率
+    Side::Buy,
+    "60000".parse().unwrap(), // 开仓价
+    "0.5".parse().unwrap(),   // 数量
+    "1500".parse().unwrap(),  // 仓位总保证金
+);
+```
+
+因此对多头而言，增加保证金会**降低**强平价（更安全）；对空头则会**抬高**强平价。传入负的 `margin` 表示提取保证金，会使强平价更贴近当前价。
+
+```rust
+// 为仓位补充 500 保证金，使强平价远离当前价。
+cx.append_position_margin("BTCUSDT", "500").await?;
+
+// 取回 500 保证金到现金，使强平价更贴近当前价。
+cx.append_position_margin("BTCUSDT", "-500").await?;
+```
+
+需要注意的边界条件：
+
+- **保证金不能低于仓位的初始保证金**（`entry_price * quantity / leverage`）；尝试这样做会失败，错误信息中会给出所需的最低保证金。
+
+### 识别强平
+
+在仓位历史中，可以通过 `is_liquidation()` 判断仓位是否为强平：
+
+```rust
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    if let Some(last) = cx.get_history_position_list("BTCUSDT").await?.last()
+        && last.is_liquidation()
+    {
+        anyhow::bail!("position was liquidated at {}", t2s(last.close_time));
+    }
+
+    Ok(())
+}
+```
+
+## 🧰 常用工具函数
+
+```rust
+use trading_maid::prelude::*;
+
+// 将毫秒级 Unix 时间戳转换为本地时区字符串。
+t2s(1717200000000u64);
+
+// 将毫秒级 Unix 时间戳转换为 UTC 字符串。
+t2s_utc(1717200000000u64);
+
+// 将本地时区字符串转回毫秒级 Unix 时间戳。
+s2t("2024/06/01 04:00:00");
+
+// 将 UTC 字符串转回毫秒级 Unix 时间戳。
+s2t_utc("2024/06/01 04:00:00");
+
+// 获取当前 K 线的起点与下一根 K 线的起点。
+get_time_range(1717200000000, Level::Hour1)?;
+
+// 获取包含该时间点的更粗级别 K 线的结束时间。
+get_last_time(1717200000000, Level::Minute1, Level::Hour1)?;
+
+// 将价格四舍五入到最近的合法最小变动价位。
+round_to_tick(dec!(60000.37), dec!(0.1));
+
+// 判断价格是否符合最小变动价位。
+is_tick_aligned("60000.4".parse().unwrap(), "0.1".parse().unwrap());
+
+// 计算初始保证金：price * quantity / leverage。
+calc_initial_margin("60000".parse().unwrap(), "0.5".parse().unwrap(), 20);
+
+// 计算仓位的强平价。
+calc_liquidation_price(20, "0.004".parse().unwrap(), Side::Buy, "60000".parse().unwrap(), "0.5".parse().unwrap(), "1500".parse().unwrap());
+
+// 将稀疏的 (时间戳, 数值) 数据前向填充到指定 K 线级别。
+align_to_series(&[(1717200000000u64, "1.5".parse().unwrap())], Level::Hour1)?;
+
+// 将 K 线列表重采样到更粗的级别。
+resample(&kline_list, Level::Hour1)?;
+
+// 将数据文件重采样为所有更粗的级别，并写入同目录。
+resample_file("BTCUSDT-1m.csv")?;
+
+// 下载 K 线数据，若本地已有缓存则直接复用。
+get_or_download("BTCUSDT/1m", 12).await?;
+
+// 下载资金费率历史数据。
+get_or_download_funding_rate("BTCUSDT", 12).await?;
+
+// 下载资金费率历史数据并对其到指定 K 线级别。
+get_or_download_funding_rate_to_series("BTCUSDT", 12, Level::Hour8).await?;
+
+// 将数据源、仓位与订单渲染为 HTML 字符串。
+to_html(&data_source_list, &history_position_list, &history_order_list);
+
+// 渲染为临时 HTML 文件并在浏览器中打开。
+open_in_browser(&data_source_list, &history_position_list, &history_order_list)?;
+
+// 通过本地 Web 服务提供渲染结果并打开。
+open_in_server(data_source_list, history_position_list, history_order_list).await?;
+
+// 将已平仓仓位列表汇总为统计结果。
+summarize(&history_position_list);
+```
 
 ## 📐 策略示例
 

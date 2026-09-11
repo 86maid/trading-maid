@@ -30,6 +30,8 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - [📊 Custom Series](#-custom-series)
 - [🔄 Getting Data at Other Levels](#-getting-data-at-other-levels)
 - [🌐 Multi-Asset Strategy](#-multi-asset-strategy)
+- [💰 Exchange Account Methods](#-exchange-account-methods)
+- [🧰 Utility Functions](#-utility-functions)
 - [🧪 EMA Strategy Example](#-ema-strategy-example)
 - [📊 Shadow Reversal Example](#-shadow-reversal--candle-wick-reversal-built-in-indicators)
 - [📊 Volume Breakout Example](#-volume-breakout--donchian--volume-spike-custom-indicators)
@@ -535,6 +537,158 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 > ⚠️ **Note:** All symbols must share the same level, and their data time ranges must overlap — the strategy only fires when all symbols have data at the current bar.
 >
 > ⚠️ **Note:** The engine calls `next` concurrently for each symbol.
+
+## 💰 Exchange Account Methods
+
+### Querying Account State
+
+```rust
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    // Total equity = cash + unrealized PnL of all positions.
+    let equity = cx.get_equity().await?;
+
+    // Available cash balance.
+    let cash = cx.get_cash().await?;
+
+    // Leverage currently configured for the symbol.
+    let leverage = cx.get_leverage("BTCUSDT").await?;
+
+    println!("equity: {}, cash: {}, leverage: {}x", equity, cash, leverage);
+
+    Ok(())
+}
+```
+
+> 💡 `get_equity` counts **unrealized** PnL, so it moves with price on every bar, while `get_cash` only reflects realized changes. `equity - cash` is therefore a quick read on open position performance.
+
+### Adjusting Leverage
+
+`set_leverage` changes the leverage **and immediately re-computes the position margin** from the open average price and quantity. Raising leverage frees margin back to cash; lowering it requires extra cash.
+
+```rust
+// Set the leverage for the symbol to 20x.
+cx.set_leverage("BTCUSDT", 20).await?;
+```
+
+Because margin is recalculated, `set_leverage` can fail. Handle those errors rather than unwrapping:
+
+- **Pending orders block the call**: if the symbol has any open order, the leverage cannot be changed. Cancel them first with `cx.cancel_all_order(symbol).await?`.
+- **Insufficient cash**: lowering leverage increases the required margin; if `cash` cannot cover the shortfall, the call fails and the position is left untouched.
+
+### Adjusting Position Margin to Avoid Liquidation
+
+`append_position_margin` adds margin to an existing position. Extra margin pushes the **liquidation price further away** from the current price, which is the standard way to rescue a position that is drifting toward forced liquidation.
+
+Where the liquidation price sits before opening a position can be predicted with `calc_liquidation_price`, which takes the leverage, the maintenance margin rate from the symbol metadata, the position side, entry price, quantity, and total position margin:
+
+```rust
+let metadata = cx.get_metadata("BTCUSDT").await?;
+
+let liquidation_price = calc_liquidation_price(
+    20,                            // leverage
+    metadata.maintenance,          // maintenance margin rate
+    Side::Buy,
+    "60000".parse().unwrap(),      // entry price
+    "0.5".parse().unwrap(),        // quantity
+    "1500".parse().unwrap(),       // total position margin
+);
+```
+
+So for a long, adding margin **lowers** the liquidation price (safer); for a short, adding margin **raises** it. Passing a negative `margin` withdraws margin and tightens the liquidation price.
+
+```rust
+// Add 500 to the position margin, moving the liquidation price further away.
+cx.append_position_margin("BTCUSDT", "500").await?;
+
+// Withdraw 500 back to cash, moving the liquidation price closer.
+cx.append_position_margin("BTCUSDT", "-500").await?;
+```
+
+Guard rails to be aware of:
+
+- **Margin cannot be reduced below the initial margin** of the position (`entry_price * quantity / leverage`); attempting it fails with the minimum required margin in the message.
+
+### Detecting Liquidation
+
+In the position history, `is_liquidation()` tells whether a position was force-closed:
+
+```rust
+async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
+    if let Some(last) = cx.get_history_position_list("BTCUSDT").await?.last()
+        && last.is_liquidation()
+    {
+        anyhow::bail!("position was liquidated at {}", t2s(last.close_time));
+    }
+
+    Ok(())
+}
+```
+
+## 🧰 Utility Functions
+
+```rust
+use trading_maid::prelude::*;
+
+// Convert a Unix timestamp in milliseconds to a local-time string.
+t2s(1717200000000u64);
+
+// Convert a Unix timestamp in milliseconds to a UTC string.
+t2s_utc(1717200000000u64);
+
+// Convert a local-time string back to a Unix timestamp in milliseconds.
+s2t("2024/06/01 04:00:00");
+
+// Convert a UTC string back to a Unix timestamp in milliseconds.
+s2t_utc("2024/06/01 04:00:00");
+
+// Get the start of the current bar and the start of the next bar.
+get_time_range(1717200000000, Level::Hour1)?;
+
+// Get the end time of the coarser bar that contains the given time.
+get_last_time(1717200000000, Level::Minute1, Level::Hour1)?;
+
+// Round a price to the nearest valid tick size.
+round_to_tick(dec!(60000.37), dec!(0.1));
+
+// Check whether a price is aligned to the tick size.
+is_tick_aligned("60000.4".parse().unwrap(), "0.1".parse().unwrap());
+
+// Calculate the initial margin: price * quantity / leverage.
+calc_initial_margin("60000".parse().unwrap(), "0.5".parse().unwrap(), 20);
+
+// Calculate the liquidation price for a position.
+calc_liquidation_price(20, "0.004".parse().unwrap(), Side::Buy, "60000".parse().unwrap(), "0.5".parse().unwrap(), "1500".parse().unwrap());
+
+// Forward-fill sparse (timestamp, value) pairs onto a k-line level.
+align_to_series(&[(1717200000000u64, "1.5".parse().unwrap())], Level::Hour1)?;
+
+// Resample a list of k-lines to a coarser level.
+resample(&kline_list, Level::Hour1)?;
+
+// Resample a data file into every coarser level, writing each next to it.
+resample_file("BTCUSDT-1m.csv")?;
+
+// Download k-line data, or reuse the local cache if present.
+get_or_download("BTCUSDT/1m", 12).await?;
+
+// Download funding rate history.
+get_or_download_funding_rate("BTCUSDT", 12).await?;
+
+// Download funding rate history and align it to a k-line level.
+get_or_download_funding_rate_to_series("BTCUSDT", 12, Level::Hour8).await?;
+
+// Render data sources, positions and orders into an HTML string.
+to_html(&data_source_list, &history_position_list, &history_order_list);
+
+// Render into a temp HTML file and open it in the browser.
+open_in_browser(&data_source_list, &history_position_list, &history_order_list)?;
+
+// Serve the rendered result from a local web server and open it.
+open_in_server(data_source_list, history_position_list, history_order_list).await?;
+
+// Aggregate a list of closed positions into summary statistics.
+summarize(&history_position_list);
+```
 
 ## 📐 Strategy Examples
 

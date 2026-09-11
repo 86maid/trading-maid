@@ -9,6 +9,7 @@ pub mod order;
 pub mod series;
 pub mod strategy;
 pub mod util;
+pub use anyhow;
 pub use rust_decimal;
 pub use rust_decimal_macros;
 
