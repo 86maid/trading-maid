@@ -2,6 +2,8 @@ use crate::data::*;
 use crate::order::*;
 use anyhow::Context;
 use rust_decimal::Decimal;
+use std::any::Any;
+use std::any::TypeId;
 use std::sync::Arc;
 
 /// Exchange is the core abstraction over both backtesting and live trading environments.
@@ -32,7 +34,7 @@ use std::sync::Arc;
 /// | Trigger Market | > 0 | ZERO | market fill immediately when trigger hit |
 /// | Trigger Limit | > 0 | > 0 | limit fill immediately when trigger hit |
 #[async_trait::async_trait]
-pub trait Exchange
+pub trait Exchange: Any
 where
     Self: Send + Sync + 'static,
 {
@@ -632,6 +634,16 @@ impl ExchangeWrapper {
     /// Wrap an [`Exchange`] implementation. Called internally by [`Engine`](crate::engine::Engine).
     pub fn new(exchange: Arc<dyn Exchange + 'static>) -> Self {
         Self(exchange)
+    }
+
+    /// Attempt to downcast the inner exchange to a concrete type.
+    pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
+        (self.0.as_ref() as &dyn Any).downcast_ref::<T>()
+    }
+
+    /// Returns the `TypeId` of the inner exchange.
+    pub fn type_id(&self) -> TypeId {
+        (self.0.as_ref() as &dyn Any).type_id()
     }
 
     #[allow(dead_code)]

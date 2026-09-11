@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "trading-maid"
-version = "1.0.12"
+version = "1.0.13"
 dependencies = [
  "anyhow",
  "async-trait",
