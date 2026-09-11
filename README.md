@@ -820,6 +820,7 @@ async fn main() {
     .unwrap();
 }
 ```
+
 ### 📊 Shadow Reversal — Candle Wick Reversal (built-in indicators)
 
 A mean-reversion strategy that opens positions when long wicks (rejection) or long lower shadows (support) appear on 4-hour candles. Uses only `atr()` from the built-in indicators.
