@@ -1,3 +1,6 @@
+//! The `Context` passed to a strategy on every bar, exposing the current OHLCV
+//! series, custom series and the exchange account methods.
+
 use crate::prelude::*;
 use std::cell::RefCell;
 use std::ops::{Deref, Index};

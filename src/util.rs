@@ -1,3 +1,6 @@
+//! Utility helpers: time formatting, tick rounding, liquidation and margin math, resampling,
+//! and the backtest result / HTML report helpers.
+
 use crate::data::{AlignedSeries, DataSource, FundingRate, KLine, Level, Metadata};
 use crate::engine::Engine;
 use crate::exchange::Exchange;
@@ -509,7 +512,7 @@ pub async fn get_or_download_funding_rate_path(
 /// Convenience wrapper around [`get_or_download_funding_rate_path`] that downloads,
 /// merges, and deserializes the funding rate data into a `Vec<FundingRate>`.
 pub async fn get_or_download_funding_rate(
-    format: &str,
+    format: impl AsRef<str>,
     month_count: u32,
 ) -> anyhow::Result<Vec<FundingRate>> {
     Ok(bincode::deserialize(&std::fs::read(
@@ -523,7 +526,7 @@ pub async fn get_or_download_funding_rate(
 /// See [`get_or_download_funding_rate`] for the underlying download, and
 /// [`align_to_series`] for the alignment logic.
 pub async fn get_or_download_funding_rate_to_series(
-    format: &str,
+    format: impl AsRef<str>,
     month_count: u32,
     level: Level,
 ) -> anyhow::Result<AlignedSeries> {

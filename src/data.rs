@@ -1,3 +1,6 @@
+//! K-line data types, `Level`, `DataSource` loading and resampling, and the `Timeline`
+//! driving a run.
+
 use anyhow::{Context, bail};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};

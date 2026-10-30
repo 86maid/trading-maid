@@ -1,3 +1,6 @@
+//! Technical indicators such as `sma`, `ema`, `rsi`, `macd`, `atr`, `bollinger` and pivot
+//! points, plus the stateful `EMACache` / `RSICache`.
+
 use crate::series::Series;
 use rust_decimal::Decimal;
 use rust_decimal::MathematicalOps;
@@ -153,6 +156,18 @@ pub fn lowest(series: &Series, length: usize) -> Option<Decimal> {
         .copied()
 }
 
+/// Cache for the Exponential Moving Average (EMA).
+///
+/// # Note
+///
+/// The EMA depends on its previous values, so an `EMACache` must be seeded from sufficiently
+/// early history; otherwise the result will be inaccurate.
+///
+/// - When the backtest starts from the very first k-line, use `EMACache::new` — no initial value
+///   is needed.
+/// - When the cache is created partway through (for example, the data does not begin at the
+///   first k-line), use `EMACache::with_ema` to supply the EMA at that position instead of
+///   starting from zero.
 pub struct EMACache {
     length: usize,
     multiplier: Decimal,

@@ -1,3 +1,11 @@
+//! # trading-maid
+//!
+//! A high-fidelity crypto futures backtesting and live trading framework with matching, margin,
+//! leverage and liquidation simulation.
+//!
+//! Most users only need `use trading_maid::prelude::*;`, which re-exports every public module
+//! together with `anyhow`, `async_trait`, `rust_decimal` and `rust_decimal_macros`.
+
 pub use async_trait;
 pub mod context;
 pub mod data;
@@ -9,10 +17,13 @@ pub mod order;
 pub mod series;
 pub mod strategy;
 pub mod util;
+
 pub use anyhow;
 pub use rust_decimal;
 pub use rust_decimal_macros;
 
+/// Everything needed for a typical strategy: all public modules plus the external crates used in
+/// their signatures.
 pub mod prelude {
     pub use crate::context::*;
     pub use crate::data::*;

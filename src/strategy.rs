@@ -1,3 +1,5 @@
+//! The `Strategy` trait implemented by every strategy.
+
 use crate::context::Context;
 
 #[async_trait::async_trait(?Send)]

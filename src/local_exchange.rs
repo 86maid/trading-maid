@@ -1,3 +1,5 @@
+//! `LocalExchange`, the in-memory exchange used for backtests.
+
 use anyhow::Context;
 use anyhow::bail;
 use indexmap::IndexMap;

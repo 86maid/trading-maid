@@ -1,3 +1,5 @@
+//! Orders and positions: `Order`, `Position`, and position summaries.
+
 use overload::overload;
 use rust_decimal::Decimal;
 use serde::Deserialize;

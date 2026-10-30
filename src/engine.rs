@@ -1,3 +1,5 @@
+//! The backtest `Engine` that drives a strategy bar by bar and registers custom series.
+
 use crate::prelude::*;
 use anyhow::anyhow;
 use anyhow::bail;

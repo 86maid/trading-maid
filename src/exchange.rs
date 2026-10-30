@@ -1,3 +1,5 @@
+//! The `Exchange` trait and `ExchangeWrapper` for account and order operations.
+
 use crate::data::*;
 use crate::order::*;
 use anyhow::Context;

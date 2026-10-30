@@ -1,3 +1,5 @@
+//! The newest-first `Series` and `TimeSeries` views used by indicators and the context.
+
 use overload::overload;
 use rust_decimal::Decimal;
 use std::{
