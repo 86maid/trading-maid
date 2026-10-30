@@ -1,6 +1,7 @@
 //! The backtest `Engine` that drives a strategy bar by bar and registers custom series.
 
 use crate::prelude::*;
+use anyhow::Context as _;
 use anyhow::anyhow;
 use anyhow::bail;
 use std::cell::RefCell;
@@ -10,6 +11,16 @@ use std::sync::Arc;
 ///
 /// zero means unlimited.
 pub const DEFAULT_SERIES_MAX_LENGTH: usize = 0;
+
+/// How much history to preload before the first live k-line, and where to take it from.
+enum Preload {
+    /// Preload this many closed k-lines through [`Exchange::get_kline`].
+    KLineCount(usize),
+    /// Preload everything from this millisecond timestamp onward (`0` = as early as available).
+    From(u64),
+    /// Preload from an in-memory data source instead of [`Exchange::get_kline`].
+    Data(DataSource),
+}
 
 /// A hook function called after each k-line is processed by the strategy.
 ///
@@ -79,6 +90,7 @@ pub struct Engine<S, const N: usize = DEFAULT_SERIES_MAX_LENGTH> {
     hook: Option<Box<dyn HookFn>>,
     on_error: Option<Box<dyn Fn(anyhow::Error) -> anyhow::Result<()>>>,
     series: Vec<((String, Level, String), AlignedSeries)>,
+    preload: Option<Preload>,
 }
 
 impl<S> Engine<S, DEFAULT_SERIES_MAX_LENGTH>
@@ -106,6 +118,7 @@ where
             hook: None,
             on_error: None,
             series: Vec::new(),
+            preload: None,
         }
     }
 
@@ -129,6 +142,45 @@ where
     /// strategy returns an error.
     pub fn on_error(&mut self, on_error: impl Fn(anyhow::Error) -> anyhow::Result<()> + 'static) {
         self.on_error = Some(Box::new(on_error));
+    }
+
+    /// Preload up to `kline_count` closed k-lines at the strategy level before the first live
+    /// k-line.
+    ///
+    /// Preloading gives a freshly started live strategy the history its indicators need, so
+    /// `sma(cx.close, 200)` is usable on the very first call instead of returning `None` for
+    /// the first 200 k-lines. Without preloading, a restart leaves the strategy blind for as long
+    /// as its longest lookback.
+    ///
+    /// Only applies to live exchanges ([`Exchange::is_live`] returning `true`); it is ignored
+    /// in backtests, where the data source starts from its first bar anyway. Replaces any
+    /// previous preload configuration.
+    pub fn preload(&mut self, kline_count: usize) {
+        self.preload = Some(Preload::KLineCount(kline_count));
+    }
+
+    /// Preload history from `start_time` (millisecond timestamp) up to the first live k-line.
+    ///
+    /// `0` means "as early as the data source allows". Replaces any previous preload
+    /// configuration.
+    pub fn preload_from(&mut self, start_time: u64) {
+        self.preload = Some(Preload::From(start_time));
+    }
+
+    /// Preload from an in-memory [`DataSource`] instead of fetching through
+    /// [`Exchange::get_kline`].
+    ///
+    /// Useful when the exchange only exposes a shallow history window, or when a known-good
+    /// snapshot is preferred over a network round trip at startup. See
+    /// [`DataSource::from_file`] to build one from a local file.
+    ///
+    /// The data must belong to the same symbol passed to [`run`](Engine::run) and be at the
+    /// strategy level or finer (finer data is resampled). Every k-line of `data` older than the
+    /// first live k-line is preloaded, and any hole between the data's last k-line and the first
+    /// live k-line is filled through [`Exchange::get_kline`]. Replaces any previous preload
+    /// configuration.
+    pub fn preload_data(&mut self, data: DataSource) {
+        self.preload = Some(Preload::Data(data));
     }
 
     /// Register an auxiliary data series to be available in the strategy context.
@@ -252,10 +304,21 @@ where
             let mut strategy_level_kline_buffer = KLineBuffer::new(N);
             let mut next_time = None;
             let mut prev_time = 0;
+            let mut preloaded = false;
 
             loop {
                 match self.exchange.next(symbol, source_level).await? {
                     Some(v) => {
+                        // 第一根 live K 线到达时才有锚点，用它做终点往回预加载。
+                        // 只做一次；回测里 build_preload 会直接返回空
+                        if !preloaded {
+                            preloaded = true;
+
+                            strategy_level_kline_buffer.extend(
+                                self.build_preload(symbol, source_level, v.time).await?,
+                            );
+                        }
+
                         let (filled, new_next_time) = check_kline(
                             self.exchange.clone(),
                             symbol,
@@ -363,6 +426,7 @@ where
             next_time: Option<u64>,
             prev_time: u64,
             eof: bool,
+            preloaded: bool,
         }
 
         /// (symbol_index, Option<(kline, filled, new_next_time)>).
@@ -379,6 +443,7 @@ where
                 next_time: None,
                 prev_time: 0,
                 eof: false,
+                preloaded: false,
             })
             .collect::<Vec<_>>();
 
@@ -423,6 +488,25 @@ where
                 match result {
                     Some((current, filled, new_next_time)) => {
                         all_eof = false;
+
+                        // 该 symbol 的第一根 live K 线到达时预加载一次。
+                        // 回测里 build_preload 直接返回空，不会有多余请求
+                        if !states[symbol_index].preloaded {
+                            states[symbol_index].preloaded = true;
+
+                            let preload = self
+                                .build_preload(
+                                    &symbol_list[symbol_index],
+                                    source_level,
+                                    current.time,
+                                )
+                                .await?;
+
+                            symbol_buffer[symbol_index]
+                                .1
+                                .strategy_level_kline_buffer
+                                .extend(preload);
+                        }
 
                         let state = &mut states[symbol_index];
                         let buffer = &mut symbol_buffer[symbol_index].1;
@@ -554,6 +638,140 @@ where
         }
 
         Ok(())
+    }
+
+    /// Build the preload buffer for `symbol`, ending just before the first live k-line.
+    ///
+    /// `first_time` is the `time` of the first k-line returned by [`Exchange::next`]; it doubles
+    /// as the anchor of the range and as the exclusive end, so preloaded data can never overlap
+    /// the first live k-line.
+    ///
+    /// Whatever the source, the result ends exactly one k-line before `first_time`. Contiguity is
+    /// assumed rather than enforced: the seed data and [`Exchange::get_kline`] are both required
+    /// to return adjacent k-lines.
+    async fn build_preload(
+        &self,
+        symbol: &str,
+        level: Level,
+        first_time: u64,
+    ) -> anyhow::Result<Vec<KLine>> {
+        // 回测的数据源本来就从第一根开始，不需要预加载，直接跳过
+        if !self.exchange.is_live() || self.preload.is_none() {
+            return Ok(Vec::new());
+        }
+
+        // 只服务于预加载的小工具，放在函数内部，不污染模块命名空间。
+
+        /// Step `count` k-lines back from `time` at `level`.
+        ///
+        /// Levels with a fixed duration are stepped in one shot. [`Level::Month1`] has
+        /// calendar-dependent lengths, so it is stepped one k-line at a time.
+        fn shift_back(time: u64, level: Level, count: usize) -> anyhow::Result<u64> {
+            // 非月线：一次乘加算出起点，再对齐到 bar 边界
+            if level != Level::Month1 {
+                let span = (count as u64).saturating_mul(level.interval_millis());
+
+                return Ok(get_time_range(time.saturating_sub(span), level)?.0);
+            }
+
+            // 月线每根长度不固定（28/29/30/31 天），只能逐根往回退
+            let mut start = time;
+
+            for _ in 0..count {
+                start = get_time_range(start.saturating_sub(1), level)?.0;
+            }
+
+            Ok(start)
+        }
+
+        // 没有配置预加载，直接返回空，一个请求都不发
+        let Some(preload) = &self.preload else {
+            return Ok(Vec::new());
+        };
+
+        // 解出两个东西：
+        //   start —— 预加载区间的起点
+        //   seed  —— 内存里的种子数据，只有 Data 模式才有
+        let (start, seed) = match preload {
+            Preload::KLineCount(kline_count) => {
+                // 从第一根 live K 线往前退 N 根，得到区间起点
+                (shift_back(first_time, level, *kline_count)?, None)
+            }
+            Preload::From(start_time) => {
+                // 取 start_time 所在那根 bar 的起点。用户给的可能是 bar 中间的时刻，
+                // 直接用它当起点会把那根 bar 排除掉，所以要用 get_time_range 对齐
+                let start = get_time_range(*start_time, level)?.0;
+
+                // 起点已经不早于第一根 live K 线，没有可预加载的东西
+                if start >= first_time {
+                    return Ok(Vec::new());
+                }
+
+                (start, None)
+            }
+            Preload::Data(data) => (0, Some(data)),
+        };
+
+        // 有种子数据就从中切出 [start, first_time)；没有的话下面整段跳过，全靠接口拉
+        let mut kline_list = match seed {
+            Some(data) => {
+                // symbol 必须对得上，否则等于拿别的币的数据预热策略，比不预热还危险
+                if data.metadata.symbol != symbol {
+                    bail!(
+                        "preload_data: symbol mismatch: expected {}, got {}",
+                        symbol,
+                        data.metadata.symbol
+                    );
+                }
+
+                // 级别相同直接用；种子更细则重采样上来；种子更粗 resample 会报错（无法向下采样）
+                let data = if data.metadata.level == level {
+                    data.clone()
+                } else {
+                    data.resample(level).context(format!(
+                        "preload_data: cannot resample {} data to {}",
+                        data.metadata.level, level
+                    ))?
+                };
+
+                // 只取早于第一根 live K 线的那一段，保证策略看不到未来数据
+                data.range(start, first_time).data.clone()
+            }
+            None => Vec::new(),
+        };
+
+        // 种子数据的最后一根到第一根 live K 线之间往往有一段空洞（比如本地文件是昨天的），
+        // 这里用接口补齐。fill_start 取「种子最后一根的下一个时刻」，避免和已有数据重叠。
+        let fill_start = match kline_list.last() {
+            Some(last) => get_time_range(last.time, level)?.1.max(start),
+            None => start,
+        };
+
+        if fill_start < first_time {
+            kline_list.extend(
+                self.exchange
+                    .get_kline(symbol, level, fill_start, first_time)
+                    .await?,
+            );
+        }
+
+        // 唯一需要保证的事：最后一根 K 线的下一根，正好是第一根 live K 线。
+        // 满足它，cx 就是连续的；不满足就是数据源违约，直接报错，不做任何修剪
+        if let Some(last) = kline_list.last() {
+            let next = get_time_range(last.time, level)?.1;
+
+            if next != first_time {
+                bail!(
+                    "preload: last k-line {} ({}) is not adjacent to the first live k-line {} ({})",
+                    last.time,
+                    t2s(last.time),
+                    first_time,
+                    t2s(first_time),
+                );
+            }
+        }
+
+        Ok(kline_list)
     }
 }
 
