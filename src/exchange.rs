@@ -69,8 +69,16 @@ where
     ///
     /// # Returns
     /// - `Ok(Some(KLine))`: Successfully retrieved the latest K-line.
-    /// - `Ok(None)`: No data available (e.g., the trading pair does not exist or the data source is unavailable).
+    /// - `Ok(None)`: **End of data (EOF) only** — the data stream has permanently ended, e.g.
+    ///   the backtest dataset is exhausted or the symbol does not exist. The engine ends the run.
     /// - `Err`: An error occurred.
+    ///
+    /// # Contract for live exchanges
+    ///
+    /// Transient failures — network jitter, dropped connections, reconnect and resubscribe, rate
+    /// limits — are **not** EOF and must **not** be reported as `Ok(None)`. A live implementation
+    /// should handle them internally and keep blocking until a K-line is available. Reporting a
+    /// transient failure as `Ok(None)` makes the engine end the run as if the data had finished.
     ///
     /// # Note
     /// If the returned K-line timestamp is not continuous with the previous K-line timestamp

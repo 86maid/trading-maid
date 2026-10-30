@@ -89,7 +89,7 @@ impl<'a> Context<'a> {
             let index = level_kline.iter().position(|(l, _)| *l == level);
 
             if index.is_none() {
-                let mut kline_buffer = KLineBuffer::new(0);
+                let mut kline_buffer = KLineBuffer::new(request_context.max_size);
 
                 kline_buffer.extend(resample(symbol_context.source_kline_buffer, level).ok()?);
                 level_kline.push((level, kline_buffer));
@@ -99,13 +99,15 @@ impl<'a> Context<'a> {
                 std::mem::transmute(&level_kline[index.unwrap_or(level_kline.len() - 1)].1)
             };
 
+            let window = entry.window();
+
             &KLineContext {
-                time: entry.time.as_slice(),
-                open: entry.open.as_slice(),
-                high: entry.high.as_slice(),
-                low: entry.low.as_slice(),
-                close: entry.close.as_slice(),
-                volume: entry.volume.as_slice(),
+                time: window.time,
+                open: window.open,
+                high: window.high,
+                low: window.low,
+                close: window.close,
+                volume: window.volume,
             }
         };
 
@@ -153,6 +155,7 @@ pub(crate) struct RequestContext<'a> {
     pub strategy_level: Level,
     pub source_level: Level,
     pub series: &'a Vec<((String, Level, String), AlignedSeries)>,
+    pub max_size: usize,
 }
 
 pub(crate) fn clip_series<'a>(

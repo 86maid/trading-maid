@@ -538,6 +538,11 @@ impl<'de> Deserialize<'de> for DataSource {
     }
 }
 
+/// A rolling window of k-lines backed by six parallel `Vec`s.
+///
+/// The backing storage may hold up to 1.5 × `max_size` bars, because eviction is batched to keep
+/// it amortized. Read the buffer through [`window`](KLineBuffer::window) rather than the raw
+/// fields; the fields are public only so that the struct stays inspectable and constructible.
 #[derive(Debug, Clone)]
 pub struct KLineBuffer {
     pub max_size: usize,
@@ -563,23 +568,14 @@ impl KLineBuffer {
     }
 
     pub fn push(&mut self, k: KLine) {
-        if self.max_size > 0 && self.time.len() >= self.max_size {
-            let remove = self.time.len() + 1 - self.max_size;
-
-            self.time.drain(0..remove);
-            self.open.drain(0..remove);
-            self.high.drain(0..remove);
-            self.low.drain(0..remove);
-            self.close.drain(0..remove);
-            self.volume.drain(0..remove);
-        }
-
         self.time.push(k.time);
         self.open.push(k.open);
         self.high.push(k.high);
         self.low.push(k.low);
         self.close.push(k.close);
         self.volume.push(k.volume);
+
+        self.trim();
     }
 
     pub fn extend(&mut self, k: Vec<KLine>) {
@@ -587,49 +583,87 @@ impl KLineBuffer {
             return;
         }
 
-        if self.max_size == 0 {
-            let i = k.iter();
-
-            self.time.extend(i.clone().map(|v| v.time));
-            self.open.extend(i.clone().map(|v| v.open));
-            self.high.extend(i.clone().map(|v| v.high));
-            self.low.extend(i.clone().map(|v| v.low));
-            self.close.extend(i.clone().map(|v| v.close));
-            self.volume.extend(i.clone().map(|v| v.volume));
-
-            return;
-        }
-
-        let incoming = if k.len() > self.max_size {
+        // A single batch larger than the buffer keeps only its newest `max_size` bars.
+        let incoming = if self.max_size > 0 && k.len() > self.max_size {
             &k[k.len() - self.max_size..]
         } else {
             &k[..]
         };
 
-        let need_remove = self
-            .time
-            .len()
-            .saturating_add(incoming.len())
-            .saturating_sub(self.max_size);
+        self.time.extend(incoming.iter().map(|v| v.time));
+        self.open.extend(incoming.iter().map(|v| v.open));
+        self.high.extend(incoming.iter().map(|v| v.high));
+        self.low.extend(incoming.iter().map(|v| v.low));
+        self.close.extend(incoming.iter().map(|v| v.close));
+        self.volume.extend(incoming.iter().map(|v| v.volume));
 
-        if need_remove > 0 {
-            self.time.drain(0..need_remove);
-            self.open.drain(0..need_remove);
-            self.high.drain(0..need_remove);
-            self.low.drain(0..need_remove);
-            self.close.drain(0..need_remove);
-            self.volume.drain(0..need_remove);
+        self.trim();
+    }
+
+    /// Evict old bars in batches so eviction is amortized to roughly one moved element per
+    /// pushed bar, instead of moving the whole buffer on every push.
+    ///
+    /// The buffer is allowed to grow to twice `max_size`; once it reaches that size it is cut
+    /// back to `max_size`. The excess is never visible through
+    /// [`window`](KLineBuffer::window).
+    fn trim(&mut self) {
+        if self.max_size == 0 {
+            return;
         }
 
-        let i = incoming.iter();
+        // Evict at 2x capacity: the O(n) memmove of `drain` then runs once per `max_size`
+        // pushes instead of once per push, and the threshold stays a round multiple.
+        let trigger = self.max_size.saturating_mul(2);
 
-        self.time.extend(i.clone().map(|v| v.time));
-        self.open.extend(i.clone().map(|v| v.open));
-        self.high.extend(i.clone().map(|v| v.high));
-        self.low.extend(i.clone().map(|v| v.low));
-        self.close.extend(i.clone().map(|v| v.close));
-        self.volume.extend(i.clone().map(|v| v.volume));
+        if self.time.len() < trigger {
+            return;
+        }
+
+        let excess = self.time.len() - self.max_size;
+
+        self.time.drain(..excess);
+        self.open.drain(..excess);
+        self.high.drain(..excess);
+        self.low.drain(..excess);
+        self.close.drain(..excess);
+        self.volume.drain(..excess);
     }
+
+    /// The bars this buffer currently exposes: the newest `max_size` bars, or all bars when
+    /// `max_size == 0`.
+    ///
+    /// Read the buffer through this method rather than through the raw `Vec` fields: because
+    /// eviction is batched, the backing `Vec`s can hold up to `max_size + max_size / 2` bars,
+    /// and only the tail is meant to be visible.
+    pub fn window(&self) -> KLineWindow<'_> {
+        let start = if self.max_size == 0 {
+            0
+        } else {
+            self.time.len().saturating_sub(self.max_size)
+        };
+
+        KLineWindow {
+            time: &self.time[start..],
+            open: &self.open[start..],
+            high: &self.high[start..],
+            low: &self.low[start..],
+            close: &self.close[start..],
+            volume: &self.volume[start..],
+        }
+    }
+}
+
+/// A contiguous view of the bars a [`KLineBuffer`] currently exposes.
+///
+/// Created by [`KLineBuffer::window`], which decides how much of the backing storage is visible.
+#[derive(Debug, Clone, Copy)]
+pub struct KLineWindow<'a> {
+    pub time: &'a [u64],
+    pub open: &'a [Decimal],
+    pub high: &'a [Decimal],
+    pub low: &'a [Decimal],
+    pub close: &'a [Decimal],
+    pub volume: &'a [Decimal],
 }
 
 /// A unified timeline composed of multiple data sources.

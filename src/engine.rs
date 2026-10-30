@@ -280,13 +280,15 @@ where
                             source_level_kline_buffer.clear();
 
                             // 自定义系列必须与 OHLCV 数据在时间上有交集才能在策略中访问到，否则返回空切片 []
+                            let window = strategy_level_kline_buffer.window();
+
                             let context = Context {
-                                time: TimeSeries::new(&strategy_level_kline_buffer.time),
-                                open: Series::new(&strategy_level_kline_buffer.open),
-                                high: Series::new(&strategy_level_kline_buffer.high),
-                                low: Series::new(&strategy_level_kline_buffer.low),
-                                close: Series::new(&strategy_level_kline_buffer.close),
-                                volume: Series::new(&strategy_level_kline_buffer.volume),
+                                time: TimeSeries::new(window.time),
+                                open: Series::new(window.open),
+                                high: Series::new(window.high),
+                                low: Series::new(window.low),
+                                close: Series::new(window.close),
+                                volume: Series::new(window.volume),
                                 exchange: &exchange,
                                 series: SeriesTable(
                                     self.series
@@ -297,7 +299,7 @@ where
                                         .map(|((_, _, name), aligned)| {
                                             clip_series(
                                                 aligned,
-                                                &strategy_level_kline_buffer.time,
+                                                window.time,
                                                 name.as_str(),
                                                 strategy_level,
                                             )
@@ -504,6 +506,7 @@ where
             strategy_level,
             source_level,
             series: &self.series,
+            max_size: N,
         };
 
         let primary_kline_context = &request_context
@@ -600,22 +603,25 @@ impl SymbolBuffer {
     }
 
     fn as_context(&self) -> SymbolContext<'_> {
+        let strategy_window = self.strategy_level_kline_buffer.window();
+        let source_window = self.source_level_kline_buffer.window();
+
         SymbolContext {
             strategy_level_kline_context: KLineContext {
-                time: &self.strategy_level_kline_buffer.time,
-                open: &self.strategy_level_kline_buffer.open,
-                high: &self.strategy_level_kline_buffer.high,
-                low: &self.strategy_level_kline_buffer.low,
-                close: &self.strategy_level_kline_buffer.close,
-                volume: &self.strategy_level_kline_buffer.volume,
+                time: strategy_window.time,
+                open: strategy_window.open,
+                high: strategy_window.high,
+                low: strategy_window.low,
+                close: strategy_window.close,
+                volume: strategy_window.volume,
             },
             source_level_kline_context: KLineContext {
-                time: &self.source_level_kline_buffer.time,
-                open: &self.source_level_kline_buffer.open,
-                high: &self.source_level_kline_buffer.high,
-                low: &self.source_level_kline_buffer.low,
-                close: &self.source_level_kline_buffer.close,
-                volume: &self.source_level_kline_buffer.volume,
+                time: source_window.time,
+                open: source_window.open,
+                high: source_window.high,
+                low: source_window.low,
+                close: source_window.close,
+                volume: source_window.volume,
             },
             source_kline_buffer: &self.source_kline_buffer,
             level_kline_table: &self.level_kline_table,
