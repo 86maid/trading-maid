@@ -211,7 +211,6 @@ pub struct HistoryPositionSummary {
     pub loss_trades: usize,
     pub win_rate: Decimal,
     pub profit_loss_ratio: Decimal,
-    pub expectancy: Decimal,
     pub total_profit: Decimal,
     pub avg_profit: Decimal,
     pub net_gross_profit: Decimal,

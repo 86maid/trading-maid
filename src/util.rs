@@ -1333,15 +1333,6 @@ pub fn summarize(list: impl AsRef<[HistoryPosition]>) -> HistoryPositionSummary 
         .reduce(Decimal::min)
         .unwrap_or_default();
 
-    let expectancy = if total_trades == 0 {
-        Decimal::ZERO
-    } else {
-        let win_rate_decimal = win_rate / Decimal::from(100); // 转为小数
-        let loss_rate_decimal = Decimal::ONE - win_rate_decimal; // 败率
-
-        (win_rate_decimal * avg_win) - (loss_rate_decimal * avg_loss)
-    };
-
     HistoryPositionSummary {
         // ===== 1. 基础标识 =====
         symbol,   // 交易对
@@ -1355,7 +1346,6 @@ pub fn summarize(list: impl AsRef<[HistoryPosition]>) -> HistoryPositionSummary 
         // ===== 3. 核心绩效指标（最重要）=====
         win_rate,          // 胜率 (%)
         profit_loss_ratio, // 盈亏比
-        expectancy,        // 期望值 (每笔平均盈亏)
 
         // ===== 4. 盈亏汇总 =====
         total_profit,       // 总盈亏
