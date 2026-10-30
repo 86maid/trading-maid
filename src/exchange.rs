@@ -50,7 +50,7 @@ where
     /// If the strategy's `level` is greater than `DataSource.metadata.level`,
     /// the engine will automatically resample the data.
     ///
-    /// See [`is_live`](crate::util::resample) for the resampling logic.
+    /// See [`resample`](crate::util::resample) for the resampling logic.
     fn is_live(&self) -> bool;
 
     /// Gets the latest K-line data for the current trading symbol.
