@@ -5,7 +5,8 @@ use rust_decimal_macros::dec;
 
 /// Calculates the Simple Moving Average (SMA) for a given series of prices and a specified length.
 ///
-/// Returns `Some(SMA)` or `None` if the length is zero or if there are not enough data points in the series.
+/// Returns `Some(SMA)` or `None` if the length is zero or if there are not enough data points in
+/// the series.
 pub fn sma(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length {
         return None;
@@ -15,7 +16,8 @@ pub fn sma(series: &Series, length: usize) -> Option<Decimal> {
 }
 
 /// Calculates the Exponential Moving Average (EMA) for a given series of prices and a specified length.
-/// Returns Some(EMA) or None if the length is zero or if there are not enough data points in the series.
+///
+/// Returns `Some(EMA)` or `None` if the length is zero or if there are not enough data points in the series.
 pub fn ema(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length {
         return None;
@@ -31,7 +33,8 @@ pub fn ema(series: &Series, length: usize) -> Option<Decimal> {
 }
 
 /// Calculates the Relative Strength Index (RSI) for a given series of prices and a specified length.
-/// Returns Some(RSI) or None if the length is zero or if there are not enough data points in the series.
+///
+/// Returns `Some(RSI)` or `None` if the length is zero or if there are not enough data points in the series.
 pub fn rsi(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length + 1 {
         return None;
@@ -46,8 +49,11 @@ pub fn rsi(series: &Series, length: usize) -> Option<Decimal> {
     rsi_cache.value()
 }
 
-/// Calculates the Commodity Channel Index (CCI) for given high, low, and close price series and a specified length.
-/// Returns Some(CCI) or None if the length is zero or if there are not enough data points in any of the series.
+/// Calculates the Commodity Channel Index (CCI) for given high, low, and close price series and a
+/// specified length.
+///
+/// Returns `Some(CCI)` or `None` if the length is zero or if there are not enough data points in any
+/// of the series.
 pub fn cci(high: &Series, low: &Series, close: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || high.len() < length || low.len() < length || close.len() < length {
         return None;
@@ -76,6 +82,7 @@ pub fn cci(high: &Series, low: &Series, close: &Series, length: usize) -> Option
 }
 
 /// Calculates the MACD, Signal Line, and Histogram values for a given series of prices.
+///
 /// Returns a tuple containing the MACD value, Signal Line value, and Histogram value.
 pub fn macd(
     series: &Series,
@@ -115,7 +122,9 @@ pub fn macd(
 }
 
 /// Calculates the highest value in a given series of prices for a specified length.
-/// Returns Some(highest) or None if the length is zero or if there are not enough data points in the series.
+///
+/// Returns `Some(highest)` or `None` if the length is zero or if there are not enough data points in
+/// the series.
 pub fn highest(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length {
         return None;
@@ -129,7 +138,9 @@ pub fn highest(series: &Series, length: usize) -> Option<Decimal> {
 }
 
 /// Calculates the lowest value in a given series of prices for a specified length.
-/// Returns Some(lowest) or None if the length is zero or if there are not enough data points in the series.
+///
+/// Returns `Some(lowest)` or `None` if the length is zero or if there are not enough data points in
+/// the series.
 pub fn lowest(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length {
         return None;
