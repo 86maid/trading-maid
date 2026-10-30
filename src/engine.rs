@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 /// Default capacity for the k-line buffer in number of k-lines.
-pub const DEFAULT_SERIES_MAX_LENGTH: usize = 20000000;
+///
+/// zero means unlimited.
+pub const DEFAULT_SERIES_MAX_LENGTH: usize = 0;
 
 /// A hook function called after each k-line is processed by the strategy.
 ///
