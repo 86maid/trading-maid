@@ -330,7 +330,7 @@ Some commonly used indicators are built into `indicator`.
 ```rust
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     highest(cx.high, 7);
-    ma(cx.close, 30);
+    sma(cx.close, 30);
     ema(cx.close, 144);
     Ok(())
 }
@@ -491,7 +491,7 @@ Use `cx.request()` to obtain a symbol's OHLCV context at a **specific level**.
 ```rust
 // Get BTCUSDT at 5-minute level
 if let Some(btc_5m_cx) = cx.request("BTCUSDT", Level::Minute5) {
-    let ma_30 = ma(btc_5m_cx.close, 30);
+    let sma_30 = sma(btc_5m_cx.close, 30);
 }
 ```
 
@@ -522,12 +522,12 @@ In the strategy, access another symbol's context via `cx.request()`:
 ```rust
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     // Access BTCUSDT directly (primary symbol)
-    let ma_val = ma(cx.close, 30);
+    let sma_val = sma(cx.close, 30);
 
     // Access ETHUSDT via request
     if let Some(eth_cx) = cx.request("ETHUSDT", Level::Hour1) {
         // Use eth_cx like a normal Context
-        let ma_val = ma(eth_cx.close, 30);
+        let sma_val = sma(eth_cx.close, 30);
     }
     
     Ok(())
@@ -928,8 +928,8 @@ impl Strategy for PullbackStrategy {
             return Ok(());
         }
 
-        let sma50 = ma(cx.close, 50);
-        let sma200 = ma(cx.close, 200);
+        let sma50 = sma(cx.close, 50);
+        let sma200 = sma(cx.close, 200);
         let atr_val = atr(cx.high, cx.low, cx.close, 14);
         let rsi_val = rsi(cx.close, 14);
         let (Some(sma50), Some(sma200), Some(_atr), Some(rsi)) = (sma50, sma200, atr_val, rsi_val)
@@ -1304,7 +1304,7 @@ async fn main() {
 
 ### 📊 RSI EMA — Consecutive Candle Breakout (built-in indicators)
 
-A trend-following strategy that identifies strong directional momentum through **consecutive bull/bear candles** with **volume confirmation** and **SMA50 trend filter**. Uses `atr()`, `ma()` from the built-in indicators.
+A trend-following strategy that identifies strong directional momentum through **consecutive bull/bear candles** with **volume confirmation** and **SMA50 trend filter**. Uses `atr()`, `sma()` from the built-in indicators.
 
 ```rust
 use trading_maid::prelude::*;
@@ -1328,7 +1328,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let sma50 = ma(cx.close, 50);
+    let sma50 = sma(cx.close, 50);
     let atr_val = atr(cx.high, cx.low, cx.close, 14);
     let (Some(sma50), Some(atr)) = (sma50, atr_val) else {
         return Ok(());

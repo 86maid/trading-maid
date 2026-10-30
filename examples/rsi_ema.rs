@@ -19,7 +19,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let sma50 = ma(cx.close, 50);
+    let sma50 = sma(cx.close, 50);
     let atr_val = atr(cx.high, cx.low, cx.close, 14);
     let (Some(sma50), Some(atr)) = (sma50, atr_val) else {
         return Ok(());

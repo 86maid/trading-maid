@@ -35,8 +35,8 @@ impl Strategy for PullbackStrategy {
             return Ok(());
         }
 
-        let sma50 = ma(cx.close, 50);
-        let sma200 = ma(cx.close, 200);
+        let sma50 = sma(cx.close, 50);
+        let sma200 = sma(cx.close, 200);
         let atr_val = atr(cx.high, cx.low, cx.close, 14);
         let rsi_val = rsi(cx.close, 14);
         let (Some(sma50), Some(sma200), Some(_atr), Some(rsi)) = (sma50, sma200, atr_val, rsi_val)

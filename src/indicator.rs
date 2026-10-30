@@ -4,8 +4,9 @@ use rust_decimal::MathematicalOps;
 use rust_decimal_macros::dec;
 
 /// Calculates the Simple Moving Average (SMA) for a given series of prices and a specified length.
-/// Returns Some(SMA) or None if the length is zero or if there are not enough data points in the series.
-pub fn ma(series: &Series, length: usize) -> Option<Decimal> {
+///
+/// Returns `Some(SMA)` or `None` if the length is zero or if there are not enough data points in the series.
+pub fn sma(series: &Series, length: usize) -> Option<Decimal> {
     if length == 0 || series.len() < length {
         return None;
     }
@@ -431,7 +432,7 @@ where
         return (None, None, None);
     }
 
-    let Some(middle) = ma(series, length) else {
+    let Some(middle) = sma(series, length) else {
         return (None, None, None);
     };
 

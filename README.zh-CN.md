@@ -331,7 +331,7 @@ cx.close < "0.0005";
 ```rust
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     highest(cx.high, 7);
-    ma(cx.close, 30);
+    sma(cx.close, 30);
     ema(cx.close, 144);
     Ok(())
 }
@@ -492,7 +492,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
 ```rust
 // 获取 BTCUSDT 在 5 分钟级别的数据
 if let Some(btc_5m_cx) = cx.request("BTCUSDT", Level::Minute5) {
-    let ma_30 = ma(btc_5m_cx.close, 30);
+    let sma_30 = sma(btc_5m_cx.close, 30);
 }
 ```
 
@@ -523,12 +523,12 @@ engine.run(["BTCUSDT", "ETHUSDT"], Level::Hour1).await?;
 ```rust
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     // 直接访问 BTCUSDT（主交易对）
-    let ma_val = ma(cx.close, 30);
+    let sma_val = sma(cx.close, 30);
 
     // 通过 request 访问 ETHUSDT
     if let Some(eth_cx) = cx.request("ETHUSDT", Level::Hour1) {
         // 像普通 Context 一样使用 eth_cx
-        let ma_val = ma(eth_cx.close, 30);
+        let sma_val = sma(eth_cx.close, 30);
     }
     
     Ok(())
@@ -929,8 +929,8 @@ impl Strategy for PullbackStrategy {
             return Ok(());
         }
 
-        let sma50 = ma(cx.close, 50);
-        let sma200 = ma(cx.close, 200);
+        let sma50 = sma(cx.close, 50);
+        let sma200 = sma(cx.close, 200);
         let atr_val = atr(cx.high, cx.low, cx.close, 14);
         let rsi_val = rsi(cx.close, 14);
         let (Some(sma50), Some(sma200), Some(_atr), Some(rsi)) = (sma50, sma200, atr_val, rsi_val)
@@ -1305,7 +1305,7 @@ async fn main() {
 
 ### 📊 RSI EMA 突破策略 — Consecutive Candle Breakout（使用内置指标）
 
-趋势跟踪策略，通过**连续阳线/阴线** + **成交量确认** + **SMA50 趋势过滤**判断强势方向动量。使用内置的 `atr()`、`ma()`。
+趋势跟踪策略，通过**连续阳线/阴线** + **成交量确认** + **SMA50 趋势过滤**判断强势方向动量。使用内置的 `atr()`、`sma()`。
 
 ```rust
 use trading_maid::prelude::*;
@@ -1329,7 +1329,7 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let sma50 = ma(cx.close, 50);
+    let sma50 = sma(cx.close, 50);
     let atr_val = atr(cx.high, cx.low, cx.close, 14);
     let (Some(sma50), Some(atr)) = (sma50, atr_val) else {
         return Ok(());
