@@ -104,6 +104,16 @@ where
     /// # Returns
     /// - `Ok(Vec<KLine>)`: A list of K-lines within the time range, or an empty vector if no data is available.
     /// - `Err`: An error occurred.
+    ///
+    /// # Contract for live exchanges
+    ///
+    /// Transient failures — network jitter, dropped connections, rate limits — must be retried
+    /// internally; only permanent failures (unknown symbol, invalid range, permission errors)
+    /// should surface as `Err`. The engine treats `Err` as fatal: it aborts the run rather than
+    /// continuing with a hole in the series.
+    ///
+    /// Likewise an empty `Ok` means the range genuinely holds no data, which is also fatal for
+    /// gap filling.
     async fn get_kline(
         &self,
         symbol: &str,
@@ -656,6 +666,8 @@ impl ExchangeWrapper {
         (self.0.as_ref() as &dyn Any).type_id()
     }
 
+    /// Forwards to [`Exchange::next`], with the same contract: a live implementation blocks
+    /// through transient failures, and `Ok(None)` means the data has permanently ended.
     #[allow(dead_code)]
     pub(crate) async fn next(
         &self,
@@ -665,6 +677,8 @@ impl ExchangeWrapper {
         self.0.next(symbol.as_ref(), level).await
     }
 
+    /// Forwards to [`Exchange::get_kline`], with the same contract: a live implementation retries
+    /// transient failures internally, so `Err` and an empty result are both fatal to the engine.
     #[allow(dead_code)]
     pub(crate) async fn get_kline(
         &self,
