@@ -39,7 +39,7 @@ pub struct LocalExchange {
 
 struct LocalExchangeInner {
     timeline: Timeline,
-    klines: Vec<(String, KLine)>,
+    kline_list: Vec<(String, KLine)>,
     cash: Decimal,
     leverage: Vec<(String, u32)>,
     slippage: Decimal,
@@ -188,7 +188,7 @@ impl LocalExchange {
         Ok(Self {
             inner: Arc::new(Mutex::new(LocalExchangeInner {
                 timeline,
-                klines: Vec::new(),
+                kline_list: Vec::new(),
                 cash: Decimal::from(10000),
                 leverage,
                 slippage: Decimal::ZERO,
@@ -270,7 +270,7 @@ impl LocalExchangeInner {
     }
 
     fn kline(&self, symbol: &str) -> &KLine {
-        &self.klines.iter().find(|(v, _)| v == symbol).unwrap().1
+        &self.kline_list.iter().find(|(v, _)| v == symbol).unwrap().1
     }
 
     fn leverage(&self, symbol: &str) -> u32 {
@@ -372,12 +372,12 @@ impl LocalExchangeInner {
     }
 
     fn advance(&mut self) {
-        if let Some(all_klines) = self.timeline.all() {
-            for (symbol, kline) in all_klines {
-                if let Some(index) = self.klines.iter().position(|(v, _)| v == &symbol) {
-                    self.klines[index].1 = kline;
+        if let Some(all_kline_list) = self.timeline.all() {
+            for (symbol, kline) in all_kline_list {
+                if let Some(index) = self.kline_list.iter().position(|(v, _)| v == &symbol) {
+                    self.kline_list[index].1 = kline;
                 } else {
-                    self.klines.push((symbol.to_string(), kline));
+                    self.kline_list.push((symbol.to_string(), kline));
                 }
             }
         }
@@ -1129,7 +1129,7 @@ impl Exchange for LocalExchange {
         }
 
         Ok(inner
-            .klines
+            .kline_list
             .iter()
             .find(|(v, _)| v == symbol)
             .map(|(_, v)| v)
