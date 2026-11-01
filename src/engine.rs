@@ -12,13 +12,13 @@ use std::sync::Arc;
 /// zero means unlimited.
 pub const DEFAULT_SERIES_MAX_LENGTH: usize = 0;
 
-/// How much history to preload before the first live k-line, and where to take it from.
+// 预加载的三种模式，三选一，后设置的覆盖前面的；不设置 = 完全不预加载。
 enum Preload {
-    /// Preload this many closed k-lines through [`Exchange::get_kline`].
+    // 按根数往前退
     KLineCount(usize),
-    /// Preload everything from this millisecond timestamp onward (`0` = as early as available).
+    // 从某个时间戳起（0 = 能拉多早拉多早）
     From(u64),
-    /// Preload from an in-memory data source instead of [`Exchange::get_kline`].
+    // 用内存里的 DataSource 当种子
     Data(DataSource),
 }
 
@@ -640,21 +640,16 @@ where
         Ok(())
     }
 
-    /// Build the preload buffer for `symbol`, ending just before the first live k-line.
-    ///
-    /// `first_time` is the `time` of the first k-line returned by [`Exchange::next`]; it doubles
-    /// as the anchor of the range and as the exclusive end, so preloaded data can never overlap
-    /// the first live k-line.
-    ///
-    /// Whatever the source, the result ends exactly one k-line before `first_time`. Contiguity is
-    /// assumed rather than enforced: the seed data and [`Exchange::get_kline`] are both required
-    /// to return adjacent k-lines.
     async fn build_preload(
         &self,
         symbol: &str,
         level: Level,
         first_time: u64,
     ) -> anyhow::Result<Vec<KLine>> {
+        // 以第一根 live K 线的时间作为锚点，向左取历史，右端开区间，保证不会和它重叠。
+        // 返回值要求最后一根的下一根正好等于锚点；连续性只做假设不做修补，
+        // 种子数据和 get_kline 都必须返回相邻的 K 线。
+        //
         // 回测的数据源本来就从第一根开始，不需要预加载，直接跳过
         if !self.exchange.is_live() || self.preload.is_none() {
             return Ok(Vec::new());
@@ -662,10 +657,8 @@ where
 
         // 只服务于预加载的小工具，放在函数内部，不污染模块命名空间。
 
-        /// Step `count` k-lines back from `time` at `level`.
-        ///
-        /// Levels with a fixed duration are stepped in one shot. [`Level::Month1`] has
-        /// calendar-dependent lengths, so it is stepped one k-line at a time.
+        // 从 time 往前退 count 根 K 线。
+        // 有固定时长的级别一次算完；月线长度随日历变化，逐根退。
         fn shift_back(time: u64, level: Level, count: usize) -> anyhow::Result<u64> {
             // 非月线：一次乘加算出起点，再对齐到 bar 边界
             if level != Level::Month1 {
@@ -806,7 +799,7 @@ struct SymbolBuffer {
     source_kline_buffer: Vec<KLine>,
     source_level_kline_buffer: KLineBuffer,
     strategy_level_kline_buffer: KLineBuffer,
-    level_kline_table: RefCell<Vec<(Level, KLineBuffer)>>,
+    level_kline_table: RefCell<Vec<LevelKLine>>,
     eof: bool,
 }
 

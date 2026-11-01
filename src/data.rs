@@ -540,7 +540,7 @@ impl<'de> Deserialize<'de> for DataSource {
 
 /// A rolling window of k-lines backed by six parallel `Vec`s.
 ///
-/// The backing storage may hold up to 1.5 × `max_size` bars, because eviction is batched to keep
+/// The backing storage may hold up to twice `max_size` bars, because eviction is batched to keep
 /// it amortized. Read the buffer through [`window`](KLineBuffer::window) rather than the raw
 /// fields; the fields are public only so that the struct stays inspectable and constructible.
 #[derive(Debug, Clone)]
@@ -633,7 +633,7 @@ impl KLineBuffer {
     /// `max_size == 0`.
     ///
     /// Read the buffer through this method rather than through the raw `Vec` fields: because
-    /// eviction is batched, the backing `Vec`s can hold up to `max_size + max_size / 2` bars,
+    /// eviction is batched, the backing `Vec`s can hold up to twice `max_size` bars,
     /// and only the tail is meant to be visible.
     pub fn window(&self) -> KLineWindow<'_> {
         let start = if self.max_size == 0 {
@@ -650,6 +650,34 @@ impl KLineBuffer {
             close: &self.close[start..],
             volume: &self.volume[start..],
         }
+    }
+
+    /// Remove and return the newest k-line, if any.
+    pub fn pop(&mut self) -> Option<KLine> {
+        let kline = KLine {
+            time: self.time.pop()?,
+            open: self.open.pop()?,
+            high: self.high.pop()?,
+            low: self.low.pop()?,
+            close: self.close.pop()?,
+            volume: self.volume.pop()?,
+        };
+
+        Some(kline)
+    }
+
+    /// Read the newest k-line without removing it, if any.
+    pub fn last(&self) -> Option<KLine> {
+        let kline = KLine {
+            time: *self.time.last()?,
+            open: *self.open.last()?,
+            high: *self.high.last()?,
+            low: *self.low.last()?,
+            close: *self.close.last()?,
+            volume: *self.volume.last()?,
+        };
+
+        Some(kline)
     }
 }
 

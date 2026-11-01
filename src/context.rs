@@ -63,9 +63,13 @@ impl<'a> Context<'a> {
     ///
     /// - If `level` matches the strategy level or source level, pre-built data
     ///   is returned instantly.
-    /// - For any other level, the data is **resampled from source klines** on
-    ///   first access and cached for subsequent calls within the same strategy
-    ///   invocation.
+    /// - For any other level, the data is **resampled from source klines** and kept in sync
+    ///   incrementally: each access only resamples the source k-lines that arrived since the
+    ///   previous one, and the result is cached for the rest of the run.
+    ///
+    /// The newest bar of a level coarser than the source level may still be forming: its `close`
+    /// tracks the latest source price and keeps changing until the period completes. Use
+    /// `close[1]` for the last confirmed bar.
     ///
     /// Returns `None` if the symbol is unknown, or the level is invalid.
     pub fn request(&self, symbol: &str, level: Level) -> Option<Context<'a>> {
@@ -86,18 +90,27 @@ impl<'a> Context<'a> {
             }
 
             let mut level_kline = symbol_context.level_kline_table.borrow_mut();
-            let index = level_kline.iter().position(|(l, _)| *l == level);
 
-            if index.is_none() {
-                let mut kline_buffer = KLineBuffer::new(request_context.max_size);
+            let index = match level_kline.iter().position(|entry| entry.level == level) {
+                Some(index) => index,
+                None => {
+                    level_kline.push(LevelKLine {
+                        level,
+                        buffer: KLineBuffer::new(request_context.max_size),
+                        consumed: 0,
+                        pending: false,
+                    });
 
-                kline_buffer.extend(resample(symbol_context.source_kline_buffer, level).ok()?);
-                level_kline.push((level, kline_buffer));
-            }
-
-            let entry: &'a KLineBuffer = unsafe {
-                std::mem::transmute(&level_kline[index.unwrap_or(level_kline.len() - 1)].1)
+                    level_kline.len() - 1
+                }
             };
+
+            // 增量推进：只 resample 上次之后新增的 source 段
+            level_kline[index]
+                .refresh(symbol_context.source_kline_buffer)
+                .ok()?;
+
+            let entry: &'a KLineBuffer = unsafe { std::mem::transmute(&level_kline[index].buffer) };
 
             let window = entry.window();
 
@@ -147,7 +160,74 @@ pub(crate) struct SymbolContext<'a> {
     pub strategy_level_kline_context: KLineContext<'a>,
     pub source_level_kline_context: KLineContext<'a>,
     pub source_kline_buffer: &'a [KLine],
-    pub level_kline_table: &'a RefCell<Vec<(Level, KLineBuffer)>>,
+    pub level_kline_table: &'a RefCell<Vec<LevelKLine>>,
+}
+
+pub(crate) struct LevelKLine {
+    pub level: Level,
+    pub buffer: KLineBuffer,
+    pub consumed: usize,
+    pub pending: bool,
+}
+
+impl LevelKLine {
+    fn refresh(&mut self, source: &[KLine]) -> anyhow::Result<()> {
+        // 没有新数据：[consumed, source.len()) 为空
+        if source.len() <= self.consumed {
+            return Ok(());
+        }
+
+        // source 的划分（全部左闭右开）：
+        //   [0, consumed)                       已经折进 buffer 的完整 bar
+        //   [consumed, forming_start_index)     本轮新走完的周期
+        //   [forming_start_index, source.len()) 当前正在形成的周期
+
+        // 最后一根 source bar 所属周期的起点，也就是当前周期的开头
+        let forming_start = get_time_range(source[source.len() - 1].time, self.level)?.0;
+
+        // 当前周期的第一根，即第一根 time >= forming_start 的 bar
+        let forming_start_index = source[self.consumed..]
+            .iter()
+            .position(|kline| kline.time >= forming_start)
+            .map(|offset| self.consumed + offset)
+            .unwrap_or(source.len());
+
+        // 有新走完的周期：区间 [consumed, forming_start_index) 非空
+        if forming_start_index > self.consumed {
+            // 上一轮那根半成品和将要生成的完整 bar 时间戳相同，先弹掉，否则会重复
+            if self.pending {
+                self.buffer.pop();
+                self.pending = false;
+            }
+
+            // [consumed, forming_start_index) 全部是完整周期，可以放心追加
+            let complete = resample(&source[self.consumed..forming_start_index], self.level)?;
+
+            self.buffer.extend(complete);
+            self.consumed = forming_start_index;
+        }
+
+        // 此时 consumed == forming_start_index，所以 [consumed, source.len()) 就是当前周期，
+        // resample 只会产出一根
+        let mut forming = resample(&source[self.consumed..], self.level)?;
+
+        if let Some(last) = forming.pop() {
+            // 和已缓存的尾部一模一样就什么都不写，保证对已经发出的引用零扰动
+            if self.buffer.last() == Some(last) {
+                return Ok(());
+            }
+
+            // 同一周期只保留一根：先弹掉旧的再推新的，等价于原地覆盖
+            if self.pending {
+                self.buffer.pop();
+            }
+
+            self.buffer.push(last);
+            self.pending = true;
+        }
+
+        Ok(())
+    }
 }
 
 pub(crate) struct RequestContext<'a> {
