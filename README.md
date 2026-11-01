@@ -340,6 +340,8 @@ Calling `ema` directly may lead to slow backtests and incorrect calculations, be
 
 Use `EMACache::with_ema` to create an instance with an initial EMA value, then call `EMACache::update` on each k-line to update and get the current value:
 
+When the data does not start from the very first k-line (live trading, a preloaded window, or a narrower backtest range), rebuild the cache from history with `EMACache::from_series(cx.close, 144)` instead of hard-coding a number.
+
 ```rust
 async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
     let Some(ema144) = self.ema_cache144.update(cx.close) else {
@@ -707,6 +709,10 @@ struct MyStrategy {
 
 impl MyStrategy {
     pub fn new() -> Self {
+        // 80871 / 78705 are the EMA values computed from the 5m k-line at some earlier date. They
+        // are hard-coded only so the example can produce an EMA from its very first bar; change
+        // the data range or the start date and both numbers are wrong. For live trading, or for a
+        // different range, rebuild with EMACache::from_series(cx.close, 144) instead.
         MyStrategy {
             ema_cache144: EMACache::with_ema(144, 80871),
             ema_cache169: EMACache::with_ema(169, 78705),

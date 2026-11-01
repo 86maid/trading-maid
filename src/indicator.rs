@@ -165,9 +165,10 @@ pub fn lowest(series: &Series, length: usize) -> Option<Decimal> {
 ///
 /// - When the backtest starts from the very first k-line, use `EMACache::new` — no initial value
 ///   is needed.
-/// - When the cache is created partway through (for example, the data does not begin at the
-///   first k-line), use `EMACache::with_ema` to supply the EMA at that position instead of
-///   starting from zero.
+/// - When the cache is created partway through (a restart, a narrower backtest range, or after
+///   [`Context::missed`](crate::context::Context::missed) reports a gap), replay the bars the
+///   engine already has with `EMACache::from_series`, or supply the value directly with
+///   `EMACache::with_ema` instead of starting from zero.
 pub struct EMACache {
     length: usize,
     multiplier: Decimal,

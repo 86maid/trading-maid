@@ -8,6 +8,9 @@ struct MyStrategy {
 
 impl MyStrategy {
     pub fn new() -> Self {
+        // 80871 / 78705 是从某个日期那根 5m K 线算出来的 EMA 值，写死只是为了让示例从第一根
+        // bar 就能算出指标。换数据区间、换起始日期，这两个数就失效了；实盘或换区间时应该改用
+        // EMACache::from_series(cx.close, 144) 从历史重建。
         MyStrategy {
             ema_cache144: EMACache::with_ema(144, 80871),
             ema_cache169: EMACache::with_ema(169, 78705),
