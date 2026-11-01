@@ -1325,14 +1325,18 @@ impl Exchange for LocalExchange {
         Ok(())
     }
 
-    async fn get_order(&self, id: &str) -> anyhow::Result<Option<OrderMessage>> {
+    async fn get_order(&self, symbol: &str, id: &str) -> anyhow::Result<Option<OrderMessage>> {
+        self.get_metadata(symbol)
+            .await
+            .context(format!("get_order: {}", symbol))?;
+
         let inner = self.inner.lock().await;
 
         Ok(inner
             .history_order_list
             .get(id)
             .or(inner.pending_order_list.get(id))
-            .filter(|v| v.kind.is_normal())
+            .filter(|v| v.kind.is_normal() && v.symbol == symbol)
             .map(|v| v.to_order_message()))
     }
 
@@ -1772,7 +1776,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Filled);
@@ -1838,7 +1842,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let trigger_order = exchange.get_order(&trigger_id).await.unwrap().unwrap();
+        let trigger_order = exchange.get_order(BTC, &trigger_id).await.unwrap().unwrap();
         assert_eq!(trigger_order.status, Status::Filled);
 
         // 触发后立即执行，仓位已创建
@@ -1863,7 +1867,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Canceled);
         assert!(exchange.get_position(BTC).await.unwrap().is_none());
     }
@@ -1989,7 +1993,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Filled);
@@ -2008,7 +2012,7 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Submitted);
         assert!(exchange.get_position(BTC).await.unwrap().is_none());
@@ -2024,7 +2028,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.avg_price, 105.0);
         assert!(order.avg_price < 106.0);
         assert!(order.avg_price > 104.0);
@@ -2042,7 +2046,7 @@ mod tests {
         let close_id = exchange.sell_reduce_only(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let close_order = exchange.get_order(&close_id).await.unwrap().unwrap();
+        let close_order = exchange.get_order(BTC, &close_id).await.unwrap().unwrap();
         let history = exchange.get_history_position_list(BTC).await.unwrap();
 
         assert_eq!(close_order.status, Status::Filled);
@@ -2071,7 +2075,7 @@ mod tests {
         let close_id = exchange.sell_reduce_only(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let close_order = exchange.get_order(&close_id).await.unwrap().unwrap();
+        let close_order = exchange.get_order(BTC, &close_id).await.unwrap().unwrap();
         let cash_after = exchange.get_cash().await.unwrap();
 
         let position_after = exchange.get_position(BTC).await.unwrap().unwrap();
@@ -2112,7 +2116,7 @@ mod tests {
         let close_id = exchange.sell_reduce_only(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let close_order = exchange.get_order(&close_id).await.unwrap().unwrap();
+        let close_order = exchange.get_order(BTC, &close_id).await.unwrap().unwrap();
         let cash_after = exchange.get_cash().await.unwrap();
 
         let position_after = exchange.get_position(BTC).await.unwrap().unwrap();
@@ -2144,7 +2148,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let trigger_order = exchange.get_order(&trigger_id).await.unwrap().unwrap();
+        let trigger_order = exchange.get_order(BTC, &trigger_id).await.unwrap().unwrap();
         assert_eq!(trigger_order.status, Status::Filled);
 
         // 触发后立即执行，仓位已创建
@@ -2163,7 +2167,7 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Submitted);
         assert!(exchange.get_position(BTC).await.unwrap().is_none());
     }
@@ -2364,7 +2368,7 @@ mod tests {
         let computed_price = 0.1_f64 + 0.2_f64;
         let id = exchange.buy_limit(BTC, computed_price, 1.0).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Submitted);
     }
 
@@ -2427,7 +2431,7 @@ mod tests {
         // Step 2: 限价开仓成交（buy 且 price>=open，按 high 成交）。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let open_order = exchange.get_order(&open_id).await.unwrap().unwrap();
+        let open_order = exchange.get_order(BTC, &open_id).await.unwrap().unwrap();
         let mut position = exchange.get_position(BTC).await.unwrap().unwrap();
         let pending_s2 = pending_orders_all(&raw, BTC).await;
 
@@ -2463,7 +2467,7 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let trigger_reduce = exchange
-            .get_order(&trigger_reduce_id)
+            .get_order(BTC, &trigger_reduce_id)
             .await
             .unwrap()
             .unwrap();
@@ -2529,7 +2533,7 @@ mod tests {
 
         exchange.cancel_order(BTC, &readd_id).await.unwrap();
 
-        let canceled = exchange.get_order(&readd_id).await.unwrap().unwrap();
+        let canceled = exchange.get_order(BTC, &readd_id).await.unwrap().unwrap();
         assert_eq!(canceled.status, Status::Canceled);
         assert_eq!(exchange.get_cash().await.unwrap(), cash_s3);
         assert_eq!(exchange.get_equity().await.unwrap(), equity_s4);
@@ -2588,8 +2592,8 @@ mod tests {
         // Step 2: 第二根 K，仅第一笔成交（按 high 成交），第二笔保留为 pending。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order_fill = exchange.get_order(&id_fill).await.unwrap().unwrap();
-        let order_pending = exchange.get_order(&id_pending).await.unwrap().unwrap();
+        let order_fill = exchange.get_order(BTC, &id_fill).await.unwrap().unwrap();
+        let order_pending = exchange.get_order(BTC, &id_pending).await.unwrap().unwrap();
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         let fill_avg = dec!(100.5);
@@ -2616,7 +2620,7 @@ mod tests {
         // 撤掉仍 pending 的普通限价单，现金回补，但总权益应保持不变。
         exchange.cancel_order(BTC, &id_pending).await.unwrap();
 
-        let canceled_pending = exchange.get_order(&id_pending).await.unwrap().unwrap();
+        let canceled_pending = exchange.get_order(BTC, &id_pending).await.unwrap().unwrap();
         let cash_after_cancel = cash_s2 + freeze_pending;
         let equity_after_cancel = cash_after_cancel + margin_s2 + upnl_s2;
 
@@ -2635,7 +2639,7 @@ mod tests {
         // Step 3: 第三根 K 市价平仓成交。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let close_order = exchange.get_order(&close_id).await.unwrap().unwrap();
+        let close_order = exchange.get_order(BTC, &close_id).await.unwrap().unwrap();
         let history = exchange.get_history_position_list(BTC).await.unwrap();
         let pending_s3 = pending_orders_all(&raw, BTC).await;
 
@@ -2759,7 +2763,7 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
 
         assert_eq!(order.kind, Kind::Trigger);
         assert_eq!(order.status, Status::Submitted);
@@ -2863,7 +2867,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         let pending = exchange.get_pending_order_list(BTC).await.unwrap();
 
         assert_eq!(order.status, Status::Rejected);
@@ -3368,7 +3372,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Submitted);
     }
 
@@ -3388,7 +3392,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Filled);
@@ -3413,7 +3417,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Filled);
@@ -3438,7 +3442,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Submitted);
     }
 
@@ -3458,7 +3462,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Submitted);
     }
 
@@ -3616,7 +3620,7 @@ mod tests {
         // Step 2: 第二根 K 线撮合开仓。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let open_order = exchange.get_order(&open_id).await.unwrap().unwrap();
+        let open_order = exchange.get_order(BTC, &open_id).await.unwrap().unwrap();
         let position_after_open = exchange.get_position(BTC).await.unwrap().unwrap();
         let pending_after_open = pending_orders_all(&raw, BTC).await;
 
@@ -3684,7 +3688,7 @@ mod tests {
         // Step 4: 第四根 K 线撮合平仓。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let close_order = exchange.get_order(&close_id).await.unwrap().unwrap();
+        let close_order = exchange.get_order(BTC, &close_id).await.unwrap().unwrap();
         let history = exchange.get_history_position_list(BTC).await.unwrap();
         let cash_after_close = exchange.get_cash().await.unwrap();
         let equity_after_close = exchange.get_equity().await.unwrap();
@@ -3779,7 +3783,11 @@ mod tests {
         // Step 2: 市价开多在 bar2 成交。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let open_order = exchange.get_order(&market_open_id).await.unwrap().unwrap();
+        let open_order = exchange
+            .get_order(BTC, &market_open_id)
+            .await
+            .unwrap()
+            .unwrap();
         let mut position = exchange.get_position(BTC).await.unwrap().unwrap();
         let pending_after_open = pending_orders_all(&raw, BTC).await;
 
@@ -3887,7 +3895,11 @@ mod tests {
         // Step 5: 限价减仓成交（买价>=open，按 high 成交），并更新历史与仓位。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let close_limit_order = exchange.get_order(&limit_reduce_id).await.unwrap().unwrap();
+        let close_limit_order = exchange
+            .get_order(BTC, &limit_reduce_id)
+            .await
+            .unwrap()
+            .unwrap();
         let history_after_limit = exchange.get_history_position_list(BTC).await.unwrap();
         let pending_after_limit = pending_orders_all(&raw, BTC).await;
         position = exchange.get_position(BTC).await.unwrap().unwrap();
@@ -3999,10 +4011,18 @@ mod tests {
         // ---------- Step 2: 市价与限价开仓成交，trigger 未触发 ----------
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order_market_open = exchange.get_order(&id_market_open).await.unwrap().unwrap();
-        let order_limit_open = exchange.get_order(&id_limit_open).await.unwrap().unwrap();
+        let order_market_open = exchange
+            .get_order(BTC, &id_market_open)
+            .await
+            .unwrap()
+            .unwrap();
+        let order_limit_open = exchange
+            .get_order(BTC, &id_limit_open)
+            .await
+            .unwrap()
+            .unwrap();
         let trigger_reverse = exchange
-            .get_order(&id_trigger_reverse)
+            .get_order(BTC, &id_trigger_reverse)
             .await
             .unwrap()
             .unwrap();
@@ -4046,12 +4066,12 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let trigger_reverse_s3 = exchange
-            .get_order(&id_trigger_reverse)
+            .get_order(BTC, &id_trigger_reverse)
             .await
             .unwrap()
             .unwrap();
         let trigger_limit_s3 = exchange
-            .get_order(&id_trigger_limit)
+            .get_order(BTC, &id_trigger_limit)
             .await
             .unwrap()
             .unwrap();
@@ -4087,7 +4107,7 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let trigger_limit_s4 = exchange
-            .get_order(&id_trigger_limit)
+            .get_order(BTC, &id_trigger_limit)
             .await
             .unwrap()
             .unwrap();
@@ -4118,7 +4138,7 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let trigger_limit_s5 = exchange
-            .get_order(&id_trigger_limit)
+            .get_order(BTC, &id_trigger_limit)
             .await
             .unwrap()
             .unwrap();
@@ -4215,7 +4235,7 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let cash_after = exchange.get_cash().await.unwrap();
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Rejected);
         assert_eq!(cash_after, cash_before);
@@ -4255,7 +4275,7 @@ mod tests {
         let id = exchange.buy_limit(BTC, 90.0, 1.0).await.unwrap();
         exchange.cancel_order(BTC, &id).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Canceled);
     }
 
@@ -4272,7 +4292,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Filled);
     }
 
@@ -4290,7 +4310,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Rejected);
     }
 
@@ -4311,7 +4331,7 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let cash_after = exchange.get_cash().await.unwrap();
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Rejected);
         assert_eq!(cash_after, cash_before);
@@ -4342,7 +4362,7 @@ mod tests {
         // 第 2 根触发并立即执行，名义价值不足应被拒绝
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         // 触发单状态应为 Filled（已触发）
         assert_eq!(order.status, Status::Filled);
 
@@ -4381,7 +4401,7 @@ mod tests {
         // 第 2 根触发并立即执行（限价110≥开盘价105，以最高价106成交）
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let trigger_order = exchange.get_order(&id).await.unwrap().unwrap();
+        let trigger_order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(trigger_order.status, Status::Filled);
 
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
@@ -4423,8 +4443,8 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order1 = exchange.get_order(&id1).await.unwrap().unwrap();
-        let order2 = exchange.get_order(&id2).await.unwrap().unwrap();
+        let order1 = exchange.get_order(BTC, &id1).await.unwrap().unwrap();
+        let order2 = exchange.get_order(BTC, &id2).await.unwrap().unwrap();
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(order1.status, Status::Filled);
@@ -4445,8 +4465,8 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let market_order = exchange.get_order(&market_id).await.unwrap().unwrap();
-        let trigger_order = exchange.get_order(&trigger_id).await.unwrap().unwrap();
+        let market_order = exchange.get_order(BTC, &market_id).await.unwrap().unwrap();
+        let trigger_order = exchange.get_order(BTC, &trigger_id).await.unwrap().unwrap();
 
         assert_eq!(market_order.status, Status::Filled);
         assert_eq!(trigger_order.status, Status::Filled);
@@ -4479,8 +4499,8 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let close_order_1 = exchange.get_order(&close_id_1).await.unwrap().unwrap();
-        let close_order_2 = exchange.get_order(&close_id_2).await.unwrap().unwrap();
+        let close_order_1 = exchange.get_order(BTC, &close_id_1).await.unwrap().unwrap();
+        let close_order_2 = exchange.get_order(BTC, &close_id_2).await.unwrap().unwrap();
 
         assert_eq!(close_order_1.status, Status::Filled);
         assert_eq!(close_order_2.status, Status::Canceled);
@@ -4583,7 +4603,7 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let cash_after = exchange.get_cash().await.unwrap();
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Rejected);
         assert_eq!(cash_after, cash_before);
@@ -4805,8 +4825,8 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let exact = exchange.get_order(&exact_id).await.unwrap().unwrap();
-        let below = exchange.get_order(&below_id).await.unwrap().unwrap();
+        let exact = exchange.get_order(BTC, &exact_id).await.unwrap().unwrap();
+        let below = exchange.get_order(BTC, &below_id).await.unwrap().unwrap();
 
         assert_eq!(exact.status, Status::Filled);
         assert_eq!(below.status, Status::Submitted);
@@ -5012,8 +5032,8 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let limit_order = exchange.get_order(&limit_id).await.unwrap().unwrap();
-        let market_order = exchange.get_order(&market_id).await.unwrap().unwrap();
+        let limit_order = exchange.get_order(BTC, &limit_id).await.unwrap().unwrap();
+        let market_order = exchange.get_order(BTC, &market_id).await.unwrap().unwrap();
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(limit_order.status, Status::Filled);
@@ -5085,7 +5105,7 @@ mod tests {
         let close_id = exchange.sell_reduce_only(BTC, 5.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let close_order = exchange.get_order(&close_id).await.unwrap().unwrap();
+        let close_order = exchange.get_order(BTC, &close_id).await.unwrap().unwrap();
         let history = exchange.get_history_position_list(BTC).await.unwrap();
 
         assert_eq!(close_order.status, Status::Filled);
@@ -5232,7 +5252,7 @@ mod tests {
         let id = exchange.buy_reduce_only(BTC, 0.5).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         let position_after = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Canceled);
@@ -5563,7 +5583,7 @@ mod tests {
         let id = exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Filled);
         assert_eq!(order.avg_price, 106.0);
     }
@@ -5590,7 +5610,7 @@ mod tests {
         let id = exchange.sell(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Filled);
         assert_eq!(order.avg_price, 104.0);
     }
@@ -5649,7 +5669,7 @@ mod tests {
         buy_exchange.next(BTC, Level::Minute1).await.unwrap();
         let buy_id = buy_exchange.buy(BTC, 1.0).await.unwrap();
         buy_exchange.next(BTC, Level::Minute1).await.unwrap();
-        let buy_order = buy_exchange.get_order(&buy_id).await.unwrap().unwrap();
+        let buy_order = buy_exchange.get_order(BTC, &buy_id).await.unwrap().unwrap();
         assert_eq!(buy_order.avg_price, 105.0 * 1.005,);
 
         let data_source = DataSource::new(
@@ -5670,7 +5690,11 @@ mod tests {
         sell_exchange.next(BTC, Level::Minute1).await.unwrap();
         let sell_id = sell_exchange.sell(BTC, 1.0).await.unwrap();
         sell_exchange.next(BTC, Level::Minute1).await.unwrap();
-        let sell_order = sell_exchange.get_order(&sell_id).await.unwrap().unwrap();
+        let sell_order = sell_exchange
+            .get_order(BTC, &sell_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(sell_order.avg_price, 105.0 * 0.995,);
     }
 
@@ -5689,7 +5713,7 @@ mod tests {
         let id = exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Filled);
         assert_eq!(order.avg_price, 105.0);
     }
@@ -5716,7 +5740,7 @@ mod tests {
         let id = exchange.buy_limit(BTC, 105.0, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Filled);
         assert_eq!(order.avg_price, 106.0);
     }
@@ -5744,7 +5768,7 @@ mod tests {
         let trigger_id = exchange.buy_trigger_market(BTC, 105.0, 1.0).await.unwrap();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
-        let trigger_order = exchange.get_order(&trigger_id).await.unwrap().unwrap();
+        let trigger_order = exchange.get_order(BTC, &trigger_id).await.unwrap().unwrap();
         assert_eq!(trigger_order.status, Status::Filled);
 
         // 触发后立即执行，以当前K线开盘价加滑点成交，夹取到最高价
@@ -5776,7 +5800,7 @@ mod tests {
         let trigger_id = exchange.sell_trigger_market(BTC, 105.0, 1.0).await.unwrap();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
-        let trigger_order = exchange.get_order(&trigger_id).await.unwrap().unwrap();
+        let trigger_order = exchange.get_order(BTC, &trigger_id).await.unwrap().unwrap();
         assert_eq!(trigger_order.status, Status::Filled);
 
         // 触发后立即执行，以当前K线开盘价减滑点成交，夹取到最低价
@@ -6227,7 +6251,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Filled);
@@ -6692,7 +6716,7 @@ mod tests {
             .unwrap();
 
         // 公开 API 过滤强平单，用户不可见
-        assert!(exchange.get_order(&liq.id).await.unwrap().is_none());
+        assert!(exchange.get_order(BTC, &liq.id).await.unwrap().is_none());
 
         // 内部仍保留强平单
         let order = get_order_all(&raw, &liq.id).await;
@@ -6804,7 +6828,7 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let order = exchange.get_order(&id).await.unwrap().unwrap();
+        let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Filled);
         // 按指定价 106.0 加滑点 = 106.0 * 1.01 = 107.06，夹取到 high=106.0
         assert_eq!(order.avg_price, 106.0);
@@ -6817,8 +6841,25 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let result = exchange.get_order("non-existent-id").await.unwrap();
+        let result = exchange.get_order(BTC, "non-existent-id").await.unwrap();
         assert!(result.is_none());
+    }
+
+    // 验证 get_order 按 symbol 过滤：用另一个 symbol 查同一个订单 ID 返回 None。
+    #[tokio::test]
+    async fn get_order_filters_by_symbol() {
+        let exchange = multi_exchange();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.next(ETH, Level::Minute1).await.unwrap();
+
+        let id = exchange.buy(BTC, 1.0).await.unwrap();
+
+        let found = exchange.get_order(BTC, &id).await.unwrap();
+        assert!(found.is_some());
+
+        let wrong_symbol = exchange.get_order(ETH, &id).await.unwrap();
+        assert!(wrong_symbol.is_none());
     }
 
     // 验证双 symbol 完整往返：BTC 做多、ETH 做空，各自独立平仓且历史正确。

@@ -299,6 +299,23 @@ async fn my_strategy(
 }
 ```
 
+### 🕳️ 缺口检测：`cx.missed`
+
+实盘的 K 线可能会丢——WebSocket 重连、进程卡顿、交易所跳过几根。引擎会用 `get_kline` 把空洞补回来，所以 `cx.close` 仍然连续，但**策略只会被调用一次**，而不是每根补回来的 K 线调用一次。
+
+`cx.missed` 就是这次被跳过的策略级 K 线根数，正常情况为 `0`：
+
+```rust
+// 把策略没看到的 bar 按从旧到新喂回去
+for i in (0..=cx.missed).rev() {
+    self.ema_cache.update(cx.close[i]);
+}
+```
+
+正常 bar 上这个循环等价于只喂 `close[0]`。忽略 `cx.missed` 的策略，只在「永远不出缺口」的前提下才是对的——要么按上面回放，要么用 `EMACache::from_series` 从历史重建。
+
+`cx.request(...)` 返回的 `Context` 上也带同一个字段，对应它所代表的 symbol。
+
 ## 📊 Series
 
 `Series` 是 `Context` 中贯穿始终的核心数值类型。它封装了一个倒序切片——`series[0]` 是当前 K 线，`series[1]` 是上一根，以此类推。越界索引返回 `Decimal::MAX`。
@@ -626,6 +643,27 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+### 🛫 预加载历史（仅实盘）
+
+刚启动的实盘策略在指标攒够数据之前是瞎的——`sma(cx.close, 200)` 在前 200 根 K 线里一直返回 `None`。预加载会在第一根实盘 K 线之前把历史拉下来，让策略开局就能用：
+
+```rust
+// 取第一根实盘 K 线之前的 200 根
+engine.preload(200);
+
+// ……或者从某个时间戳起（0 = 能拉多早拉多早）
+engine.preload_from(1735689600000);
+
+// ……或者用内存里已有的数据当种子
+engine.preload_data(data_source);
+```
+
+三者只能生效一个，后设置的覆盖前面的。回测会忽略预加载——回测数据本来就从头开始。
+
+预加载区间**恰好截止到第一根实盘 K 线的前一根**，所以 `cx` 保持连续、不会和它重叠。如果种子数据的末尾到第一根实盘 K 线之间的空洞无法通过 `get_kline` 补上，引擎会直接终止，而不是带着缺口启动。
+
+预加载填的是 `cx`，不是你自己的状态：`EMACache` 仍然从零开始，除非你在第一次调用时用 `EMACache::from_series(cx.close, 144)` 从历史重建。
 
 ## 🧰 常用工具函数
 

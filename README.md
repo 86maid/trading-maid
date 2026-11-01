@@ -298,6 +298,23 @@ async fn my_strategy(
 }
 ```
 
+### 🕳️ Gap Detection: `cx.missed`
+
+Live k-lines can be lost — a websocket reconnect, a stalled process, or a venue that skips candles. The engine backfills the hole through `get_kline`, so `cx.close` stays continuous, but **the strategy is called once**, not once per backfilled bar.
+
+`cx.missed` is the number of strategy-level bars that went by without a call. It is `0` on a normal bar:
+
+```rust
+// Feed every bar the strategy did not see, oldest first.
+for i in (0..=cx.missed).rev() {
+    self.ema_cache.update(cx.close[i]);
+}
+```
+
+On a normal bar this collapses to `close[0]`. A strategy that ignores `cx.missed` stays correct only as long as no gap ever happens — so either replay the skipped bars as above, or rebuild from history with `EMACache::from_series`.
+
+`cx.request(...)` exposes the same field for the symbol it returns.
+
 ## 📊 Series
 
 `Series` is the core numeric type used throughout `Context`. It wraps a reversed slice — `series[0]` is the current bar, `series[1]` the previous, and so on. Out-of-bounds indices return `Decimal::MAX`.
@@ -625,6 +642,27 @@ async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+### 🛫 Preloading History (Live Only)
+
+A freshly started live strategy is blind until its indicators have seen enough bars — `sma(cx.close, 200)` returns `None` for the first 200 bars. Preloading pulls history before the first live k-line so the strategy is usable immediately:
+
+```rust
+// Take the last 200 bars before the first live k-line.
+engine.preload(200);
+
+// ...or everything from this timestamp onward (0 = as early as the exchange allows).
+engine.preload_from(1735689600000);
+
+// ...or seed from data you already hold in memory.
+engine.preload_data(data_source);
+```
+
+Only one setting applies; the last call wins. Preloading is ignored in backtests, where the data source already starts from its first bar.
+
+The preloaded range ends **exactly one bar before** the first live k-line, so `cx` stays contiguous and never duplicates that bar. If the gap between the seed and the first live bar cannot be filled through `get_kline`, the engine aborts rather than starting with a hole.
+
+Preloading fills `cx`, not your own state: an `EMACache` still starts from zero unless you seed it with `EMACache::from_series(cx.close, 144)` on the first call.
 
 ## 🧰 Utility Functions
 

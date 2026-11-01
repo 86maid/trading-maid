@@ -167,8 +167,8 @@ where
     /// Cancel all pending orders for the given symbol.
     async fn cancel_all_order(&self, symbol: &str) -> anyhow::Result<()>;
 
-    /// Query an order by ID. Returns `None` if not found.
-    async fn get_order(&self, id: &str) -> anyhow::Result<Option<OrderMessage>>;
+    /// Query an order by ID within `symbol`. Returns `None` if not found.
+    async fn get_order(&self, symbol: &str, id: &str) -> anyhow::Result<Option<OrderMessage>>;
 
     /// Return all historical orders (filled, canceled, rejected) for the symbol.
     async fn get_history_order_list(&self, symbol: &str) -> anyhow::Result<Vec<OrderMessage>>;
@@ -541,7 +541,7 @@ where
                         })
                         .await?;
 
-                    self.get_order(&order_id)
+                    self.get_order(symbol, &order_id)
                         .await?
                         .context("take profit order not found")?
                         .status
@@ -566,7 +566,7 @@ where
                         })
                         .await?;
 
-                    self.get_order(&order_id)
+                    self.get_order(symbol, &order_id)
                         .await?
                         .context("stop loss order not found")?
                         .status
@@ -624,7 +624,7 @@ where
                         })
                         .await?;
 
-                    self.get_order(&order_id)
+                    self.get_order(symbol, &order_id)
                         .await?
                         .context("take profit order not found")?
                         .status
@@ -649,7 +649,7 @@ where
                         })
                         .await?;
 
-                    self.get_order(&order_id)
+                    self.get_order(symbol, &order_id)
                         .await?
                         .context("stop loss order not found")?
                         .status
@@ -743,9 +743,13 @@ impl ExchangeWrapper {
         self.0.cancel_all_order(symbol.as_ref()).await
     }
 
-    /// Query an order by ID. Returns `None` if not found.
-    pub async fn get_order(&self, id: impl AsRef<str>) -> anyhow::Result<Option<OrderMessage>> {
-        self.0.get_order(id.as_ref()).await
+    /// Query an order by ID within `symbol`. Returns `None` if not found.
+    pub async fn get_order(
+        &self,
+        symbol: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> anyhow::Result<Option<OrderMessage>> {
+        self.0.get_order(symbol.as_ref(), id.as_ref()).await
     }
 
     /// Return all historical orders (filled, canceled, rejected) for the symbol.
