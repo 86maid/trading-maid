@@ -394,10 +394,10 @@ if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
 
 You can use `hook` to stop backtesting when a position is liquidated or an order is rejected (insufficient balance).
 
-The hook function is called after the strategy executes on each k-line.
+The hook function is called after the strategy executes on each k-line. Its second argument carries the k-lines that had to be backfilled after a network interruption (empty on a normal bar), so the hook's own state can catch up.
 
 ```rust
-async fn my_hook(_: KLine, exchange: Arc<dyn Exchange + 'static>) -> anyhow::Result<()> {
+async fn my_hook(_: KLine, _: &[KLine], exchange: ExchangeWrapper) -> anyhow::Result<()> {
     if let Some(v) = exchange
         .get_history_order_list("BTCUSDT")
         .await?
@@ -697,7 +697,6 @@ The `examples/` directory contains runnable strategies that demonstrate differen
 ### 🧪 EMA Strategy Example
 
 ```rust
-use std::sync::Arc;
 use trading_maid::prelude::*;
 
 struct MyStrategy {
@@ -752,7 +751,7 @@ impl Strategy for MyStrategy {
 }
 
 // Stop backtesting when liquidation happens or an order is rejected (insufficient balance).
-async fn my_hook(_: KLine, exchange: Arc<dyn Exchange + 'static>) -> anyhow::Result<()> {
+async fn my_hook(_: KLine, _: &[KLine], exchange: ExchangeWrapper) -> anyhow::Result<()> {
     if let Some(v) = exchange
         .get_history_order_list("BTCUSDT")
         .await?

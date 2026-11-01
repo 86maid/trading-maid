@@ -395,10 +395,10 @@ if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
 
 使用 `hook` 可以在仓位发生强平，或者订单被拒绝（余额不足）的时候停止回测。
 
-引擎在每根 K 线执行完策略后都会调用 hook 函数。
+引擎在每根 K 线执行完策略后都会调用 hook 函数。第二个参数是网络中断后补回来的 K 线（正常情况下为空），hook 可以据此把自己的状态补齐。
 
 ```rust
-async fn my_hook(_: KLine, exchange: Arc<dyn Exchange + 'static>) -> anyhow::Result<()> {
+async fn my_hook(_: KLine, _: &[KLine], exchange: ExchangeWrapper) -> anyhow::Result<()> {
     if let Some(v) = exchange
         .get_history_order_list("BTCUSDT")
         .await?
@@ -698,7 +698,6 @@ summarize(&history_position_list);
 ### 🧪 EMA 策略例子
 
 ```rust
-use std::sync::Arc;
 use trading_maid::prelude::*;
 
 struct MyStrategy {
@@ -753,7 +752,7 @@ impl Strategy for MyStrategy {
 }
 
 // 仓位发生强平，或者订单被拒绝（余额不足）的时候停止回测
-async fn my_hook(_: KLine, exchange: Arc<dyn Exchange + 'static>) -> anyhow::Result<()> {
+async fn my_hook(_: KLine, _: &[KLine], exchange: ExchangeWrapper) -> anyhow::Result<()> {
     if let Some(v) = exchange
         .get_history_order_list("BTCUSDT")
         .await?

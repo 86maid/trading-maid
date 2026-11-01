@@ -34,27 +34,33 @@ pub trait HookFn {
     /// Called after the strategy's `next` on each k-line.
     ///
     /// - `kline`: the k-line that was just processed (at the **source** level, e.g. 1m).
-    /// - `exchange`: the raw [`Exchange`] trait object for querying state.
+    /// - `missed_kline_list`: source-level k-lines that had to be backfilled from the exchange
+    ///   because a network interruption dropped them, in ascending time order. Empty on a normal
+    ///   k-line. When it is not empty the hook's own state must be replayed over it before
+    ///   `kline`; every entry is older than `kline`.
+    /// - `exchange`: the exchange handle for querying state.
     ///
     /// Return `Ok(())` to continue, or `Err(...)` to stop the engine.
     async fn next(
         &mut self,
         kline: KLine,
-        exchange: Arc<dyn Exchange + 'static>,
+        missed_kline_list: &[KLine],
+        exchange: ExchangeWrapper,
     ) -> anyhow::Result<()>;
 }
 
 #[async_trait::async_trait(?Send)]
 impl<T> HookFn for T
 where
-    T: AsyncFn(KLine, Arc<dyn Exchange + 'static>) -> anyhow::Result<()>,
+    T: AsyncFn(KLine, &[KLine], ExchangeWrapper) -> anyhow::Result<()>,
 {
     async fn next(
         &mut self,
         kline: KLine,
-        exchange: Arc<dyn Exchange + 'static>,
+        missed_kline_list: &[KLine],
+        exchange: ExchangeWrapper,
     ) -> anyhow::Result<()> {
-        self(kline, exchange).await
+        self(kline, missed_kline_list, exchange).await
     }
 }
 
@@ -124,8 +130,9 @@ where
 
     /// Set a hook that runs after the strategy on **every** source-level k-line.
     ///
-    /// The hook receives the raw k-line and an `Arc<dyn Exchange>` for querying
-    /// state. Return an error to stop the engine immediately.
+    /// The hook receives the raw k-line, the source-level k-lines that had to be backfilled
+    /// because of a network interruption, and an [`ExchangeWrapper`] for querying state.
+    /// Return an error to stop the engine immediately.
     ///
     /// Typical use: detect liquidation or rejected orders and abort the backtest.
     pub fn hook(&mut self, hook: impl HookFn + 'static) {
@@ -330,6 +337,9 @@ where
                         next_time = Some(new_next_time);
                         prev_time = kline.time;
 
+                        // 补回来的 source bar，hook 需要靠它追上自己的状态
+                        let missed_kline_list = filled.clone().unwrap_or_default();
+
                         if let Some(filled) = filled {
                             source_level_kline_buffer.extend(filled);
                         }
@@ -388,7 +398,12 @@ where
                         }
 
                         if let Some(hook) = &mut self.hook {
-                            hook.next(kline, self.exchange.clone()).await?;
+                            hook.next(
+                                kline,
+                                &missed_kline_list,
+                                ExchangeWrapper::new(self.exchange.clone()),
+                            )
+                            .await?;
                         }
                     }
                     None => return Ok(()),
@@ -523,6 +538,9 @@ where
                         state.prev_time = current.time;
                         buffer.missed = 0;
 
+                        // 补回来的 source bar，hook 需要靠它追上自己的状态
+                        let missed_kline_list = filled.clone().unwrap_or_default();
+
                         if let Some(filled) = filled {
                             for k in &filled {
                                 buffer.source_kline_resample_buffer.push(*k);
@@ -551,7 +569,12 @@ where
                         }
 
                         if let Some(hook) = &mut self.hook {
-                            hook.next(current, self.exchange.clone()).await?;
+                            hook.next(
+                                current,
+                                &missed_kline_list,
+                                ExchangeWrapper::new(self.exchange.clone()),
+                            )
+                            .await?;
                         }
                     }
                     None => {
