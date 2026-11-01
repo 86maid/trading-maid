@@ -201,6 +201,21 @@ impl EMACache {
         }
     }
 
+    /// Seed the cache by replaying a whole series, oldest bar first.
+    ///
+    /// The series usually holds every bar the engine has, so this rebuilds the exact state the
+    /// cache would have reached had it been updated once per bar. Use it at startup after a
+    /// preload, or when [`Context::missed`](crate::context::Context::missed) reports a gap.
+    pub fn from_series(series: &Series, length: usize) -> Self {
+        let mut cache = Self::new(length);
+
+        for price in series.iter() {
+            cache.update(*price);
+        }
+
+        cache
+    }
+
     pub fn update(&mut self, price: impl Into<Decimal>) -> Option<Decimal> {
         let price = price.into();
 
@@ -261,6 +276,21 @@ impl RSICache {
             avg_gain: dec!(0),
             avg_loss: dec!(0),
         }
+    }
+
+    /// Seed the cache by replaying a whole series, oldest bar first.
+    ///
+    /// The series usually holds every bar the engine has, so this rebuilds the exact state the
+    /// cache would have reached had it been updated once per bar. Use it at startup after a
+    /// preload, or when [`Context::missed`](crate::context::Context::missed) reports a gap.
+    pub fn from_series(series: &Series, length: usize) -> Self {
+        let mut cache = Self::new(length);
+
+        for price in series.iter() {
+            cache.update(*price);
+        }
+
+        cache
     }
 
     pub fn update(&mut self, price: impl Into<Decimal>) -> Option<Decimal> {

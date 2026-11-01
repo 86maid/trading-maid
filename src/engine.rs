@@ -12,13 +12,13 @@ use std::sync::Arc;
 /// zero means unlimited.
 pub const DEFAULT_SERIES_MAX_LENGTH: usize = 0;
 
-// 预加载的三种模式，三选一，后设置的覆盖前面的；不设置 = 完全不预加载。
+/// 预加载的三种模式，三选一，后设置的覆盖前面的；不设置 = 完全不预加载。
 enum Preload {
-    // 按根数往前退
+    /// 按根数往前退
     KLineCount(usize),
-    // 从某个时间戳起（0 = 能拉多早拉多早）
+    /// 从某个时间戳起（0 = 能拉多早拉多早）
     From(u64),
-    // 用内存里的 DataSource 当种子
+    /// 用内存里的 DataSource 当种子
     Data(DataSource),
 }
 
@@ -308,14 +308,12 @@ where
 
             loop {
                 match self.exchange.next(symbol, source_level).await? {
-                    Some(v) => {
-                        // 第一根 live K 线到达时才有锚点，用它做终点往回预加载。
-                        // 只做一次；回测里 build_preload 会直接返回空
+                    Some(kline) => {
                         if !preloaded {
                             preloaded = true;
 
                             strategy_level_kline_buffer.extend(
-                                self.build_preload(symbol, source_level, v.time).await?,
+                                self.build_preload(symbol, source_level, kline.time).await?,
                             );
                         }
 
@@ -323,24 +321,29 @@ where
                             self.exchange.clone(),
                             symbol,
                             source_level,
-                            v,
+                            kline,
                             next_time,
                             prev_time,
                         )
                         .await?;
 
                         next_time = Some(new_next_time);
-                        prev_time = v.time;
+                        prev_time = kline.time;
 
                         if let Some(filled) = filled {
                             source_level_kline_buffer.extend(filled);
                         }
 
-                        source_level_kline_buffer.push(v);
+                        source_level_kline_buffer.push(kline);
 
-                        if v.time == get_last_time(v.time, source_level, strategy_level)? {
-                            strategy_level_kline_buffer
-                                .extend(resample(&source_level_kline_buffer, strategy_level)?);
+                        if kline.time == get_last_time(kline.time, source_level, strategy_level)? {
+                            let new_bar_list =
+                                resample(&source_level_kline_buffer, strategy_level)?;
+
+                            // 一次补进来的多根说明中间有网络缺口，策略只会为最后一根被调用
+                            let missed = new_bar_list.len().saturating_sub(1);
+
+                            strategy_level_kline_buffer.extend(new_bar_list);
 
                             source_level_kline_buffer.clear();
 
@@ -354,6 +357,7 @@ where
                                 low: Series::new(window.low),
                                 close: Series::new(window.close),
                                 volume: Series::new(window.volume),
+                                missed,
                                 exchange: &exchange,
                                 series: SeriesTable(
                                     self.series
@@ -384,7 +388,7 @@ where
                         }
 
                         if let Some(hook) = &mut self.hook {
-                            hook.next(v, self.exchange.clone()).await?;
+                            hook.next(kline, self.exchange.clone()).await?;
                         }
                     }
                     None => return Ok(()),
@@ -463,16 +467,22 @@ where
                 let prev_time = states[i].prev_time;
 
                 handle_list.push(tokio::spawn(async move {
-                    let v = match ex.next(&symbol, source_level).await? {
-                        Some(v) => v,
+                    let kline = match ex.next(&symbol, source_level).await? {
+                        Some(kline) => kline,
                         None => return Ok::<_, anyhow::Error>((i, None)),
                     };
 
-                    let (filled, new_next_time) =
-                        check_kline(ex.clone(), &symbol, source_level, v, next_time, prev_time)
-                            .await?;
+                    let (filled, new_next_time) = check_kline(
+                        ex.clone(),
+                        &symbol,
+                        source_level,
+                        kline,
+                        next_time,
+                        prev_time,
+                    )
+                    .await?;
 
-                    Ok((i, Some((v, filled, new_next_time))))
+                    Ok((i, Some((kline, filled, new_next_time))))
                 }));
             }
 
@@ -489,8 +499,6 @@ where
                     Some((current, filled, new_next_time)) => {
                         all_eof = false;
 
-                        // 该 symbol 的第一根 live K 线到达时预加载一次。
-                        // 回测里 build_preload 直接返回空，不会有多余请求
                         if !states[symbol_index].preloaded {
                             states[symbol_index].preloaded = true;
 
@@ -513,6 +521,7 @@ where
 
                         state.next_time = Some(new_next_time);
                         state.prev_time = current.time;
+                        buffer.missed = 0;
 
                         if let Some(filled) = filled {
                             for k in &filled {
@@ -529,11 +538,11 @@ where
                         if current.time
                             == get_last_time(current.time, source_level, strategy_level)?
                         {
-                            buffer.strategy_level_kline_buffer.extend(resample(
-                                &buffer.source_kline_resample_buffer,
-                                strategy_level,
-                            )?);
+                            let new_bar_list =
+                                resample(&buffer.source_kline_resample_buffer, strategy_level)?;
 
+                            buffer.missed = new_bar_list.len().saturating_sub(1);
+                            buffer.strategy_level_kline_buffer.extend(new_bar_list);
                             buffer.source_kline_resample_buffer.clear();
 
                             if symbol_list[symbol_index] == *primary {
@@ -595,13 +604,14 @@ where
             max_size: N,
         };
 
-        let primary_kline_context = &request_context
+        let primary_symbol_context = request_context
             .symbol
             .iter()
             .find(|(s, _)| s == primary)
             .map(|(_, v)| v)
-            .unwrap()
-            .strategy_level_kline_context;
+            .unwrap();
+
+        let primary_kline_context = &primary_symbol_context.strategy_level_kline_context;
 
         // 自定义系列必须与 OHLCV 数据在时间上有交集才能在策略中访问到，否则返回空切片 []
         let context = Context {
@@ -611,6 +621,7 @@ where
             low: Series::new(primary_kline_context.low),
             close: Series::new(primary_kline_context.close),
             volume: Series::new(primary_kline_context.volume),
+            missed: primary_symbol_context.missed,
             exchange,
             series: SeriesTable(
                 self.series
@@ -654,8 +665,6 @@ where
         if !self.exchange.is_live() || self.preload.is_none() {
             return Ok(Vec::new());
         }
-
-        // 只服务于预加载的小工具，放在函数内部，不污染模块命名空间。
 
         // 从 time 往前退 count 根 K 线。
         // 有固定时长的级别一次算完；月线长度随日历变化，逐根退。
@@ -800,6 +809,7 @@ struct SymbolBuffer {
     source_level_kline_buffer: KLineBuffer,
     strategy_level_kline_buffer: KLineBuffer,
     level_kline_table: RefCell<Vec<LevelKLine>>,
+    missed: usize,
     eof: bool,
 }
 
@@ -811,6 +821,7 @@ impl SymbolBuffer {
             source_level_kline_buffer: KLineBuffer::new(max_len),
             strategy_level_kline_buffer: KLineBuffer::new(max_len),
             level_kline_table: RefCell::new(Vec::new()),
+            missed: 0,
             eof: false,
         }
     }
@@ -838,6 +849,7 @@ impl SymbolBuffer {
             },
             source_kline_buffer: &self.source_kline_buffer,
             level_kline_table: &self.level_kline_table,
+            missed: self.missed,
         }
     }
 }

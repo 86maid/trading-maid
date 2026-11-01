@@ -33,6 +33,13 @@ pub struct Context<'a> {
     pub low: &'a Series,
     pub close: &'a Series,
     pub volume: &'a Series,
+    /// How many strategy-level bars went by without a call because the incoming bars were lost
+    /// to a network interruption and had to be backfilled from the exchange.
+    ///
+    /// The backfilled bars are already inside `close`, so the series stays continuous and this
+    /// counter is the only way to notice the jump. A stateful strategy can catch up by feeding
+    /// `close[missed]`, `close[missed - 1]`, ..., `close[0]` in that order. `0` on a normal bar.
+    pub missed: usize,
     pub exchange: &'a ExchangeWrapper,
     pub series: SeriesTable<'a>,
     pub(crate) request_context: Option<&'a RequestContext<'a>>,
@@ -142,6 +149,7 @@ impl<'a> Context<'a> {
                     })
                     .collect(),
             ),
+            missed: symbol_context.missed,
             request_context: Some(request_context),
         })
     }
@@ -161,6 +169,7 @@ pub(crate) struct SymbolContext<'a> {
     pub source_level_kline_context: KLineContext<'a>,
     pub source_kline_buffer: &'a [KLine],
     pub level_kline_table: &'a RefCell<Vec<LevelKLine>>,
+    pub missed: usize,
 }
 
 pub(crate) struct LevelKLine {
