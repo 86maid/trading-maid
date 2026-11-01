@@ -60,8 +60,12 @@ where
     /// - If the current time has not yet reached the generation time of the next K-line
     ///   (i.e., a complete `level` cycle has not elapsed),
     ///   the call will **block** until a new K-line is generated.
-    /// - The returned K-line data should be temporally continuous with the K-line returned
-    ///   from the previous call.
+    /// - The returned K-line must be strictly newer than the previous one: **duplicates**
+    ///   (same timestamp) and **regressions** (earlier timestamp) are both fatal.
+    /// - The returned K-line does **not** have to be the immediate successor of the previous
+    ///   one. Skipping bars — e.g. `1, 2, 3, 7, 8, 9` instead of `1, 2, 3, 4, 5, 6, 7` — is
+    ///   allowed and is the normal outcome of a stall, a network interruption, or simply
+    ///   polling the venue for "the latest bar" instead of replaying every cycle.
     ///
     /// # Parameters
     /// - `symbol`: The trading symbol, e.g., `"BTCUSDT"`.
@@ -79,6 +83,34 @@ where
     /// limits — are **not** EOF and must **not** be reported as `Ok(None)`. A live implementation
     /// should handle them internally and keep blocking until a K-line is available. Reporting a
     /// transient failure as `Ok(None)` makes the engine end the run as if the data had finished.
+    ///
+    /// # Gaps: prefer skipping over backfilling
+    ///
+    /// When the returned K-line does not follow the previous one directly, the engine calls
+    /// [`Exchange::get_kline`] to backfill the skipped range before invoking the strategy.
+    /// The backfilled bars land in the series, but the strategy is invoked **once**, with
+    /// [`Context::missed`](crate::context::Context::missed) reporting how many bars went by
+    /// without a call.
+    ///
+    /// **Exchanges should avoid handing the engine a gap on purpose.** Backfilling makes the
+    /// strategy's own state (`EMACache`, `RSICache`, hand-rolled `VecDeque` windows, bar
+    /// counters) silently drift: the series contains N more bars but the indicator was only
+    /// updated once. Correcting for that is the strategy's burden, and it is easy to get wrong.
+    ///
+    /// So a live [`next`](Exchange::next) should prefer:
+    ///
+    /// - **internally retrying** transient failures and continuing to block — a retried poll
+    ///   still returns the very next bar, so no gap is ever produced; and
+    /// - **delivering skipped bars one by one** when it knows they were skipped (e.g. the venue
+    ///   closed several candles while the process was suspended), instead of jumping to the
+    ///   newest one and leaving the rest to `get_kline`.
+    ///
+    /// Treat "the engine had to call `get_kline`" as an exceptional path, not a routine one:
+    /// historical endpoints are paged, rate-limited and often less fresh than the quote
+    /// endpoint, so backfilling is both slower and more failure-prone than streaming the bars
+    /// out directly. Strategies that do not handle
+    /// [`Context::missed`](crate::context::Context::missed) keep working correctly only as
+    /// long as `missed` stays `0`.
     ///
     /// # Note
     /// If the returned K-line timestamp is not continuous with the previous K-line timestamp

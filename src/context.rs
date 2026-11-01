@@ -39,6 +39,13 @@ pub struct Context<'a> {
     /// The backfilled bars are already inside `close`, so the series stays continuous and this
     /// counter is the only way to notice the jump. A stateful strategy can catch up by feeding
     /// `close[missed]`, `close[missed - 1]`, ..., `close[0]` in that order. `0` on a normal bar.
+    ///
+    /// This is the safety net for a gap in [`Exchange::next`]. A live exchange is expected to
+    /// retry transient failures internally and to deliver skipped bars one by one, so that
+    /// `missed` stays `0` in normal operation — see the gap guidance on [`Exchange::next`]. A
+    /// strategy that keeps its own incremental state (EMA/RSI caches, rolling windows, bar
+    /// counters) is only correct while `missed == 0`, so it must either check this field and
+    /// rebuild that state, or accept that a stalled feed skews its indicators.
     pub missed: usize,
     pub exchange: &'a ExchangeWrapper,
     pub series: SeriesTable<'a>,
