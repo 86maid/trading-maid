@@ -245,10 +245,7 @@ async fn gap_is_reported_as_missed() {
     assert_eq!(recorder.missed.borrow().as_slice(), &[0, 2]);
 
     // 补回来的 bar 就在序列里，所以策略看到的收盘价是连续的
-    assert_eq!(
-        recorder.close.borrow().as_slice(),
-        &[dec!(100), dec!(103)]
-    );
+    assert_eq!(recorder.close.borrow().as_slice(), &[dec!(100), dec!(103)]);
 }
 
 #[tokio::test]
@@ -307,7 +304,10 @@ async fn request_sees_the_forming_bar_of_a_coarser_level() {
     let mut engine = Engine::new(exchange, recorder.strategy());
 
     engine
-        .run(vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()], Level::Minute1)
+        .run(
+            vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()],
+            Level::Minute1,
+        )
         .await
         .unwrap();
 

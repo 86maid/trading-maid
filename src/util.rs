@@ -551,7 +551,7 @@ pub async fn get_or_download_funding_rate_to_series(
 ///
 /// The source level of `data` is detected automatically by examining the gap
 /// between the first two timestamps against every known [`Level`] variant
-/// (including calendar-aware levels like [`Month1`]).  When detected:
+/// (including calendar-aware levels like [`Level::Month1`]).  When detected:
 ///
 /// - **source ≥ target**: fine — forward-fill repeats coarse values onto
 ///   finer bars (e.g. 8 h → 1 h).

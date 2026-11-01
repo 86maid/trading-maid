@@ -83,7 +83,8 @@ where
     /// # Note
     /// If the returned K-line timestamp is not continuous with the previous K-line timestamp
     /// (i.e., there is a time gap),
-    /// the backtesting engine will automatically call [`get_kline`] to fill in the missing data segments.
+    /// the backtesting engine will automatically call [`Exchange::get_kline`] to fill in the
+    /// missing data segments.
     async fn next(&self, symbol: &str, level: Level) -> anyhow::Result<Option<KLine>>;
 
     /// Batch retrieves historical K-line data within a specified time range.

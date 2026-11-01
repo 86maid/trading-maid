@@ -54,11 +54,7 @@ impl Strategy for MyStrategy {
     }
 }
 
-async fn my_hook(
-    _: KLine,
-    _: &[KLine],
-    exchange: ExchangeWrapper,
-) -> anyhow::Result<()> {
+async fn my_hook(_: KLine, _: &[KLine], exchange: ExchangeWrapper) -> anyhow::Result<()> {
     if let Some(v) = exchange
         .get_history_order_list("BTCUSDT")
         .await?
