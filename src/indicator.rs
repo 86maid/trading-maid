@@ -210,7 +210,9 @@ impl EMACache {
     pub fn from_series(series: &Series, length: usize) -> Self {
         let mut cache = Self::new(length);
 
-        for price in series.iter() {
+        // `Series::iter()` 是最新 → 最旧，回放必须反过来（与 `ema` / `rsi` 里的
+        // `iter().rev()` 一致），否则缓存状态与逐根更新的结果不一致。
+        for price in series.iter().rev() {
             cache.update(*price);
         }
 
@@ -287,7 +289,9 @@ impl RSICache {
     pub fn from_series(series: &Series, length: usize) -> Self {
         let mut cache = Self::new(length);
 
-        for price in series.iter() {
+        // `Series::iter()` 是最新 → 最旧，回放必须反过来（与 `ema` / `rsi` 里的
+        // `iter().rev()` 一致），否则缓存状态与逐根更新的结果不一致。
+        for price in series.iter().rev() {
             cache.update(*price);
         }
 
@@ -745,4 +749,51 @@ pub fn cross_under(fast: &Series, slow: &Series) -> bool {
     }
 
     fast[0] < slow[0] && fast[1] >= slow[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    // 逐根更新（最旧 → 最新）得到的状态，必须与 from_series 重建出来的状态一致。
+    // 旧实现里 from_series 用 `series.iter()`（最新 → 最旧）回放，方向是反的。
+    #[test]
+    fn ema_cache_from_series_matches_incremental_updates() {
+        let prices = [dec!(1), dec!(2), dec!(3), dec!(4), dec!(5)];
+        let series = Series::new(&prices);
+
+        let mut incremental = EMACache::new(2);
+        for &price in series.iter().rev() {
+            incremental.update(price);
+        }
+
+        let rebuilt = EMACache::from_series(series, 2);
+
+        assert_eq!(rebuilt.value(), incremental.value());
+        // 单调上涨序列、周期 2：EMA 应收敛到 4.5 附近（若方向反了会得到 1.5）。
+        // 用区间断言是因为 multiplier = 2/3 除不尽，末位会带一点点尾数。
+        let value = rebuilt.value().unwrap();
+        assert!(
+            value > dec!(4.4) && value < dec!(4.6),
+            "expected ~4.5, got {value}"
+        );
+    }
+
+    // 同上，RSI：单调上涨序列的 RSI 应为 100（方向反了会得到 0）。
+    #[test]
+    fn rsi_cache_from_series_matches_incremental_updates() {
+        let prices = [dec!(1), dec!(2), dec!(3), dec!(4), dec!(5)];
+        let series = Series::new(&prices);
+
+        let mut incremental = RSICache::new(2);
+        for &price in series.iter().rev() {
+            incremental.update(price);
+        }
+
+        let rebuilt = RSICache::from_series(series, 2);
+
+        assert_eq!(rebuilt.value(), incremental.value());
+        assert_eq!(rebuilt.value(), Some(dec!(100)));
+    }
 }

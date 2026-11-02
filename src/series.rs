@@ -94,9 +94,26 @@ impl Index<usize> for Series {
     type Output = Decimal;
 
     fn index(&self, index: usize) -> &Self::Output {
-        self.inner
-            .get(self.inner.len().saturating_sub(1).saturating_sub(index))
-            .unwrap_or(&Decimal::MAX)
+        // 下标 0 是最新一根，底层 `inner` 最旧在前，所以真实位置是 `len - 1 - index`。
+        //
+        // 这里刻意不用裸减法：空序列时 `len - 1` 会下溢，而"越界返回哨兵值"也不该
+        // 依赖"`index >= 0` 恒成立"这种巧合。用 checked_sub 逐级退化，
+        // 空序列 / 越界 / index 极大，一律落到 `Decimal::MAX`。
+        //
+        // 之所以不用 `saturating_sub`：`len.saturating_sub(1).saturating_sub(index)`
+        // 在越界时会被压到 0，返回的是**最老那根**的真实价格——一个看起来完全合法、
+        // 实际却错位的数值，会静默污染指标与预热判断。
+        let position = self
+            .inner
+            .len()
+            .checked_sub(1)
+            .and_then(|last| last.checked_sub(index))
+            .and_then(|i| self.inner.get(i));
+
+        match position {
+            Some(value) => value,
+            None => &Decimal::MAX,
+        }
     }
 }
 
@@ -521,13 +538,19 @@ impl Index<usize> for TimeSeries {
     type Output = u64;
 
     fn index(&self, index: usize) -> &Self::Output {
-        if index >= self.inner.len() {
-            return &u64::MAX;
-        }
+        // 与 `Series::index` 同一套规则：下标 0 是最新一根，越界返回 `u64::MAX`。
+        // 同样避免裸减法，空序列时不会下溢。
+        let position = self
+            .inner
+            .len()
+            .checked_sub(1)
+            .and_then(|last| last.checked_sub(index))
+            .and_then(|i| self.inner.get(i));
 
-        self.inner
-            .get(self.inner.len() - 1 - index)
-            .unwrap_or(&u64::MAX)
+        match position {
+            Some(value) => value,
+            None => &u64::MAX,
+        }
     }
 }
 
@@ -712,3 +735,52 @@ ts_overload_all_op_left!(u64, &TimeSeries);
 ts_overload_all_op_left!(u128, &TimeSeries);
 ts_overload_all_op_left!(f32, &TimeSeries);
 ts_overload_all_op_left!(f64, &TimeSeries);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    // 验证 Series 按下标 0 = 最新读取，且越界返回哨兵值而不是最老那根的真实价格。
+    #[test]
+    fn index_reads_newest_first_and_out_of_bounds_returns_max() {
+        let prices = [dec!(1), dec!(2), dec!(3)];
+        let series = Series::new(&prices);
+
+        assert_eq!(series[0], dec!(3));
+        assert_eq!(series[1], dec!(2));
+        assert_eq!(series[2], dec!(1));
+
+        // 越界：返回 Decimal::MAX。
+        // 旧实现用 saturating_sub 算下标，越界时被压到 0，返回的是 dec!(1) —— 最老那根，
+        // 一个看起来完全合法、实际却错位的价格。
+        assert_eq!(series[3], Decimal::MAX);
+        assert_eq!(series[usize::MAX], Decimal::MAX);
+
+        // 空序列：任何下标都返回哨兵值，且不得因 `len - 1` 下溢而 panic。
+        // 这里连 `usize::MAX` 一起测，确保下标运算全程没有裸减法。
+        let empty: [Decimal; 0] = [];
+        let empty_series = Series::new(&empty);
+        assert_eq!(empty_series[0], Decimal::MAX);
+        assert_eq!(empty_series[1], Decimal::MAX);
+        assert_eq!(empty_series[usize::MAX], Decimal::MAX);
+    }
+
+    // 验证 TimeSeries 的越界行为与 Series 一致（同一个哨兵值约定）。
+    #[test]
+    fn time_series_out_of_bounds_returns_max() {
+        let times = [100u64, 200, 300];
+        let series = TimeSeries::new(&times);
+
+        assert_eq!(series[0], 300);
+        assert_eq!(series[2], 100);
+        assert_eq!(series[3], u64::MAX);
+        assert_eq!(series[usize::MAX], u64::MAX);
+
+        // 空序列同样不得下溢
+        let empty: [u64; 0] = [];
+        let empty_series = TimeSeries::new(&empty);
+        assert_eq!(empty_series[0], u64::MAX);
+        assert_eq!(empty_series[usize::MAX], u64::MAX);
+    }
+}
