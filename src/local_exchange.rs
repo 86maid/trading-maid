@@ -6957,4 +6957,472 @@ mod tests {
         let btc_history_after = exchange.get_history_position_list(BTC).await.unwrap();
         assert_eq!(btc_history_after.len(), 1);
     }
+
+    // ---- 历史持仓记账：相邻两笔仓位大小不同时不能被覆盖 ----
+    //
+    // 平仓收尾时曾经用 `last.close_quantity != max_quantity` 推断「最后一条是不是同一笔仓位的
+    // 半成品」。但 `last.close_quantity` 属于上一笔、`max_quantity` 属于当前这一笔，两者本来
+    // 就不该比较；只要相邻两笔的峰值仓位不同（加仓、马丁格尔、任意改量），上一笔就会被整条
+    // 覆盖。下面这几条用例把这个行为和它的边界都钉住。
+
+    /// 按给定的开盘价序列造 K 线，每根都有 1 的上下影线，便于多笔交易的用例使用。
+    fn staged_exchange(open_price_list: &[Decimal]) -> (ExchangeWrapper, Arc<LocalExchange>) {
+        let kline_list = open_price_list
+            .iter()
+            .enumerate()
+            .map(|(index, open_price)| {
+                gen_kline(
+                    index as u64 + 1,
+                    *open_price,
+                    *open_price + Decimal::ONE,
+                    *open_price - Decimal::ONE,
+                    *open_price + dec!(0.5),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        single_exchange_with_raw(btc_metadata(), kline_list)
+    }
+
+    // 相邻两笔交易仓位大小不同（0.002 -> 0.001），两笔都必须留在历史里。
+    // 修复前第二笔会把第一笔覆盖掉，history.len() 只有 1。
+    #[tokio::test]
+    async fn history_keeps_adjacent_positions_with_different_quantity() {
+        let (exchange, _raw) = staged_exchange(&[
+            dec!(100.0),
+            dec!(105.0),
+            dec!(110.0),
+            dec!(115.0),
+            dec!(120.0),
+            dec!(125.0),
+        ]);
+
+        // 第一笔：建仓 0.001 后加仓 0.001，峰值仓位 0.002
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        assert_eq!(
+            exchange.get_position(BTC).await.unwrap().unwrap().quantity,
+            dec!(0.002)
+        );
+
+        exchange.sell_reduce_only(BTC, 0.002).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].max_quantity, dec!(0.002));
+
+        // 第二笔：只有 0.001，没加仓，峰值与上一笔不同
+        exchange.buy(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.sell_reduce_only(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(history.len(), 2, "第二笔平仓时把第一笔覆盖掉了");
+        assert_eq!(history[0].max_quantity, dec!(0.002));
+        assert_eq!(history[1].max_quantity, dec!(0.001));
+    }
+
+    // 仓位大小来回跳（马丁格尔形态）时，每一笔都必须单独成条，且顺序与峰值仓位一致。
+    #[tokio::test]
+    async fn history_keeps_every_trade_when_quantity_alternates() {
+        let (exchange, _raw) = staged_exchange(&[
+            dec!(100.0),
+            dec!(105.0),
+            dec!(110.0),
+            dec!(115.0),
+            dec!(120.0),
+            dec!(125.0),
+            dec!(130.0),
+            dec!(135.0),
+            dec!(140.0),
+            dec!(145.0),
+            dec!(150.0),
+            dec!(155.0),
+        ]);
+
+        let quantity_list = [
+            dec!(0.001),
+            dec!(0.002),
+            dec!(0.001),
+            dec!(0.002),
+            dec!(0.001),
+        ];
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        for quantity in quantity_list {
+            exchange.buy(BTC, quantity).await.unwrap();
+            exchange.next(BTC, Level::Minute1).await.unwrap();
+            exchange.sell_reduce_only(BTC, quantity).await.unwrap();
+            exchange.next(BTC, Level::Minute1).await.unwrap();
+        }
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+
+        assert_eq!(
+            history.len(),
+            quantity_list.len(),
+            "仓位交替时每笔平仓都必须留一条记录"
+        );
+        assert_eq!(
+            history
+                .iter()
+                .map(|v| v.max_quantity)
+                .collect::<Vec<Decimal>>(),
+            quantity_list.to_vec()
+        );
+    }
+
+    // 同一笔仓位分批平仓：中途只更新同一条，全部平掉后收尾为一条，不能新增也不能重复。
+    #[tokio::test]
+    async fn partial_close_still_merges_into_one_record() {
+        let (exchange, _raw) = staged_exchange(&[
+            dec!(100.0),
+            dec!(105.0),
+            dec!(110.0),
+            dec!(115.0),
+            dec!(120.0),
+            dec!(125.0),
+        ]);
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 0.003).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        assert_eq!(
+            exchange.get_position(BTC).await.unwrap().unwrap().quantity,
+            dec!(0.003)
+        );
+
+        // 第一次分批平仓：剩 0.002，历史里是一条尚未收尾的记录
+        exchange.sell_reduce_only(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].max_quantity, dec!(0.003));
+        assert_eq!(history[0].close_quantity, dec!(0.001));
+
+        // 第二次分批平仓：仍然只更新同一条
+        exchange.sell_reduce_only(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(history.len(), 1, "同一笔仓位的第二次分批平仓应就地更新");
+        assert_eq!(history[0].close_quantity, dec!(0.002));
+
+        // 平掉最后 0.001：收尾成一条完整记录
+        exchange.sell_reduce_only(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(history.len(), 1, "全部平掉后应就地收尾，而不是新增一条");
+        assert_eq!(history[0].max_quantity, dec!(0.003));
+        assert_eq!(history[0].close_quantity, dec!(0.003));
+        assert!(exchange.get_position(BTC).await.unwrap().is_none());
+    }
+
+    // 分批平仓之后反手：旧仓位必须就地收尾（不能留下半成品），新仓位单独成条。
+    #[tokio::test]
+    async fn reverse_after_partial_close_finalizes_the_open_record() {
+        let (exchange, _raw) = staged_exchange(&[
+            dec!(100.0),
+            dec!(105.0),
+            dec!(110.0),
+            dec!(115.0),
+            dec!(120.0),
+            dec!(125.0),
+        ]);
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 0.003).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        // 分批平掉 0.001，留下 0.002 多单
+        exchange.sell_reduce_only(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        // 反手：卖 0.003 -> 平掉 0.002 多单并新开 0.001 空单
+        exchange.sell(BTC, 0.003).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let position = exchange.get_position(BTC).await.unwrap().unwrap();
+
+        assert_eq!(position.side, Side::Sell);
+        assert_eq!(position.quantity, dec!(0.001));
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+
+        assert_eq!(history.len(), 1, "反手不能把旧仓位拆成两条，也不能漏记");
+        assert_eq!(history[0].side, Side::Buy);
+        assert_eq!(history[0].max_quantity, dec!(0.003));
+        assert_eq!(history[0].close_quantity, dec!(0.003));
+
+        // 平掉空单后，多单和空单各一条
+        exchange.buy_reduce_only(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].side, Side::Sell);
+        assert_eq!(history[1].max_quantity, dec!(0.001));
+    }
+
+    // 最强的一条：混合仓位的连续交易全部平掉后，历史盈亏之和必须与账户权益变化完全相等。
+    // 只要有一条记录被覆盖或丢失，两边就不可能对上。
+    #[tokio::test]
+    async fn history_profit_reconciles_with_equity_across_mixed_quantities() {
+        let (exchange, _raw) = staged_exchange(&[
+            dec!(100.0),
+            dec!(105.0),
+            dec!(110.0),
+            dec!(115.0),
+            dec!(120.0),
+            dec!(125.0),
+            dec!(130.0),
+            dec!(135.0),
+        ]);
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let equity_before = exchange.get_equity().await.unwrap();
+
+        // 0.001 建仓 + 0.001 加仓 -> 平 0.002；再来一笔 0.001；再来一笔 0.003
+        exchange.buy(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.sell_reduce_only(BTC, 0.002).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        exchange.buy(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.sell_reduce_only(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        exchange.buy(BTC, 0.003).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.sell_reduce_only(BTC, 0.003).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+        let equity_after = exchange.get_equity().await.unwrap();
+        let history_profit = history.iter().map(|v| v.total_profit).sum::<Decimal>();
+
+        assert!(exchange.get_position(BTC).await.unwrap().is_none());
+        assert_eq!(history.len(), 3, "三笔交易必须都在历史里");
+        assert_eq!(
+            history_profit,
+            equity_after - equity_before,
+            "历史盈亏之和与账户权益变化不一致，说明有记录被覆盖"
+        );
+    }
+
+    // ---- 多币种下的历史持仓记账 ----
+    //
+    // `history_position_list` 是所有币种共用的一条 Vec。若"半成品记录"用全局下标记录，
+    // BTC 分批平仓后 ETH 再来一次，就会拿 ETH 的数据去改写 BTC 的那条记录。
+
+    fn staged_multi_exchange(
+        btc_open_list: &[Decimal],
+        eth_open_list: &[Decimal],
+    ) -> (ExchangeWrapper, Arc<LocalExchange>) {
+        fn build(metadata: Metadata, open_price_list: &[Decimal]) -> DataSource {
+            let kline_list = open_price_list
+                .iter()
+                .enumerate()
+                .map(|(index, open_price)| {
+                    gen_kline(
+                        index as u64 + 1,
+                        *open_price,
+                        *open_price + Decimal::ONE,
+                        *open_price - Decimal::ONE,
+                        *open_price + dec!(0.5),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            DataSource::new(metadata, kline_list)
+        }
+
+        let raw: Arc<LocalExchange> = Arc::new(
+            LocalExchange::new(vec![
+                build(btc_metadata(), btc_open_list),
+                build(eth_metadata(), eth_open_list),
+            ])
+            .unwrap()
+            .cash(10000)
+            .leverage(10),
+        );
+
+        (ExchangeWrapper::new(raw.clone()), raw)
+    }
+
+    // BTC 和 ETH 交替分批平仓时，两条半成品记录必须各自独立、互不覆盖。
+    #[tokio::test]
+    async fn multi_symbol_partial_closes_do_not_touch_each_other() {
+        let (exchange, _raw) = staged_multi_exchange(
+            &[
+                dec!(100.0),
+                dec!(105.0),
+                dec!(110.0),
+                dec!(115.0),
+                dec!(120.0),
+            ],
+            &[dec!(50.0), dec!(52.0), dec!(54.0), dec!(56.0), dec!(58.0)],
+        );
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        // 两个币各自建仓 0.003
+        exchange.buy(BTC, 0.003).await.unwrap();
+        exchange.buy(ETH, 0.003).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        assert_eq!(
+            exchange.get_position(BTC).await.unwrap().unwrap().quantity,
+            dec!(0.003)
+        );
+        assert_eq!(
+            exchange.get_position(ETH).await.unwrap().unwrap().quantity,
+            dec!(0.003)
+        );
+
+        // 先 BTC 分批平 0.001，再 ETH 分批平 0.001
+        exchange.sell_reduce_only(BTC, 0.001).await.unwrap();
+        exchange.sell_reduce_only(ETH, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let btc_history = exchange.get_history_position_list(BTC).await.unwrap();
+        let eth_history = exchange.get_history_position_list(ETH).await.unwrap();
+
+        assert_eq!(btc_history.len(), 1);
+        assert_eq!(eth_history.len(), 1);
+        assert_eq!(btc_history[0].symbol, BTC);
+        assert_eq!(eth_history[0].symbol, ETH);
+        assert_eq!(btc_history[0].close_quantity, dec!(0.001));
+        assert_eq!(eth_history[0].close_quantity, dec!(0.001));
+        assert_eq!(btc_history[0].max_quantity, dec!(0.003));
+        assert_eq!(eth_history[0].max_quantity, dec!(0.003));
+
+        // ETH 全部平掉：不能把 BTC 那条半成品一起收尾
+        exchange.sell_reduce_only(ETH, 0.002).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let btc_history = exchange.get_history_position_list(BTC).await.unwrap();
+        let eth_history = exchange.get_history_position_list(ETH).await.unwrap();
+
+        assert_eq!(eth_history.len(), 1);
+        assert_eq!(eth_history[0].close_quantity, dec!(0.003));
+        assert!(
+            exchange.get_position(ETH).await.unwrap().is_none(),
+            "ETH 应该已经平掉"
+        );
+        assert!(
+            exchange.get_position(BTC).await.unwrap().is_some(),
+            "BTC 不该被 ETH 的平仓动作带平"
+        );
+        assert_eq!(btc_history[0].close_quantity, dec!(0.001));
+
+        // BTC 也全部平掉，两个币各一条完整记录
+        exchange.sell_reduce_only(BTC, 0.002).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let btc_history = exchange.get_history_position_list(BTC).await.unwrap();
+        let eth_history = exchange.get_history_position_list(ETH).await.unwrap();
+
+        assert_eq!(btc_history.len(), 1);
+        assert_eq!(btc_history[0].close_quantity, dec!(0.003));
+        assert_eq!(eth_history.len(), 1);
+        assert_eq!(eth_history[0].close_quantity, dec!(0.003));
+    }
+
+    // 多币种混跑后，两个币的历史盈亏之和必须等于账户权益变化。
+    #[tokio::test]
+    async fn multi_symbol_history_profit_reconciles_with_equity() {
+        let (exchange, _raw) = staged_multi_exchange(
+            &[
+                dec!(100.0),
+                dec!(105.0),
+                dec!(110.0),
+                dec!(115.0),
+                dec!(120.0),
+            ],
+            &[dec!(50.0), dec!(52.0), dec!(54.0), dec!(56.0), dec!(58.0)],
+        );
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let equity_before = exchange.get_equity().await.unwrap();
+
+        // BTC 0.001 建仓后加到 0.002；ETH 直接 0.002 建仓
+        exchange.buy(BTC, 0.001).await.unwrap();
+        exchange.buy(ETH, 0.002).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        exchange.buy(BTC, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        // 两个币同一根 K 线上各自分批平掉 0.001：两条半成品记录必须各归各的
+        exchange.sell_reduce_only(BTC, 0.001).await.unwrap();
+        exchange.sell_reduce_only(ETH, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        assert_eq!(
+            exchange.get_position(BTC).await.unwrap().unwrap().quantity,
+            dec!(0.001)
+        );
+        assert_eq!(
+            exchange.get_position(ETH).await.unwrap().unwrap().quantity,
+            dec!(0.001)
+        );
+
+        // 中途检查：两个币的半成品记录必须各自挂在正确的币种下，价格不能串。
+        let btc_mid = exchange.get_history_position_list(BTC).await.unwrap();
+        let eth_mid = exchange.get_history_position_list(ETH).await.unwrap();
+
+        assert_eq!(btc_mid.len(), 1, "BTC 的半成品记录丢了（被 ETH 覆盖）");
+        assert_eq!(eth_mid.len(), 1, "ETH 的半成品记录没建出来");
+        assert!(
+            btc_mid[0].open_avg_price > dec!(100.0),
+            "BTC 的记录里混进了 ETH 的价格"
+        );
+        assert!(
+            eth_mid[0].open_avg_price < dec!(60.0),
+            "ETH 的记录里混进了 BTC 的价格"
+        );
+        assert_eq!(btc_mid[0].close_quantity, dec!(0.001));
+        assert_eq!(eth_mid[0].close_quantity, dec!(0.001));
+
+        // 两个币各自把剩下的 0.001 平掉
+        exchange.sell_reduce_only(BTC, 0.001).await.unwrap();
+        exchange.sell_reduce_only(ETH, 0.001).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let btc_history = exchange.get_history_position_list(BTC).await.unwrap();
+        let eth_history = exchange.get_history_position_list(ETH).await.unwrap();
+        let equity_after = exchange.get_equity().await.unwrap();
+
+        let history_profit = btc_history
+            .iter()
+            .chain(eth_history.iter())
+            .map(|v| v.total_profit)
+            .sum::<Decimal>();
+
+        assert!(exchange.get_position(BTC).await.unwrap().is_none());
+        assert!(exchange.get_position(ETH).await.unwrap().is_none());
+        assert_eq!(btc_history.len(), 1);
+        assert_eq!(eth_history.len(), 1);
+        assert_eq!(
+            history_profit,
+            equity_after - equity_before,
+            "多币种历史盈亏之和对不上账户权益"
+        );
+    }
 }
