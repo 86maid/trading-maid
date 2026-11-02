@@ -181,3 +181,69 @@ async fn run() {
     engine.add_series("BTCUSDT", "funding_rate", fr);
     engine.run("BTCUSDT", Level::Hour4).await.unwrap();
 }
+
+// cargo test -r --test download kline -- --ignored
+#[ignore]
+#[tokio::test]
+async fn kline() {
+    use trading_maid::data::{DataSource, Level, Metadata};
+    use trading_maid::util::get_or_download;
+
+    let path = get_or_download("BTCUSDT/1m", 1).await.unwrap();
+
+    println!("path: {}", path.display());
+
+    // 缓存路径必须带市场类型：旧实现把现货和期货塞进同一个目录，
+    // 先下过哪个就永远复用哪个，且没有任何报错。
+    let path_text = path.to_string_lossy();
+    assert!(
+        path_text.contains("futures"),
+        "cache path missing market type: {path_text}"
+    );
+    assert!(path.exists(), "merged file not found: {path_text}");
+
+    let data = DataSource::from_file_metadata(
+        path,
+        Metadata {
+            symbol: "BTCUSDT".to_string(),
+            level: Level::Minute1,
+            min_size: "0.01".parse().unwrap(),
+            min_notional: "0".parse().unwrap(),
+            tick_size: "0.1".parse().unwrap(),
+            maker_fee: "0.0002".parse().unwrap(),
+            taker_fee: "0.0005".parse().unwrap(),
+            maintenance: "0.004".parse().unwrap(),
+        },
+    )
+    .unwrap();
+
+    println!("klines: {}", data.data.len());
+    assert!(!data.data.is_empty(), "no kline downloaded");
+
+    // 时间严格递增
+    for pair in data.data.windows(2) {
+        assert!(
+            pair[0].time < pair[1].time,
+            "time not increasing: {} -> {}",
+            pair[0].time,
+            pair[1].time
+        );
+    }
+
+    // OHLC 自洽
+    for k in &data.data {
+        assert!(k.high >= k.low, "high < low at {}", k.time);
+        assert!(k.high >= k.open && k.high >= k.close, "high broken at {}", k.time);
+        assert!(k.low <= k.open && k.low <= k.close, "low broken at {}", k.time);
+        assert!(k.open > Decimal::ZERO, "non-positive open at {}", k.time);
+    }
+
+    let first = &data.data[0];
+    let last = &data.data.last().unwrap();
+
+    println!("first: {} open: {}", t2s_utc(first.time), first.open);
+    println!("last:  {} open: {}", t2s_utc(last.time), last.open);
+
+    // 一个月的 1m K 线不可能少到这个程度
+    assert!(data.data.len() > 40_000, "too few klines: {}", data.data.len());
+}
