@@ -47,6 +47,14 @@ struct LocalExchangeInner {
     pending_order_list: IndexMap<String, OrderEx>,
     position: Vec<(String, PositionEx)>,
     history_position_list: Vec<HistoryPosition>,
+    /// 正在分批平仓、还没收尾的那条历史持仓下标，**按交易对分别记录**。
+    ///
+    /// 以前是靠比较 `close_quantity` 和 `max_quantity` 推断「最后一条是不是同一笔仓位的半成品」，
+    /// 但相邻两笔仓位大小不同时（加仓、马丁格尔）同样会满足条件，于是把上一笔整条覆盖掉。
+    /// 现在改成显式记录。用 symbol 做键而不是全局单值：`history_position_list` 是所有币种共用
+    /// 的一条 Vec，多币种交替分批平仓时，全局下标会把别的币种的记录当成自己的半成品去改写。
+    /// 同一交易对同时最多只有一笔仓位，所以按 symbol 索引是精确的。
+    unfinished_history_index: IndexMap<String, usize>,
     id: u64,
     pacemaker: Option<String>,
     exhausted: bool,
@@ -196,6 +204,7 @@ impl LocalExchange {
                 history_order_list: IndexMap::new(),
                 pending_order_list: IndexMap::new(),
                 history_position_list: Vec::new(),
+                unfinished_history_index: IndexMap::new(),
                 id: 0,
                 pacemaker: None,
                 exhausted: false,
@@ -730,9 +739,9 @@ impl LocalExchangeInner {
         let kline_time = self.kline(&order_ref.symbol).time;
         let symbol = position.symbol.clone();
 
-        if let Some(last) = self.history_position_list.iter_mut().last()
-            && last.close_quantity != max_quantity
-        {
+        if let Some(index) = self.unfinished_history_index.shift_remove(&symbol) {
+            let last = &mut self.history_position_list[index];
+
             last.leverage = position.leverage;
             last.side = position.side;
             last.open_avg_price = position.open_avg_price;
@@ -784,29 +793,35 @@ impl LocalExchangeInner {
             .sum::<Decimal>()
             .max(Decimal::ZERO);
 
-        if let Some(last) = self.history_position_list.iter_mut().last()
-            && last.close_quantity != last.max_quantity
-        {
-            last.leverage = position.leverage;
-            last.side = position.side;
-            last.open_avg_price = position.open_avg_price;
-            last.max_quantity = max_quantity;
-            last.close_avg_price = order_ref.avg_price;
-            last.close_quantity = partial_close_qty;
-            last.total_profit = profit_sum - fee_sum;
-            last.profit = profit_sum;
-            last.fee = fee_sum;
-            last.close_time = kline_time;
-            last.log = position.log.clone();
-        } else {
-            self.push_history_position(
-                &position,
-                order_ref,
-                partial_close_qty,
-                max_quantity,
-                profit_sum,
-                fee_sum,
-            );
+        match self.unfinished_history_index.get(&symbol).copied() {
+            Some(index) => {
+                let last = &mut self.history_position_list[index];
+
+                last.leverage = position.leverage;
+                last.side = position.side;
+                last.open_avg_price = position.open_avg_price;
+                last.max_quantity = max_quantity;
+                last.close_avg_price = order_ref.avg_price;
+                last.close_quantity = partial_close_qty;
+                last.total_profit = profit_sum - fee_sum;
+                last.profit = profit_sum;
+                last.fee = fee_sum;
+                last.close_time = kline_time;
+                last.log = position.log.clone();
+            }
+            None => {
+                self.push_history_position(
+                    &position,
+                    order_ref,
+                    partial_close_qty,
+                    max_quantity,
+                    profit_sum,
+                    fee_sum,
+                );
+
+                self.unfinished_history_index
+                    .insert(symbol.clone(), self.history_position_list.len() - 1);
+            }
         }
 
         let metadata = self.metadata(&symbol).clone();
@@ -846,21 +861,30 @@ impl LocalExchangeInner {
 
         self.cash += order_ref.freeze_margin - reverse_margin;
 
-        self.history_position_list.push(HistoryPosition {
-            symbol: position.symbol.clone(),
-            leverage: position.leverage,
-            side: position.side,
-            open_avg_price: position.open_avg_price,
-            close_avg_price: order_ref.avg_price,
-            max_quantity,
-            close_quantity: max_quantity,
-            total_profit: profit - fee,
-            profit,
-            fee,
-            open_time: position.open_time,
-            close_time: kline_time,
-            log: position.log,
-        });
+        if let Some(index) = self.unfinished_history_index.shift_remove(&symbol) {
+            let last = &mut self.history_position_list[index];
+
+            last.leverage = position.leverage;
+            last.side = position.side;
+            last.open_avg_price = position.open_avg_price;
+            last.close_avg_price = order_ref.avg_price;
+            last.max_quantity = max_quantity;
+            last.close_quantity = max_quantity;
+            last.total_profit = profit - fee;
+            last.profit = profit;
+            last.fee = fee;
+            last.close_time = kline_time;
+            last.log = position.log.clone();
+        } else {
+            self.push_history_position(
+                &position,
+                order_ref,
+                max_quantity,
+                max_quantity,
+                profit,
+                fee,
+            );
+        }
 
         let liquidation_order = &mut self.pending_order_list[&liquidation_order_id];
 
