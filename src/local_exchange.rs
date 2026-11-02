@@ -71,6 +71,16 @@ struct OrderEx {
     update_time: u64,
     status: Status,
     freeze_margin: Decimal,
+    /// 触发方向：`Side::Buy` = 向上触发（`high >= trigger`），`Side::Sell` = 向下触发（`low <= trigger`）。
+    ///
+    /// **与 `Order::side` 无关，两个字段不要混用。** 同一个 side 两种方向都存在：
+    ///   - SELL 在下方 → 多单止损；SELL 在上方 → 涨到某价卖出（止盈式 trigger）
+    ///   - BUY 在上方 → 空单止损 / 突破进场；BUY 在下方 → 跌到某价买入
+    ///
+    /// 方向由「挂单那一刻触发价相对市场价的位置」决定：触发价在市场价上方就是向上触发，
+    /// 下方就是向下触发。这也是币安把 STOP / TAKE_PROFIT 分成两种订单类型的原因——
+    /// 光看 side 区分不了。非 Trigger 单不使用该字段。
+    trigger_direction: Side,
 }
 
 impl OrderEx {
@@ -363,7 +373,18 @@ impl LocalExchangeInner {
             update_time: kline_time,
             status: Status::Submitted,
             freeze_margin: Decimal::ZERO,
+            trigger_direction: Side::Buy,
         };
+
+        // 触发方向在挂单这一刻确定：触发价在市场价上方 → 向上触发（Buy），下方 → 向下触发（Sell）。
+        // 用当前 K 线收盘价代表挂单时的市场价。
+        if order.is_trigger() {
+            order.trigger_direction = if order.trigger_price > self.kline(&order.symbol).close {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
+        }
 
         if !order.reduce_only && order.is_limit() {
             // 对于市价单，保证金在成交时被冻结
@@ -454,13 +475,25 @@ impl LocalExchangeInner {
             None => return,
         };
 
+        // 触发后市价成交的基准价：触发之后第一个真实可成交的价格。
+        //   - 盘中穿越：价格先到触发价，基准价 = 触发价
+        //   - 跳空越过：开盘价已越过触发价，基准价 = 开盘价
+        // 方向由 trigger_direction 决定（向上取 max、向下取 min）。
+        // 注意 Kind::Market 的正常 price 是 0；这里非零是内部约定，表示「以基准价成交」，
+        // 若写回 0 会退化成「以下一根 K 线开盘价成交」，止损会系统性占便宜。
+        let kline = *self.kline(&order_ref.symbol);
+        let market_base_price = match order_ref.trigger_direction {
+            Side::Buy => kline.open.max(order_ref.trigger_price),
+            Side::Sell => kline.open.min(order_ref.trigger_price),
+        };
+
         let result = self.place_order(
             Order {
                 symbol: order_ref.symbol.clone(),
                 side: order_ref.side,
                 trigger_price: Decimal::ZERO,
                 price: if order_ref.price == Decimal::ZERO {
-                    order_ref.trigger_price
+                    market_base_price
                 } else {
                     order_ref.price
                 },
@@ -506,7 +539,14 @@ impl LocalExchangeInner {
         let kline = *self.kline(&order.symbol);
 
         if order.kind == Kind::Liquidation {
-            if !(order.price >= kline.low && order.price <= kline.high) {
+            // 强平同样是方向性的「触及或越过」：多单跌破强平价、空单涨破强平价。
+            // 成交价仍取强平价——逐仓下 profit 被固定成 -保证金，与成交价无关。
+            let triggered = match order.side {
+                Side::Buy => kline.high >= order.price,
+                Side::Sell => kline.low <= order.price,
+            };
+
+            if !triggered {
                 return None;
             }
 
@@ -515,24 +555,20 @@ impl LocalExchangeInner {
             order_ref.avg_price = order_ref.price;
 
             Some(order_ref)
-        } else if (order.side == Side::Buy && order.price >= kline.open)
-            || (order.side == Side::Sell && order.price <= kline.open)
-        {
+        } else if order.side == Side::Buy && kline.low <= order.price {
+            // 买单：价格触及限价即可成交。
+            //   - 开盘已在限价之下（跳空）：以开盘价成交（比限价更差的一侧已不可得，
+            //     开盘价就是第一个可成交价）
+            //   - 盘中回落触及：以限价成交
             let mut order_ref = self.pending_order_list.shift_remove(order_id)?;
 
-            order_ref.avg_price = if order_ref.side == Side::Buy {
-                kline.high
-            } else {
-                kline.low
-            };
+            order_ref.avg_price = kline.open.min(order_ref.price);
 
             Some(order_ref)
-        } else if (order.side == Side::Buy && kline.low <= order.price)
-            || (order.side == Side::Sell && kline.high >= order.price)
-        {
+        } else if order.side == Side::Sell && kline.high >= order.price {
             let mut order_ref = self.pending_order_list.shift_remove(order_id)?;
 
-            order_ref.avg_price = order_ref.price;
+            order_ref.avg_price = kline.open.max(order_ref.price);
 
             Some(order_ref)
         } else {
@@ -575,7 +611,15 @@ impl LocalExchangeInner {
         let kline = self.kline(&symbol);
 
         if order.kind == Kind::Trigger {
-            if !(order.trigger_price >= kline.low && order.trigger_price <= kline.high) {
+            // 触发是方向性的「触及或越过」，不是「触发价正好落在本根 K 线区间内」。
+            // 跳空穿过触发价时，价格已经在阈值之外，必须照样触发。
+            // 方向取挂单时确定的 trigger_direction，与 order.side 无关。
+            let triggered = match order.trigger_direction {
+                Side::Buy => kline.high >= order.trigger_price,
+                Side::Sell => kline.low <= order.trigger_price,
+            };
+
+            if !triggered {
                 return;
             }
 
@@ -2021,8 +2065,12 @@ mod tests {
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
         assert_eq!(order.status, Status::Filled);
-        assert_eq!(order.avg_price, 106.0);
-        assert_eq!(position.open_avg_price, 106.0);
+        // 下一根 K 线 open=105 恰好等于限价，开盘即成交在限价上。
+        // （旧模型会成交在 high=106，高于自己的限价，物理上不可能。）
+        assert_eq!(order.avg_price, 105.0);
+        assert_eq!(position.open_avg_price, 105.0);
+        // 不变量：买单成交价永远不高于限价。
+        assert!(order.avg_price <= 105.0);
     }
 
     // 验证限价单价格不在区间内时保持 Submitted 不成交。
@@ -2114,9 +2162,13 @@ mod tests {
         );
     }
 
-    // 验证浮亏场景下，手续费不足的 reduce-only 平仓会被拒绝，不会把现金打到负值。
+    // 验证浮亏击穿保证金时，不会留下"平仓单被拒、仓位却还在"的状态。
+    //
+    // 平仓单因为浮亏吃掉全部保证金、手续费付不出来而被拒；但仓位不会因此苟活——
+    // 强平价 94.92 已被 low=79 越过，强平随即接管，逐仓亏损封顶在那笔保证金。
+    // （旧实现的强平要求强平价落在 [low, high] 内，跳空时漏触发，于是仓位真的留了下来。）
     #[tokio::test]
-    async fn reduce_only_close_with_floating_loss_and_fee_shortage_is_rejected() {
+    async fn deep_crash_liquidates_instead_of_leaving_position_unclosed() {
         let exchange = LocalExchange::new(vec![DataSource::new(
             btc_metadata(),
             vec![
@@ -2135,21 +2187,20 @@ mod tests {
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let cash_before_close = exchange.get_cash().await.unwrap();
-
         let close_id = exchange.sell_reduce_only(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let close_order = exchange.get_order(BTC, &close_id).await.unwrap().unwrap();
-        let cash_after = exchange.get_cash().await.unwrap();
 
-        let position_after = exchange.get_position(BTC).await.unwrap().unwrap();
-
+        // 平仓单被拒
         assert_eq!(close_order.status, Status::Rejected);
-        assert_eq!(position_after.side, Side::Buy);
-        assert_eq!(position_after.quantity, 1.0);
-        assert_eq!(cash_after, cash_before_close);
-        assert!(cash_after > 0);
+        // 仓位不会留存：已被强平
+        assert!(exchange.get_position(BTC).await.unwrap().is_none());
+
+        // 逐仓：单笔最大亏损就是那笔保证金 10.5
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].profit, dec!(-10.5));
     }
 
     // 验证触发限价单触发后立即在同一根 K 线成交。
@@ -2177,7 +2228,11 @@ mod tests {
 
         // 触发后立即执行，仓位已创建
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
-        assert_eq!(position.open_avg_price, 106.0); // 买单限价≥开盘价，以最高价成交
+        // 触发价 104 挂在市场价 100 上方（向上触发）；下一根 open=102/high=106 越过触发价后
+        // 转成限价 105 的买单，当根 low=101 已在限价之下，成交在开盘价 102（低于限价，价格改善）。
+        // 旧模型会填 high=106，高于自己的限价 105。
+        assert_eq!(position.open_avg_price, 102.0);
+        assert!(position.open_avg_price <= 105.0);
     }
 
     // 验证触发价长期不满足时，触发单保持 Submitted 状态。
@@ -2452,14 +2507,14 @@ mod tests {
         assert_eq!(exchange.get_equity().await.unwrap(), initial_cash);
         assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 1);
 
-        // Step 2: 限价开仓成交（buy 且 price>=open，按 high 成交）。
+        // Step 2: 限价开仓成交（下一根 open=100.2 已低于限价 100.3，成交在开盘价）。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let open_order = exchange.get_order(BTC, &open_id).await.unwrap().unwrap();
         let mut position = exchange.get_position(BTC).await.unwrap().unwrap();
         let pending_s2 = pending_orders_all(&raw, BTC).await;
 
-        let open_fill = dec!(100.6);
+        let open_fill = dec!(100.2);
         let margin_s2 = open_fill * entry_qty / dec!(10.0);
         let open_fee = open_fill * entry_qty * md.maker_fee;
         let cash_s2 = initial_cash - margin_s2 - open_fee;
@@ -2487,7 +2542,8 @@ mod tests {
         assert_eq!(exchange.get_equity().await.unwrap(), equity_s2);
         assert_eq!(pending_orders_all(&raw, BTC).await.len(), 2);
 
-        // Step 3: 触发单触发并立即执行（sell 且 price<=open，按 low 成交）。
+        // Step 3: 触发单触发并立即执行（触发后转成限价 100.4 的卖单；open=100.5 已在限价之上，
+        // 成交在开盘价 100.5——对卖方是价格改善，旧模型会填 low=100.3）。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let trigger_reduce = exchange
@@ -2498,7 +2554,7 @@ mod tests {
         let pending_s3 = pending_orders_all(&raw, BTC).await;
         position = exchange.get_position(BTC).await.unwrap().unwrap();
 
-        let reduce_limit_fill = dec!(100.3); // kline 3 low
+        let reduce_limit_fill = dec!(100.5);
         let close_margin = margin_s2 * (reduce_qty / entry_qty);
         let close_profit = (reduce_limit_fill - open_fill) * reduce_qty;
         let close_fee = reduce_limit_fill * reduce_qty * md.maker_fee;
@@ -2613,14 +2669,14 @@ mod tests {
         assert_eq!(exchange.get_equity().await.unwrap(), initial_cash);
         assert_eq!(exchange.get_pending_order_list(BTC).await.unwrap().len(), 2);
 
-        // Step 2: 第二根 K，仅第一笔成交（按 high 成交），第二笔保留为 pending。
+        // Step 2: 第二根 K，仅第一笔成交（open=100.2 已低于限价 100.3），第二笔低于区间保留为 pending。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let order_fill = exchange.get_order(BTC, &id_fill).await.unwrap().unwrap();
         let order_pending = exchange.get_order(BTC, &id_pending).await.unwrap().unwrap();
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
-        let fill_avg = dec!(100.5);
+        let fill_avg = dec!(100.2);
         let margin_s2 = fill_avg * fill_qty_order / dec!(10.0);
         let fee_open = fill_avg * fill_qty_order * md.maker_fee;
         let cash_s2 = initial_cash - freeze_pending - margin_s2 - fee_open;
@@ -2794,7 +2850,7 @@ mod tests {
         assert!(exchange.get_position(BTC).await.unwrap().is_none());
     }
 
-    // 验证限价单穿价按最差价成交时，现金差值符合“价格差+费率差”的公式。
+    // 验证同一成交价下，限价单（maker）与市价单（taker）的现金差值等于纯费率差。
     #[tokio::test]
     async fn maker_vs_taker_fee_difference_on_same_entry_price() {
         let market_exchange = single_exchange();
@@ -2809,10 +2865,11 @@ mod tests {
         limit_exchange.next(BTC, Level::Minute1).await.unwrap();
         let limit_cash = limit_exchange.get_cash().await.unwrap();
 
-        assert!(limit_cash < market_cash);
+        // 两笔都成交在开盘价 105，成本差异只剩 taker / maker 费率。
+        assert!(limit_cash > market_cash);
 
         let market_cost = 105.0 / 10.0 + 105.0 * btc_metadata().taker_fee;
-        let limit_cost = 106.0 / 10.0 + 106.0 * btc_metadata().maker_fee;
+        let limit_cost = 105.0 / 10.0 + 105.0 * btc_metadata().maker_fee;
         assert_eq!(limit_cash - market_cash, market_cost - limit_cost);
     }
 
@@ -3511,7 +3568,7 @@ mod tests {
         assert_eq!(cash_after, cash_before);
     }
 
-    // 验证小数数量下限价穿价成交时现金差值仍保持数学一致性。
+    // 验证小数数量下，同一成交价的限价单与市价单现金差值仍保持数学一致性。
     #[tokio::test]
     async fn maker_taker_fee_delta_with_fractional_quantity_precision() {
         let qty = 0.123;
@@ -3528,10 +3585,11 @@ mod tests {
         limit_exchange.next(BTC, Level::Minute1).await.unwrap();
         let limit_cash = limit_exchange.get_cash().await.unwrap();
 
+        // 两笔都成交在开盘价 105，只差费率。
         let market_cost = 105.0 * qty / 10.0 + 105.0 * qty * btc_metadata().taker_fee;
-        let limit_cost = 106.0 * qty / 10.0 + 106.0 * qty * btc_metadata().maker_fee;
+        let limit_cost = 105.0 * qty / 10.0 + 105.0 * qty * btc_metadata().maker_fee;
 
-        assert!(limit_cash < market_cash);
+        assert!(limit_cash > market_cash);
         assert_eq!(limit_cash - market_cash, market_cost - limit_cost);
     }
 
@@ -3564,8 +3622,9 @@ mod tests {
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let cash_after = exchange.get_cash().await.unwrap();
-        let expected_margin = 106.0 * qty / 10.0;
-        let expected_fee = 106.0 * qty * btc_metadata().maker_fee;
+        // 限价 105 与下一根开盘价相等 → 成交在 105（旧模型填 high=106）。
+        let expected_margin = 105.0 * qty / 10.0;
+        let expected_fee = 105.0 * qty * btc_metadata().maker_fee;
         let expected_cash = 10000.0 - expected_margin - expected_fee;
 
         assert_eq!(cash_after, expected_cash);
@@ -3776,7 +3835,8 @@ mod tests {
         let p_close_bar2 = dec!(105.9);
         let p_open_reverse = dec!(110.5);
         let p_close_bar4 = dec!(108.0);
-        let p_limit_close = dec!(104.2);
+        // 买入限价是 104.0；bar5 开盘 103.7 已在限价之下，成交在开盘价（价格改善）。
+        let p_limit_close = dec!(103.7);
         let p_close_bar5 = dec!(103.1);
 
         // Step 1: 仅推进时间，账户初始状态不变。
@@ -3916,7 +3976,7 @@ mod tests {
         assert_eq!(pending_orders_all(&raw, BTC).await.len(), 2);
         assert_eq!(exchange.get_cash().await.unwrap(), cash_after_reverse);
 
-        // Step 5: 限价减仓成交（买价>=open，按 high 成交），并更新历史与仓位。
+        // Step 5: 限价减仓成交（open=103.7 已低于买价 104.0，成交在开盘价），并更新历史与仓位。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let close_limit_order = exchange
@@ -4422,15 +4482,18 @@ mod tests {
             .await
             .unwrap();
 
-        // 第 2 根触发并立即执行（限价110≥开盘价105，以最高价106成交）
+        // 第 2 根触发（high=106 >= 触发价 105）并立即转成限价 110 的买单；
+        // 当根 open=105 已在限价之下 → 成交在开盘价 105（旧模型填 high=106）。
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
         let trigger_order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(trigger_order.status, Status::Filled);
 
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
-        assert_eq!(position.open_avg_price, 106.0); // 立即执行，以当前K线最高价成交
+        assert_eq!(position.open_avg_price, 105.0);
         assert_eq!(position.quantity, 1.0);
+        // 最小名义金额（100）按实际成交价校验：105 * 1.0 >= 100，通过。
+        assert!(position.open_avg_price * position.quantity >= dec!(100.0));
     }
 
     // 验证权益口径为 cash + margin + upnl。
@@ -4474,7 +4537,16 @@ mod tests {
         assert_eq!(order1.status, Status::Filled);
         assert_eq!(order2.status, Status::Filled);
         assert_eq!(position.quantity, 2.0);
-        assert_eq!(position.open_avg_price, 105.25);
+        // 下一根 open=105 / low=104：
+        //   限价 104.5 —— 盘中回落触及，成交在限价 104.5
+        //   限价 105.5 —— 开盘价 105 已在限价之下，成交在开盘价 105（价格改善）
+        // 旧模型两笔都填 bar 极值（104.5 / 106），其中 106 高于自己的限价 105.5。
+        assert_eq!(order1.avg_price, 104.5);
+        assert_eq!(order2.avg_price, 105.0);
+        assert_eq!(position.open_avg_price, 104.75);
+        // 不变量：任一买单成交价都不高于自己的限价。
+        assert!(order1.avg_price <= 104.5);
+        assert!(order2.avg_price <= 105.5);
     }
 
     // 验证触发市价单与普通市价单同Bar共存时，触发单遵循“两阶段撮合”。
@@ -4575,11 +4647,12 @@ mod tests {
 
         // 触发后立即执行，保证金和手续费都被扣除
         let cash_after_trigger = exchange.get_cash().await.unwrap();
-        // 买单限价105≥开盘价105，以最高价106成交
-        let fill_price = 106.0;
-        let margin = fill_price * 1.0 / 10.0; // 10.6
-        let fee = fill_price * 1.0 * 0.0002; // 0.0212 (maker fee)
-        let total_cost = margin + fee; // 10.6212
+        // 触发价 105 被 high=106 越过 → 转成限价 105 的买单；
+        // 当根 open=105 等于限价 → 成交在 105（旧模型填 high=106）。
+        let fill_price = 105.0;
+        let margin = fill_price * 1.0 / 10.0; // 10.5
+        let fee = fill_price * 1.0 * 0.0002; // 0.021 (maker fee)
+        let total_cost = margin + fee; // 10.521
         assert_eq!(cash_before - cash_after_trigger, total_cost);
 
         // 订单已执行，无法取消
@@ -4828,8 +4901,14 @@ mod tests {
     }
 
     // 验证触发单在 low/high 边界精确触发，略低于边界则保持未触发。
+    // 验证触发单只要被越过就触发；价格没到触发价则保持未触发。
+    //
+    // 这里刻意区分两种"没落在 [low, high] 内"的情况：
+    //   - 触发价 104 低于下一根的 open=105 —— 属于**已经被越过**，必须触发；
+    //   - 触发价 106.5 高于下一根的 high=106 —— 属于**没走到**，保持 Submitted。
+    // 旧实现把两者混为一谈（都要求触发价落在区间内），于是跳空时永远不触发。
     #[tokio::test]
-    async fn trigger_order_exact_low_boundary_triggers_but_below_does_not() {
+    async fn trigger_order_triggers_once_crossed_and_stays_put_when_not_reached() {
         let exchange = single_exchange_with(
             btc_metadata(),
             vec![
@@ -4841,24 +4920,28 @@ mod tests {
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let exact_id = exchange.buy_trigger_market(BTC, 104.0, 1.0).await.unwrap();
-        let below_id = exchange
-            .buy_trigger_market(BTC, 104.0 - 0.1, 1.0)
-            .await
-            .unwrap();
+        // 两笔都挂在市场价 100 上方，是"向上触发"
+        let crossed_id = exchange.buy_trigger_market(BTC, 104.0, 1.0).await.unwrap();
+        let not_reached_id = exchange.buy_trigger_market(BTC, 106.5, 1.0).await.unwrap();
 
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        let exact = exchange.get_order(BTC, &exact_id).await.unwrap().unwrap();
-        let below = exchange.get_order(BTC, &below_id).await.unwrap().unwrap();
+        let crossed = exchange.get_order(BTC, &crossed_id).await.unwrap().unwrap();
+        let not_reached = exchange
+            .get_order(BTC, &not_reached_id)
+            .await
+            .unwrap()
+            .unwrap();
 
-        assert_eq!(exact.status, Status::Filled);
-        assert_eq!(below.status, Status::Submitted);
+        assert_eq!(crossed.status, Status::Filled);
+        assert_eq!(not_reached.status, Status::Submitted);
 
-        // 精确边界104.0触发后立即执行，以当前K线开盘价105成交
+        // 触发价 104 被越过时，成交价是触发之后第一个可成交价：开盘价 105。
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
         assert_eq!(position.quantity, 1.0);
-        assert_eq!(position.open_avg_price, 104.0);
+        assert_eq!(position.open_avg_price, 105.0);
+        // 不变量：成交价不劣于触发价（买单要付出不低于触发价的价格）。
+        assert!(position.open_avg_price >= 104.0);
     }
 
     // 验证混合挂单按任意顺序撤销后，现金会回到撤单前基准值。
@@ -5664,12 +5747,15 @@ mod tests {
         let cash_after_fill = exchange.get_cash().await.unwrap();
         let position = exchange.get_position(BTC).await.unwrap().unwrap();
 
-        // 实际按最高价（对于买单最坏的） 105 成交，保证金应重算为 10.5，差额 0.5 返还。
-        let expected_cash = cash_before - 10.5 - 105.0 * btc_metadata().maker_fee;
+        // 下一根开盘 103 已在委托价 110 之下 → 成交在开盘价 103（价格改善），
+        // 保证金按实际成交价重算为 10.3，冻结时多扣的 0.7 返还。
+        let expected_cash = cash_before - 10.3 - 103.0 * btc_metadata().maker_fee;
 
-        assert_eq!(position.open_avg_price, 105.0);
-        assert_eq!(position.margin, 10.5);
+        assert_eq!(position.open_avg_price, 103.0);
+        assert_eq!(position.margin, 10.3);
         assert_eq!(cash_after_fill, expected_cash);
+        // 不变量：成交价不高于限价，且返还未用冻结后现金比按限价成交更多。
+        assert!(position.open_avg_price <= 110.0);
     }
 
     // 验证滑点在区间内时，买卖方向会按预期分别抬高/压低成交价。
@@ -5766,7 +5852,9 @@ mod tests {
 
         let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Filled);
-        assert_eq!(order.avg_price, 106.0);
+        // 限价单不吃滑点：open=105 等于限价，成交就是 105；
+        // 不会像市价单那样乘上 slippage（105*1.02=107.1），也不会滑到 bar 高点 106。
+        assert_eq!(order.avg_price, 105.0);
     }
 
     // 验证触发市价单在二阶段成交时同样应用 slippage，并受 high/low 夹取。
@@ -6854,8 +6942,11 @@ mod tests {
 
         let order = exchange.get_order(BTC, &id).await.unwrap().unwrap();
         assert_eq!(order.status, Status::Filled);
-        // 按指定价 106.0 加滑点 = 106.0 * 1.01 = 107.06，夹取到 high=106.0
-        assert_eq!(order.avg_price, 106.0);
+        // 注意：`price != 0 && trigger_price == 0` 会被判成 **限价单**（见 Order::is_limit），
+        // 不是市价单——公开 API 无法构造"市价单 + 非零价格"。
+        // 限价 106 挂在市场 105 上方；下一根 open=105 已在限价之下 → 成交在开盘价 105（价格改善），
+        // 既不套滑点（限价单不吃滑点），也不会填到 bar 高点 106。
+        assert_eq!(order.avg_price, 105.0);
     }
 
     // 验证 get_order 对不存在的订单 ID 返回 None（不报错）。

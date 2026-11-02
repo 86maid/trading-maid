@@ -711,14 +711,34 @@ pub fn calc_liquidation_price(
     quantity: Decimal,
     margin: Decimal,
 ) -> Decimal {
-    let initial_margin_rate = Decimal::from(1) / leverage;
+    // 杠杆为 0 时 `1 / leverage` 无意义：直接返回「永远不可能触及」的边界值。
+    if leverage == 0 {
+        return if side == Side::Buy {
+            Decimal::ZERO
+        } else {
+            Decimal::MAX
+        };
+    }
+
+    let initial_margin_rate = Decimal::from(1) / Decimal::from(leverage);
     let initial_margin = calc_initial_margin(price, quantity, leverage);
     let append_margin = margin - initial_margin;
 
-    if side == Side::Buy {
+    let liquidation_price: Decimal = if side == Side::Buy {
         price * (1 - initial_margin_rate + maintenance) - ((append_margin) / quantity)
     } else {
         price * (1 + initial_margin_rate - maintenance) + ((append_margin) / quantity)
+    };
+
+    // 强平价必须落在开仓价的对侧，且是一个合法价格：
+    //   多单 (0, price]        —— 0 表示永远碰不到（价格不可能 <= 0）
+    //   空单 [price, Decimal::MAX) —— MAX 表示永远碰不到
+    // 杠杆高到 `1 / leverage <= maintenance` 时，公式会把强平价算到开仓价的同一侧；
+    // 此时钳到开仓价本身：等价于「任何不利波动立刻强平」，而不是静默变成永不强平。
+    if side == Side::Buy {
+        liquidation_price.clamp(Decimal::ZERO, price)
+    } else {
+        liquidation_price.max(price)
     }
 }
 

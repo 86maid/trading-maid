@@ -52,7 +52,7 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 ### 🧾 Order Types
 
 - Supported: trigger price + (limit | market)
-- Not supported: OCO (take-profit/stop-loss combo order)
+- Not supported: OCO (take-profit/stop-loss combo order; Binance does not support it either)
 
 ### 📦 Position Type
 
@@ -63,17 +63,19 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 
 ### ⚙️ Order Processing Logic
 
-- Margin freeze: market orders freeze margin when filled; reduce-only orders do not freeze margin.
-- Matching timing: an order is placed on the current k-line and matched on the next k-line. a trigger order will be matched immediately on the current k-line once.
-- Fill rules: market orders fill at `Open`; limit orders follow these rules:
-    - Long
-        - limit >= market: fill at worst price `High`
-        - limit < market: fill at limit price
-    - Short
-        - limit <= market: fill at worst price `Low`
-        - limit > market: fill at limit price
-- Priority: when both pending-order conditions and liquidation conditions are met, pending orders are executed first.
-- Fees: market orders use `taker_fee`; limit and liquidation orders use `maker_fee`.
+- **Market order**: fills at `Open` (slippage applied, then clamped to `[Low, High]`).
+- **Limit order**:
+    - Buy: fills once `Low <= price`, at `min(Open, price)`
+    - Sell: fills once `High >= price`, at `max(Open, price)`
+    - In other words: if the open is already better than your price, you get the open (price improvement); otherwise you get your price. No slippage.
+- **Trigger order**: once the trigger price is touched, it turns into a market or limit order **on the same k-line** and fills by the rules above.
+    - The trigger direction is fixed at placement: trigger above the current close → fires when `High >= trigger`; below → fires when `Low <= trigger`.
+    - Direction is independent of side: `sell_trigger_market(110.5)` with the market at 105 means "sell once the price rises to 110.5".
+    - When it turns into a market order the fill is `max/min(Open, trigger)`: gapped past the trigger → fill at the open; crossed intrabar → fill at the trigger.
+- **Timing**: an order placed on a k-line is not matched on that k-line; matching starts on the next one. Only trigger orders can complete "trigger → fill" within the same k-line.
+- **Margin freeze**: market orders freeze at fill; limit orders freeze at placement based on their price (any excess is refunded when the fill is better); trigger orders freeze when triggered; reduce-only orders never freeze.
+- **Priority**: within a k-line, orders are matched in placement order; pending orders run before liquidation.
+- **Fees**: market orders and trigger-to-market use `taker_fee`; limit orders and trigger-to-limit use `maker_fee`; liquidation uses `taker_fee`.
 
 ## 🏗️ Architecture Overview
 
