@@ -416,22 +416,47 @@ impl LocalExchangeInner {
         self.update();
     }
 
+    /// 是否为「止损单」：只减仓的触发单，且该币种**此刻已有持仓**。
+    ///
+    /// 为什么要求「已有持仓」：`buy_tp_sl` 这类写法会把止损与开仓同批挂出去，
+    /// 那时还没有仓位。若把这种单提到最前面撮合，它一旦命中就会先被 reduce-only 检查
+    /// 取消掉（没有仓位可减），随后开仓成交，仓位反而失去保护。
+    /// 限定「已有持仓」后，这类新仓的止损仍留在普通队列里，行为与改动前一致。
+    fn is_stop_loss(&self, order: &OrderEx) -> bool {
+        order.kind == Kind::Trigger
+            && order.reduce_only
+            && self.position.iter().any(|(v, _)| v == &order.symbol)
+    }
+
     fn update(&mut self) {
+        let mut stop_queue = VecDeque::new();
         let mut normal_queue = VecDeque::new();
         let mut liquidation_queue = VecDeque::new();
 
         for (id, order) in self.pending_order_list.iter() {
-            if order.kind.is_normal() {
-                normal_queue.push_back(id.clone());
-            } else {
+            if !order.kind.is_normal() {
                 liquidation_queue.push_back(id.clone());
+            } else if self.is_stop_loss(order) {
+                stop_queue.push_back(id.clone());
+            } else {
+                normal_queue.push_back(id.clone());
             }
         }
 
+        // 阶段一：止损先撮合。
+        // 同一根 K 线内止盈与止损都可能被触及时，OHLC 不提供盘中先后，这里统一按
+        // "先走不利方向"处理：止损先把仓位消耗掉，止盈随后被 reduce-only 取消或裁剪。
+        // 两单总量小于仓位时（分批出场）互不抢占，两根都会成交，顺序不影响结果。
+        while let Some(id) = stop_queue.pop_front() {
+            self.update_order(&id, &mut stop_queue);
+        }
+
+        // 阶段二：其余挂单（开仓、止盈、普通限价……）按挂单顺序撮合。
         while let Some(id) = normal_queue.pop_front() {
             self.update_order(&id, &mut normal_queue);
         }
 
+        // 阶段三：强平。
         while let Some(id) = liquidation_queue.pop_front() {
             self.update_order(&id, &mut normal_queue);
         }
@@ -1755,6 +1780,119 @@ mod tests {
                 .cash(10000)
                 .leverage(10),
         ))
+    }
+
+    // 验证同一根 K 线内止盈与止损都被触及时，止损优先成交。
+    //
+    // 场景：多单 1.0 @100，止盈限价 110、止损触发 90，第三根 K 线 open=100 / high=120 / low=80
+    // 同时覆盖两个价位。OHLC 不提供盘中先后，约定按「先走不利方向」处理：
+    // 止损先成交在 90，仓位归零后止盈被 reduce-only 检查取消。
+    #[tokio::test]
+    async fn stop_loss_wins_when_take_profit_and_stop_loss_hit_in_same_kline() {
+        let exchange = single_exchange_with(
+            btc_metadata(),
+            vec![
+                gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                gen_kline(2, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                gen_kline(3, dec!(100.0), dec!(120.0), dec!(80.0), dec!(100.0)),
+            ],
+        );
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 1.0).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        // 止盈先挂、止损后挂：若按挂单顺序撮合，止盈会先成交（旧行为）
+        let take_profit_id = exchange
+            .sell_limit_reduce_only(BTC, 110.0, 1.0)
+            .await
+            .unwrap();
+        let stop_loss_id = exchange
+            .sell_trigger_market_reduce_only(BTC, 90.0, 1.0)
+            .await
+            .unwrap();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let take_profit = exchange
+            .get_order(BTC, &take_profit_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let stop_loss = exchange
+            .get_order(BTC, &stop_loss_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // 止损先成交，止盈因仓位已归零被取消。
+        // 注意：触发单自身的记录只有状态，成交价与数量记在它转换出的子单上
+        // （handle_trigger_order 把母单标记 Filled 后不再回填 avg_price），所以这里不查 avg_price。
+        assert_eq!(stop_loss.status, Status::Filled);
+        assert_eq!(take_profit.status, Status::Canceled);
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].close_avg_price, dec!(90.0));
+        // 100 → 90，亏 10
+        assert_eq!(history[0].profit, dec!(-10.0));
+        assert!(exchange.get_position(BTC).await.unwrap().is_none());
+    }
+
+    // 验证分批出场时止损不会「霸占」止盈：两单总量不超过仓位时，同一根 K 线内都能成交。
+    //
+    // 场景：多单 0.02 @100，止盈 0.01 @110、止损 0.01 @90。两单总量等于仓位，互不抢占，
+    // 因此结果与盘中先后无关——止损 0.01 在 90、止盈 0.01 在 110，毛盈亏恰好为 0。
+    #[tokio::test]
+    async fn partial_stop_loss_still_lets_take_profit_fill_in_same_kline() {
+        let exchange = single_exchange_with(
+            btc_metadata(),
+            vec![
+                gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                gen_kline(2, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
+                gen_kline(3, dec!(100.0), dec!(120.0), dec!(80.0), dec!(100.0)),
+            ],
+        );
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+        exchange.buy(BTC, 0.02).await.unwrap();
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let take_profit_id = exchange
+            .sell_limit_reduce_only(BTC, 110.0, 0.01)
+            .await
+            .unwrap();
+        let stop_loss_id = exchange
+            .sell_trigger_market_reduce_only(BTC, 90.0, 0.01)
+            .await
+            .unwrap();
+
+        exchange.next(BTC, Level::Minute1).await.unwrap();
+
+        let take_profit = exchange
+            .get_order(BTC, &take_profit_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let stop_loss = exchange
+            .get_order(BTC, &stop_loss_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // 两单都成交：止损只消耗掉一半仓位，剩下的一半仍可被止盈平掉。
+        // （止损是触发单，其自身记录不回填成交价，只能从持仓历史核对结果。）
+        assert_eq!(stop_loss.status, Status::Filled);
+        assert_eq!(take_profit.status, Status::Filled);
+        assert_eq!(take_profit.avg_price, dec!(110.0));
+
+        assert!(exchange.get_position(BTC).await.unwrap().is_none());
+
+        let history = exchange.get_history_position_list(BTC).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].close_quantity, dec!(0.02));
+        // (90-100)*0.01 + (110-100)*0.01 = 0
+        assert_eq!(history[0].profit, dec!(0.0));
     }
 
     fn single_exchange_with(metadata: Metadata, kline_list: Vec<KLine>) -> ExchangeWrapper {
