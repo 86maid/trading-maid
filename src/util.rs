@@ -47,7 +47,10 @@ impl<T, const N: usize> IsContainer for &[T; N] {}
 ///
 /// # Returns
 /// - On success, returns the path to the merged bin file
-/// - Data storage location: `~/.trading-maid/<symbol>/<interval>.bin`
+/// - Data storage location: `~/.trading-maid/<symbol>/<market_type>/<interval>.bin`
+///   (monthly CSV files live next to it under `<interval>/`)
+/// - Spot and futures are stored in separate directories, so `"BTCUSDT/1m"` and
+///   `"BTCUSDT/1m/spot"` never share cached files
 ///
 /// # Data Source
 /// https://data.binance.vision
@@ -158,10 +161,11 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
         .map(|home_directory| home_directory.join(".trading-maid"))
         .context("can not find data dir")?;
 
-    let symbol_directory = base_data_directory.join(base_symbol);
+    // market_type 必须进路径：现货和期货共用目录时，先下过哪个就永远复用哪个。
+    let symbol_directory = base_data_directory.join(base_symbol).join(market_type);
     let monthly_directory = symbol_directory.join(interval);
     let merged_file_path = symbol_directory.join(format!("{}.bin", interval));
-    let marged_lock_path = symbol_directory.join(format!("{}.lock", interval));
+    let lock_file_path = symbol_directory.join(format!("{}.lock", interval));
 
     fs::create_dir_all(&monthly_directory).await?;
 
@@ -189,7 +193,7 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
         match download_monthly_data(&http_client, &download_url).await {
             Ok(Some(v)) => {
                 fs::write(&monthly_file_path, v.as_bytes()).await?;
-                tokio::fs::write(&marged_lock_path, "").await?;
+                tokio::fs::write(&lock_file_path, "").await?;
             }
             Ok(None) => {
                 #[cfg(debug_assertions)]
@@ -274,7 +278,7 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
     merge_monthly_files(
         &monthly_directory,
         &merged_file_path,
-        &marged_lock_path,
+        &lock_file_path,
         &month_list,
     )
     .await?;
