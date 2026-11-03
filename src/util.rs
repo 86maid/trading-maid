@@ -207,7 +207,9 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
             Ok(None) => {
                 #[cfg(debug_assertions)]
                 println!("{} not available (404)", v);
-                break;
+                // 只跳过这一个月，继续往前下：最新的月份常常还没发布，
+                // 若在这里 break，全新缓存会一个文件都下不到。
+                continue;
             }
             Err(error) => {
                 bail!(
@@ -220,7 +222,7 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
     }
 
     // 实际参与合并的月份（升序）。用"真实存在的 CSV"而不是请求的窗口来命名合并产物：
-    // 上一个月可能还没发布（404 就 break），请求 48 个月实际可能只有 47 个。
+    // 上一个月可能还没发布，请求 48 个月实际可能只有 47 个。
     let mut csv_file_list = month_list
         .iter()
         .map(|v| monthly_directory.join(format!("{}.csv", v)))
@@ -239,13 +241,49 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
         );
     };
 
+    // 文件名里的区间必须与 CSV 一一对应：`merged_2026-01_2026-03.bin` 就意味着
+    // 01/02/03 三个月都在。区间名表达不了"中间缺一个月"，所以缺月份时直接报错，
+    // 而不是生成一个名字撒谎的 bin。
+    fn parse_month(stem: &str) -> Option<i32> {
+        let (year, month) = stem.split_once('-')?;
+        let year = year.parse::<i32>().ok()?;
+        let month = month.parse::<i32>().ok()?;
+
+        Some(year * 12 + month - 1)
+    }
+
+    let first_stem = first.to_string_lossy().into_owned();
+    let last_stem = last.to_string_lossy().into_owned();
+
+    let (Some(first_index), Some(last_index)) = (parse_month(&first_stem), parse_month(&last_stem))
+    else {
+        bail!("invalid monthly file name: {first_stem} / {last_stem}");
+    };
+
+    let expected_month_count = (last_index - first_index + 1) as usize;
+
+    if expected_month_count != csv_file_list.len() {
+        let existing = csv_file_list
+            .iter()
+            .filter_map(|p| p.file_stem().map(|v| v.to_string_lossy().into_owned()))
+            .collect::<Vec<_>>();
+
+        let missing = (first_index..=last_index)
+            .map(|index| format!("{:04}-{:02}", index / 12, index % 12 + 1))
+            .filter(|v| !existing.contains(v))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        bail!(
+            "missing monthly data in {:?}: [{}] — merged_<first>_<last>.bin 要求区间内每个月都在",
+            monthly_directory.to_string_lossy().to_lowercase(),
+            missing
+        );
+    }
+
     // 合并产物按实际月份区间命名，例如 merged_2026-01_2026-03.bin。
     // 同名即同一批 CSV：命中就跳过合并，不同窗口互不覆盖。
-    let merged_file_path = monthly_directory.join(format!(
-        "merged_{}_{}.bin",
-        first.to_string_lossy(),
-        last.to_string_lossy()
-    ));
+    let merged_file_path = monthly_directory.join(format!("merged_{first_stem}_{last_stem}.bin"));
 
     if !merged_file_path.exists() {
         // 先写临时文件再 rename：否则并发的读会看到写了一半的 bin。
