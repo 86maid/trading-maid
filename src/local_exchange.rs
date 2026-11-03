@@ -51,9 +51,6 @@ struct LocalExchangeInner {
     ///
     /// 以前是靠比较 `close_quantity` 和 `max_quantity` 推断「最后一条是不是同一笔仓位的半成品」，
     /// 但相邻两笔仓位大小不同时（加仓、马丁格尔）同样会满足条件，于是把上一笔整条覆盖掉。
-    /// 现在改成显式记录。用 symbol 做键而不是全局单值：`history_position_list` 是所有币种共用
-    /// 的一条 Vec，多币种交替分批平仓时，全局下标会把别的币种的记录当成自己的半成品去改写。
-    /// 同一交易对同时最多只有一笔仓位，所以按 symbol 索引是精确的。
     unfinished_history_index: IndexMap<String, usize>,
     id: u64,
     pacemaker: Option<String>,
@@ -854,7 +851,7 @@ impl LocalExchangeInner {
         let kline_time = self.kline(&order_ref.symbol).time;
         let symbol = position.symbol.clone();
 
-        let partial_close_qty = position
+        let partial_close_quantity = position
             .log
             .iter()
             .filter(|v| v.side != position.side)
@@ -871,7 +868,7 @@ impl LocalExchangeInner {
                 last.open_avg_price = position.open_avg_price;
                 last.max_quantity = max_quantity;
                 last.close_avg_price = order_ref.avg_price;
-                last.close_quantity = partial_close_qty;
+                last.close_quantity = partial_close_quantity;
                 last.total_profit = profit_sum - fee_sum;
                 last.profit = profit_sum;
                 last.fee = fee_sum;
@@ -882,7 +879,7 @@ impl LocalExchangeInner {
                 self.push_history_position(
                     &position,
                     order_ref,
-                    partial_close_qty,
+                    partial_close_quantity,
                     max_quantity,
                     profit_sum,
                     fee_sum,

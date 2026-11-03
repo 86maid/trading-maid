@@ -2,7 +2,6 @@
 
 use crate::prelude::*;
 use anyhow::Context as _;
-use anyhow::anyhow;
 use anyhow::bail;
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -912,16 +911,13 @@ async fn check_kline(
             let filled_klines = exchange
                 .get_kline(symbol, source_level, gap_start, gap_end)
                 .await
-                .map_err(|e| {
-                    anyhow!(
-                        "time discontinuity: failed to fill time gap via get_kline(): range [start, end): start {} ({}), end {} ({}): {}",
-                        gap_start,
-                        t2s(gap_start),
-                        gap_end,
-                        t2s(gap_end),
-                        e
-                    )
-                })?;
+                .context(format!(
+                    "time discontinuity: failed to fill time gap via get_kline(): range [start, end): start {} ({}), end {} ({})",
+                    gap_start,
+                    t2s(gap_start),
+                    gap_end,
+                    t2s(gap_end),
+                ))?;
 
             match filled_klines.first() {
                 Some(first) if first.time != gap_start => {
@@ -947,13 +943,10 @@ async fn check_kline(
 
             if let Some(last) = filled_klines.last() {
                 let last_end = get_time_range(last.time, source_level)
-                    .map_err(|e| {
-                        anyhow!(
-                            "time discontinuity: get_kline() returned k-line with unexpected time: {}: {}",
-                            last.time,
-                            e
-                        )
-                    })?
+                    .context(format!(
+                        "time discontinuity: get_kline() returned k-line with unexpected time: {}",
+                        last.time,
+                    ))?
                     .1;
 
                 if last_end != gap_end {
@@ -976,13 +969,10 @@ async fn check_kline(
     };
 
     let new_next_time = get_time_range(kline.time, source_level)
-        .map_err(|e| {
-            anyhow!(
-                "next(): returned k-line has unexpected time: {}: {}",
-                kline.time,
-                e
-            )
-        })?
+        .context(format!(
+            "next(): returned k-line has unexpected time: {}",
+            kline.time,
+        ))?
         .1;
 
     Ok((filled, new_next_time))
