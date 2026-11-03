@@ -48,9 +48,10 @@ impl<T, const N: usize> IsContainer for &[T; N] {}
 /// # Returns
 /// - On success, returns the path to the merged bin file
 /// - 缓存目录与 `format` 同形：`~/.trading-maid/<symbol>/<interval>/<market_type>/`
-///   - `{yyyy-mm}.csv`  月度原始数据
-///   - `merged.bin`     合并产物（可随时删除，会按 CSV 重建）
-///   - `merged.lock`    合并/下载进行中的标记
+///   - `{yyyy-mm}.csv`               月度原始数据
+///   - `merged_<首月>_<末月>.bin`     合并产物，按**实际合并进去的月份区间**命名
+/// - 合并产物同名即同一批 CSV：命中就直接返回，不再读 CSV；不同窗口互不覆盖
+/// - 最多保留 5 个合并产物，按创建时间淘汰最旧的
 /// - Spot and futures are stored in separate directories, so `"BTCUSDT/1m"` and
 ///   `"BTCUSDT/1m/spot"` never share cached files
 ///
@@ -175,8 +176,6 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
         .join(base_symbol)
         .join(interval)
         .join(market_type);
-    let merged_file_path = monthly_directory.join("merged.bin");
-    let lock_file_path = monthly_directory.join("merged.lock");
 
     fs::create_dir_all(&monthly_directory).await?;
 
@@ -204,7 +203,6 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
         match download_monthly_data(&http_client, &download_url).await {
             Ok(Some(v)) => {
                 fs::write(&monthly_file_path, v.as_bytes()).await?;
-                tokio::fs::write(&lock_file_path, "").await?;
             }
             Ok(None) => {
                 #[cfg(debug_assertions)]
@@ -221,87 +219,137 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
         }
     }
 
-    async fn merge_monthly_files(
-        monthly_directory: &Path,
-        merged_file_path: &Path,
-        marged_lock_path: &Path,
-        month_list: &[String],
-    ) -> anyhow::Result<()> {
-        let mut csv_file_list = month_list
-            .iter()
-            .map(|v| monthly_directory.join(format!("{}.csv", v)))
-            .filter(|p| p.exists())
-            .collect::<Vec<_>>();
+    // 实际参与合并的月份（升序）。用"真实存在的 CSV"而不是请求的窗口来命名合并产物：
+    // 上一个月可能还没发布（404 就 break），请求 48 个月实际可能只有 47 个。
+    let mut csv_file_list = month_list
+        .iter()
+        .map(|v| monthly_directory.join(format!("{}.csv", v)))
+        .filter(|p| p.exists())
+        .collect::<Vec<_>>();
 
-        csv_file_list.sort();
+    csv_file_list.sort();
 
-        if csv_file_list.is_empty() {
-            bail!(
-                "no monthly files found in {:?}",
-                monthly_directory.to_string_lossy().to_lowercase()
-            );
-        }
+    let (Some(first), Some(last)) = (
+        csv_file_list.first().and_then(|p| p.file_stem()),
+        csv_file_list.last().and_then(|p| p.file_stem()),
+    ) else {
+        bail!(
+            "no monthly files found in {:?}",
+            monthly_directory.to_string_lossy().to_lowercase()
+        );
+    };
 
-        let mut output_file = fs::File::create(merged_file_path).await?;
-        let mut array = Vec::new();
+    // 合并产物按实际月份区间命名，例如 merged_2026-01_2026-03.bin。
+    // 同名即同一批 CSV：命中就跳过合并，不同窗口互不覆盖。
+    let merged_file_path = monthly_directory.join(format!(
+        "merged_{}_{}.bin",
+        first.to_string_lossy(),
+        last.to_string_lossy()
+    ));
 
-        for v in csv_file_list.iter() {
-            let file_content = fs::read_to_string(v).await?;
+    if !merged_file_path.exists() {
+        // 先写临时文件再 rename：否则并发的读会看到写了一半的 bin。
+        let temporary_file_path = merged_file_path.with_extension("bin.tmp");
 
-            let mut content_lines = file_content.lines();
+        merge_monthly_files(&csv_file_list, &temporary_file_path).await?;
 
-            _ = content_lines.next();
-
-            for v in content_lines {
-                let Some((pos, _)) = v.match_indices(',').nth(5) else {
-                    bail!("parse csv error: less than 6 commas");
-                };
-
-                let line = &v[..pos];
-                let mut columns = line.split(',');
-                // 时间戳单位归一：Binance 的 K 线 CSV 不统一——合约（um/cm）用毫秒（13 位），
-                // 现货（spot）用微秒（16 位）。框架内部统一用毫秒（见 `t2s` / `t2s_utc`），
-                // 这里按量级把微秒压回毫秒。只降不升：公元 2286 年的毫秒值才到 1e13，
-                // 所以 >= 1e14 的必然是微秒（甚至纳秒）。
-                let mut time = columns.next().context("missing time")?.parse::<u64>()?;
-                while time >= 100_000_000_000_000 {
-                    time /= 1000;
-                }
-                let open = Decimal::from_str(columns.next().context("missing open")?)?;
-                let high = Decimal::from_str(columns.next().context("missing high")?)?;
-                let low = Decimal::from_str(columns.next().context("missing low")?)?;
-                let close = Decimal::from_str(columns.next().context("missing close")?)?;
-                let volume = Decimal::from_str(columns.next().context("missing volume")?)?;
-
-                array.push(KLine {
-                    time,
-                    open,
-                    high,
-                    low,
-                    close,
-                    volume,
-                });
-            }
-        }
-
-        output_file.write_all(&bincode::serialize(&array)?).await?;
-
-        if marged_lock_path.exists() {
-            std::fs::remove_file(marged_lock_path)?;
-        }
-
-        Ok(())
+        fs::rename(&temporary_file_path, &merged_file_path).await?;
     }
 
-    merge_monthly_files(
-        &monthly_directory,
-        &merged_file_path,
-        &lock_file_path,
-        &month_list,
-    )
-    .await?;
+    prune_merged_files(&monthly_directory).await?;
 
     Ok(merged_file_path)
+}
+
+/// 合并产物最多保留 `MAX_MERGED_FILE_COUNT` 个，按创建时间淘汰最旧的。
+///
+/// 窗口随"当前月份"滚动，同一个 `month_count` 每个月都会产生新的区间名；
+/// 不淘汰的话文件会无限增长（一个 48 个月的 bin 约 174 MB）。
+async fn prune_merged_files(monthly_directory: &Path) -> anyhow::Result<()> {
+    const MAX_MERGED_FILE_COUNT: usize = 5;
+
+    let mut entry_list = Vec::new();
+    let mut read_dir = fs::read_dir(monthly_directory).await?;
+
+    while let Some(entry) = read_dir.next_entry().await? {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+
+        if !name.starts_with("merged_") || !name.ends_with(".bin") {
+            continue;
+        }
+
+        let metadata = entry.metadata().await?;
+        // 创建时间在部分平台上不可用，退回修改时间。
+        let timestamp = metadata.created().or_else(|_| metadata.modified())?;
+
+        entry_list.push((timestamp, entry.path()));
+    }
+
+    if entry_list.len() <= MAX_MERGED_FILE_COUNT {
+        return Ok(());
+    }
+
+    entry_list.sort_by_key(|(timestamp, _)| *timestamp);
+
+    let remove_count = entry_list.len() - MAX_MERGED_FILE_COUNT;
+
+    for (_, path) in entry_list.into_iter().take(remove_count) {
+        let _ = fs::remove_file(&path).await;
+    }
+
+    Ok(())
+}
+
+async fn merge_monthly_files(
+    csv_file_list: &[PathBuf],
+    merged_file_path: &Path,
+) -> anyhow::Result<()> {
+    let mut output_file = fs::File::create(merged_file_path).await?;
+    let mut array = Vec::new();
+
+    for v in csv_file_list.iter() {
+        let file_content = fs::read_to_string(v).await?;
+
+        let mut content_lines = file_content.lines();
+
+        _ = content_lines.next();
+
+        for v in content_lines {
+            let Some((pos, _)) = v.match_indices(',').nth(5) else {
+                bail!("parse csv error: less than 6 commas");
+            };
+
+            let line = &v[..pos];
+            let mut columns = line.split(',');
+            // 时间戳单位归一：Binance 的 K 线 CSV 不统一——合约（um/cm）用毫秒（13 位），
+            // 现货（spot）用微秒（16 位）。框架内部统一用毫秒（见 `t2s` / `t2s_utc`），
+            // 这里按量级把微秒压回毫秒。只降不升：公元 2286 年的毫秒值才到 1e13，
+            // 所以 >= 1e14 的必然是微秒（甚至纳秒）。
+            let mut time = columns.next().context("missing time")?.parse::<u64>()?;
+            while time >= 100_000_000_000_000 {
+                time /= 1000;
+            }
+            let open = Decimal::from_str(columns.next().context("missing open")?)?;
+            let high = Decimal::from_str(columns.next().context("missing high")?)?;
+            let low = Decimal::from_str(columns.next().context("missing low")?)?;
+            let close = Decimal::from_str(columns.next().context("missing close")?)?;
+            let volume = Decimal::from_str(columns.next().context("missing volume")?)?;
+
+            array.push(KLine {
+                time,
+                open,
+                high,
+                low,
+                close,
+                volume,
+            });
+        }
+    }
+
+    output_file.write_all(&bincode::serialize(&array)?).await?;
+
+    Ok(())
 }
 
 /// Downloads and merges funding rate data from Binance into a single bin file
