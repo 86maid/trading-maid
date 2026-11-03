@@ -233,8 +233,16 @@ async fn kline() {
     // OHLC 自洽
     for k in &data.data {
         assert!(k.high >= k.low, "high < low at {}", k.time);
-        assert!(k.high >= k.open && k.high >= k.close, "high broken at {}", k.time);
-        assert!(k.low <= k.open && k.low <= k.close, "low broken at {}", k.time);
+        assert!(
+            k.high >= k.open && k.high >= k.close,
+            "high broken at {}",
+            k.time
+        );
+        assert!(
+            k.low <= k.open && k.low <= k.close,
+            "low broken at {}",
+            k.time
+        );
         assert!(k.open > Decimal::ZERO, "non-positive open at {}", k.time);
     }
 
@@ -245,5 +253,9 @@ async fn kline() {
     println!("last:  {} open: {}", t2s_utc(last.time), last.open);
 
     // 一个月的 1m K 线不可能少到这个程度
-    assert!(data.data.len() > 40_000, "too few klines: {}", data.data.len());
+    assert!(
+        data.data.len() > 40_000,
+        "too few klines: {}",
+        data.data.len()
+    );
 }

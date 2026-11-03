@@ -52,6 +52,12 @@ impl<T, const N: usize> IsContainer for &[T; N] {}
 /// - Spot and futures are stored in separate directories, so `"BTCUSDT/1m"` and
 ///   `"BTCUSDT/1m/spot"` never share cached files
 ///
+/// # Note on timestamps
+/// - Binance 的 K 线 CSV 时间戳单位**不统一**：合约（um/cm）是毫秒，现货（spot）是微秒。
+///   合并时会按量级归一到毫秒，所以 `KLine::time` 永远是毫秒，与 `t2s` / `t2s_utc` 一致。
+/// - 数据原样保留：归档里缺的 K 线不会被补齐，也不会被插值。遇到缺口时，
+///   回测会在引擎的连续性检查处直接报错（`time discontinuity`），而不是静默跳过。
+///
 /// # Data Source
 /// https://data.binance.vision
 ///
@@ -248,7 +254,14 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
 
                 let line = &v[..pos];
                 let mut columns = line.split(',');
-                let time = columns.next().context("missing time")?.parse::<u64>()?;
+                // 时间戳单位归一：Binance 的 K 线 CSV 不统一——合约（um/cm）用毫秒（13 位），
+                // 现货（spot）用微秒（16 位）。框架内部统一用毫秒（见 `t2s` / `t2s_utc`），
+                // 这里按量级把微秒压回毫秒。只降不升：公元 2286 年的毫秒值才到 1e13，
+                // 所以 >= 1e14 的必然是微秒（甚至纳秒）。
+                let mut time = columns.next().context("missing time")?.parse::<u64>()?;
+                while time >= 100_000_000_000_000 {
+                    time /= 1000;
+                }
                 let open = Decimal::from_str(columns.next().context("missing open")?)?;
                 let high = Decimal::from_str(columns.next().context("missing high")?)?;
                 let low = Decimal::from_str(columns.next().context("missing low")?)?;
@@ -476,10 +489,14 @@ pub async fn get_or_download_funding_rate_path(
             for line in content_lines {
                 let mut columns = line.split(',');
 
-                let time = columns
+                // 资金费率只有合约有，但同样按量级归一，避免 Binance 日后把这里也换成微秒。
+                let mut time = columns
                     .next()
                     .context("missing calc_time")?
                     .parse::<u64>()?;
+                while time >= 100_000_000_000_000 {
+                    time /= 1000;
+                }
 
                 // Skip funding_interval_hours
                 _ = columns.next();
