@@ -39,16 +39,18 @@ impl<T, const N: usize> IsContainer for &[T; N] {}
 /// Downloads and merges K-line data from Binance into a single bin file
 ///
 /// # Arguments
-/// - `format`       - Data format: `symbol/interval[/market_type]`
+/// - `format`       - Data format: `symbol/interval` or `symbol/interval/market_type`
 ///   - Market type is optional, defaults to `futures`, can be `spot` or `futures`
-///   - Examples: `"BTCUSDT/1m"` or `"ETHUSDT/1h/spot"`
+///   - Examples: `"BTCUSDT/1m"` (futures) or `"BTCUSDT/1m/spot"`
 ///   - For interval format, see: `Level` enum.
 /// - `month_count`  - Number of months to download, 0 means all available data (up to 120 months)
 ///
 /// # Returns
 /// - On success, returns the path to the merged bin file
-/// - Data storage location: `~/.trading-maid/<symbol>/<market_type>/<interval>.bin`
-///   (monthly CSV files live next to it under `<interval>/`)
+/// - 缓存目录与 `format` 同形：`~/.trading-maid/<symbol>/<interval>/<market_type>/`
+///   - `{yyyy-mm}.csv`  月度原始数据
+///   - `merged.bin`     合并产物（可随时删除，会按 CSV 重建）
+///   - `merged.lock`    合并/下载进行中的标记
 /// - Spot and futures are stored in separate directories, so `"BTCUSDT/1m"` and
 ///   `"BTCUSDT/1m/spot"` never share cached files
 ///
@@ -167,11 +169,14 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
         .map(|home_directory| home_directory.join(".trading-maid"))
         .context("can not find data dir")?;
 
+    // 目录形状与 format 参数保持一致：<symbol>/<interval>/<market_type>。
     // market_type 必须进路径：现货和期货共用目录时，先下过哪个就永远复用哪个。
-    let symbol_directory = base_data_directory.join(base_symbol).join(market_type);
-    let monthly_directory = symbol_directory.join(interval);
-    let merged_file_path = symbol_directory.join(format!("{}.bin", interval));
-    let lock_file_path = symbol_directory.join(format!("{}.lock", interval));
+    let monthly_directory = base_data_directory
+        .join(base_symbol)
+        .join(interval)
+        .join(market_type);
+    let merged_file_path = monthly_directory.join("merged.bin");
+    let lock_file_path = monthly_directory.join("merged.lock");
 
     fs::create_dir_all(&monthly_directory).await?;
 
