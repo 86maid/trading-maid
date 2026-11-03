@@ -83,9 +83,29 @@ impl Level {
     }
 
     pub fn is_valid_sampling_target(&self, target_level: Level) -> bool {
-        target_level
-            .interval_minutes()
-            .is_multiple_of(self.interval_minutes())
+        if target_level == *self {
+            return true;
+        }
+
+        let source_minutes = self.interval_minutes();
+        let target_minutes = target_level.interval_minutes();
+
+        // 月线是最粗的周期，没有可生成的目标。
+        if source_minutes == 0 {
+            return false;
+        }
+
+        // 月不是固定长度（28~31 天），不能当成"分钟数的整数倍"来判断——`Month1` 的
+        // `interval_minutes()` 是 0，而 `0.is_multiple_of(x)` 恒为真，会让周线被误判成
+        // 月线的合法来源。
+        //
+        // 能聚合出月线的前提是：一根源 K 线不会跨月。不跨天就不可能跨月，所以要求源的
+        // 周期能整除一天。3d / 1w 会跨月（例如 2024-01-29~2024-02-05 那根周线），排除。
+        if target_minutes == 0 {
+            return 1440 % source_minutes == 0;
+        }
+
+        target_minutes.is_multiple_of(source_minutes)
     }
 }
 
@@ -256,6 +276,12 @@ impl DataSource {
                 .last()
                 .filter(|v| v.metadata.level.is_valid_sampling_target(level))
                 .map_or(self, |v| v);
+
+            // 上一级聚合不出来时回退到原始数据；原始数据本身也可能太粗
+            // （例如周线无法聚合出月线），这种级别直接跳过，不生成错误数据。
+            if !source.metadata.level.is_valid_sampling_target(level) {
+                continue;
+            }
 
             let mut metadata = source.metadata.clone();
 
@@ -736,7 +762,6 @@ impl Timeline {
             }
         }
 
-        // Intersection: latest first time → earliest last time.
         let mut start_time = u64::MIN;
         let mut end_time = u64::MAX;
 
@@ -765,7 +790,6 @@ impl Timeline {
             );
         }
 
-        // Per-source start index: first kline with time >= intersection start.
         let mut start = Vec::with_capacity(data_source.len());
         let mut len = usize::MAX;
 
@@ -793,6 +817,28 @@ impl Timeline {
 
             start.push(si);
             len = len.min(effective_len);
+        }
+
+        let baseline_source = &data_source[0];
+        let baseline_start = start[0];
+
+        for index in 0..len {
+            let baseline_time = baseline_source.data[baseline_start + index].time;
+
+            for (i, source) in data_source.iter().enumerate().skip(1) {
+                let time = source.data[start[i] + index].time;
+
+                if time != baseline_time {
+                    bail!(
+                        "Timeline: kline time mismatch at index {}: {} has {}, {} has {}",
+                        index,
+                        baseline_source.metadata.symbol,
+                        baseline_time,
+                        source.metadata.symbol,
+                        time
+                    );
+                }
+            }
         }
 
         Ok(Self {

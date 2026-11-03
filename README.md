@@ -521,7 +521,8 @@ if let Some(btc_5m_cx) = cx.request("BTCUSDT", Level::Minute5) {
 - If the requested level matches the **strategy level** (the level passed to `engine.run`) or the **source data level** (the DataSource's level), pre-built data is returned instantly with zero overhead.
 - For any other level, the framework resamples from the source kline data to the target level. The result is **computed on first access and cached** — subsequent calls within the same bar hit the cache and incur no extra cost.
 
-The target level must be an integer multiple of the source data level. Use `is_valid_sampling_target` to check compatibility.
+The target interval must be an integer multiple of the source data interval. Use `is_valid_sampling_target` to check compatibility.
+Monthly bars are the exception: their length follows the calendar (28–31 days), so they are only generated from source levels whose interval divides one day (1m–12h, 1d). Aggregating 3d or 1w bars into a month would assign a bar that straddles the month boundary entirely to the earlier month, so it is rejected.
 
 > ⚠️ **Recommendation: always use 1‑minute data as the source.** This allows resampling to any coarser level for maximum flexibility.
 
