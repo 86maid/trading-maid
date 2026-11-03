@@ -277,14 +277,17 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
 
                 let line = &v[..pos];
                 let mut columns = line.split(',');
+
                 // 时间戳单位归一：Binance 的 K 线 CSV 不统一——合约（um/cm）用毫秒（13 位），
                 // 现货（spot）用微秒（16 位）。框架内部统一用毫秒（见 `t2s` / `t2s_utc`），
                 // 这里按量级把微秒压回毫秒。只降不升：公元 2286 年的毫秒值才到 1e13，
                 // 所以 >= 1e14 的必然是微秒（甚至纳秒）。
                 let mut time = columns.next().context("missing time")?.parse::<u64>()?;
+
                 while time >= 100_000_000_000_000 {
                     time /= 1000;
                 }
+
                 let open = Decimal::from_str(columns.next().context("missing open")?)?;
                 let high = Decimal::from_str(columns.next().context("missing high")?)?;
                 let low = Decimal::from_str(columns.next().context("missing low")?)?;
@@ -773,7 +776,6 @@ pub fn calc_liquidation_price(
     quantity: Decimal,
     margin: Decimal,
 ) -> Decimal {
-    // 杠杆为 0 时 `1 / leverage` 无意义：直接返回「永远不可能触及」的边界值。
     if leverage == 0 {
         return if side == Side::Buy {
             Decimal::ZERO
@@ -792,11 +794,6 @@ pub fn calc_liquidation_price(
         price * (1 + initial_margin_rate - maintenance) + ((append_margin) / quantity)
     };
 
-    // 强平价必须落在开仓价的对侧，且是一个合法价格：
-    //   多单 (0, price]        —— 0 表示永远碰不到（价格不可能 <= 0）
-    //   空单 [price, Decimal::MAX) —— MAX 表示永远碰不到
-    // 杠杆高到 `1 / leverage <= maintenance` 时，公式会把强平价算到开仓价的同一侧；
-    // 此时钳到开仓价本身：等价于「任何不利波动立刻强平」，而不是静默变成永不强平。
     if side == Side::Buy {
         liquidation_price.clamp(Decimal::ZERO, price)
     } else {

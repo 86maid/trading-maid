@@ -210,8 +210,6 @@ impl EMACache {
     pub fn from_series(series: &Series, length: usize) -> Self {
         let mut cache = Self::new(length);
 
-        // `Series::iter()` 是最新 → 最旧，回放必须反过来（与 `ema` / `rsi` 里的
-        // `iter().rev()` 一致），否则缓存状态与逐根更新的结果不一致。
         for price in series.iter().rev() {
             cache.update(*price);
         }
@@ -289,8 +287,6 @@ impl RSICache {
     pub fn from_series(series: &Series, length: usize) -> Self {
         let mut cache = Self::new(length);
 
-        // `Series::iter()` 是最新 → 最旧，回放必须反过来（与 `ema` / `rsi` 里的
-        // `iter().rev()` 一致），否则缓存状态与逐根更新的结果不一致。
         for price in series.iter().rev() {
             cache.update(*price);
         }
