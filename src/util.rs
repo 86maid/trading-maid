@@ -259,9 +259,16 @@ pub async fn get_or_download(format: impl AsRef<str>, month_count: u32) -> anyho
         for v in csv_file_list.iter() {
             let file_content = fs::read_to_string(v).await?;
 
-            let mut content_lines = file_content.lines();
+            let mut content_lines = file_content.lines().peekable();
 
-            _ = content_lines.next();
+            // Binance 的归档格式不统一：合约（um/cm）的 CSV 带表头，现货（spot）不带。
+            // 无条件跳过第一行会让现货每个月丢掉第一根 K 线，在月边界留下 1 分钟空洞。
+            if content_lines
+                .peek()
+                .is_some_and(|v| !v.starts_with(|c: char| c.is_ascii_digit()))
+            {
+                _ = content_lines.next();
+            }
 
             for v in content_lines {
                 let Some((pos, _)) = v.match_indices(',').nth(5) else {
