@@ -11,13 +11,9 @@ use std::sync::Arc;
 /// zero means unlimited.
 pub const DEFAULT_SERIES_MAX_LENGTH: usize = 0;
 
-/// 预加载的三种模式，三选一，后设置的覆盖前面的；不设置 = 完全不预加载。
 enum Preload {
-    /// 按根数往前退
     KLineCount(usize),
-    /// 从某个时间戳起（0 = 能拉多早拉多早）
     From(u64),
-    /// 用内存里的 DataSource 当种子
     Data(DataSource),
 }
 
@@ -336,7 +332,6 @@ where
                         next_time = Some(new_next_time);
                         prev_time = kline.time;
 
-                        // 补回来的 source bar，hook 需要靠它追上自己的状态
                         let missed_kline_list = filled.clone().unwrap_or_default();
 
                         if let Some(filled) = filled {
@@ -349,7 +344,6 @@ where
                             let new_bar_list =
                                 resample(&source_level_kline_buffer, strategy_level)?;
 
-                            // 一次补进来的多根说明中间有网络缺口，策略只会为最后一根被调用
                             let missed = new_bar_list.len().saturating_sub(1);
 
                             strategy_level_kline_buffer.extend(new_bar_list);
@@ -447,9 +441,6 @@ where
             preloaded: bool,
         }
 
-        /// (symbol_index, Option<(kline, filled, new_next_time)>).
-        type TaskOutput = (usize, Option<(KLine, Option<Vec<KLine>>, u64)>);
-
         let mut symbol_buffer: Vec<(String, SymbolBuffer)> = symbol_list
             .iter()
             .map(|s| (s.clone(), SymbolBuffer::new(N)))
@@ -467,49 +458,77 @@ where
 
         let mut ready = false;
 
+        async fn step(
+            exchange: Arc<dyn Exchange + 'static>,
+            symbol: String,
+            source_level: Level,
+            next_time: Option<u64>,
+            prev_time: u64,
+        ) -> anyhow::Result<Option<(KLine, Option<Vec<KLine>>, u64)>> {
+            let Some(kline) = exchange.next(&symbol, source_level).await? else {
+                return Ok(None);
+            };
+
+            let (filled, new_next_time) =
+                check_kline(exchange, &symbol, source_level, kline, next_time, prev_time).await?;
+
+            Ok(Some((kline, filled, new_next_time)))
+        }
+
         loop {
-            let mut handle_list = Vec::with_capacity(symbol_list.len());
+            let mut pending = Vec::with_capacity(symbol_list.len());
 
             for (i, symbol) in symbol_list.iter().enumerate() {
                 if states[i].eof {
                     continue;
                 }
 
-                let symbol = symbol.clone();
-                let ex = self.exchange.clone();
-                let next_time = states[i].next_time;
-                let prev_time = states[i].prev_time;
+                pending.push((i, symbol.clone(), states[i].next_time, states[i].prev_time));
+            }
 
-                handle_list.push(tokio::spawn(async move {
-                    let kline = match ex.next(&symbol, source_level).await? {
-                        Some(kline) => kline,
-                        None => return Ok::<_, anyhow::Error>((i, None)),
-                    };
+            if pending.is_empty() {
+                return Ok(());
+            }
 
-                    let (filled, new_next_time) = check_kline(
-                        ex.clone(),
-                        &symbol,
+            let mut task_output_list = Vec::with_capacity(pending.len());
+
+            if self.exchange.is_live() {
+                let mut handle_list = Vec::with_capacity(pending.len());
+
+                for (i, symbol, next_time, prev_time) in pending {
+                    let ex = self.exchange.clone();
+
+                    handle_list.push(tokio::spawn(async move {
+                        let result = step(ex, symbol, source_level, next_time, prev_time).await;
+
+                        (i, result)
+                    }));
+                }
+
+                for handle in handle_list {
+                    let (i, result) = handle.await?;
+
+                    task_output_list.push((i, result));
+                }
+            } else {
+                for (i, symbol, next_time, prev_time) in pending {
+                    let result = step(
+                        self.exchange.clone(),
+                        symbol,
                         source_level,
-                        kline,
                         next_time,
                         prev_time,
                     )
-                    .await?;
+                    .await;
 
-                    Ok((i, Some((kline, filled, new_next_time))))
-                }));
-            }
-
-            if handle_list.is_empty() {
-                return Ok(());
+                    task_output_list.push((i, result));
+                }
             }
 
             let mut all_eof = true;
 
-            for handle in handle_list {
-                let (symbol_index, result): TaskOutput = handle.await??;
-
-                match result {
+            for (symbol_index, result) in task_output_list {
+                match result? {
                     Some((current, filled, new_next_time)) => {
                         all_eof = false;
 
@@ -537,7 +556,6 @@ where
                         state.prev_time = current.time;
                         buffer.missed = 0;
 
-                        // 补回来的 source bar，hook 需要靠它追上自己的状态
                         let missed_kline_list = filled.clone().unwrap_or_default();
 
                         if let Some(filled) = filled {
@@ -679,26 +697,17 @@ where
         level: Level,
         first_time: u64,
     ) -> anyhow::Result<Vec<KLine>> {
-        // 以第一根 live K 线的时间作为锚点，向左取历史，右端开区间，保证不会和它重叠。
-        // 返回值要求最后一根的下一根正好等于锚点；连续性只做假设不做修补，
-        // 种子数据和 get_kline 都必须返回相邻的 K 线。
-        //
-        // 回测的数据源本来就从第一根开始，不需要预加载，直接跳过
         if !self.exchange.is_live() || self.preload.is_none() {
             return Ok(Vec::new());
         }
 
-        // 从 time 往前退 count 根 K 线。
-        // 有固定时长的级别一次算完；月线长度随日历变化，逐根退。
         fn shift_back(time: u64, level: Level, count: usize) -> anyhow::Result<u64> {
-            // 非月线：一次乘加算出起点，再对齐到 bar 边界
             if level != Level::Month1 {
                 let span = (count as u64).saturating_mul(level.interval_millis());
 
                 return Ok(get_time_range(time.saturating_sub(span), level)?.0);
             }
 
-            // 月线每根长度不固定（28/29/30/31 天），只能逐根往回退
             let mut start = time;
 
             for _ in 0..count {
@@ -708,25 +717,17 @@ where
             Ok(start)
         }
 
-        // 没有配置预加载，直接返回空，一个请求都不发
         let Some(preload) = &self.preload else {
             return Ok(Vec::new());
         };
 
-        // 解出两个东西：
-        //   start —— 预加载区间的起点
-        //   seed  —— 内存里的种子数据，只有 Data 模式才有
         let (start, seed) = match preload {
             Preload::KLineCount(kline_count) => {
-                // 从第一根 live K 线往前退 N 根，得到区间起点
                 (shift_back(first_time, level, *kline_count)?, None)
             }
             Preload::From(start_time) => {
-                // 取 start_time 所在那根 bar 的起点。用户给的可能是 bar 中间的时刻，
-                // 直接用它当起点会把那根 bar 排除掉，所以要用 get_time_range 对齐
                 let start = get_time_range(*start_time, level)?.0;
 
-                // 起点已经不早于第一根 live K 线，没有可预加载的东西
                 if start >= first_time {
                     return Ok(Vec::new());
                 }
@@ -736,10 +737,8 @@ where
             Preload::Data(data) => (0, Some(data)),
         };
 
-        // 有种子数据就从中切出 [start, first_time)；没有的话下面整段跳过，全靠接口拉
         let mut kline_list = match seed {
             Some(data) => {
-                // symbol 必须对得上，否则等于拿别的币的数据预热策略，比不预热还危险
                 if data.metadata.symbol != symbol {
                     bail!(
                         "preload_data: symbol mismatch: expected {}, got {}",
@@ -748,7 +747,6 @@ where
                     );
                 }
 
-                // 级别相同直接用；种子更细则重采样上来；种子更粗 resample 会报错（无法向下采样）
                 let data = if data.metadata.level == level {
                     data.clone()
                 } else {
@@ -758,14 +756,11 @@ where
                     ))?
                 };
 
-                // 只取早于第一根 live K 线的那一段，保证策略看不到未来数据
                 data.range(start, first_time).data.clone()
             }
             None => Vec::new(),
         };
 
-        // 种子数据的最后一根到第一根 live K 线之间往往有一段空洞（比如本地文件是昨天的），
-        // 这里用接口补齐。fill_start 取「种子最后一根的下一个时刻」，避免和已有数据重叠。
         let fill_start = match kline_list.last() {
             Some(last) => get_time_range(last.time, level)?.1.max(start),
             None => start,
@@ -779,8 +774,6 @@ where
             );
         }
 
-        // 唯一需要保证的事：最后一根 K 线的下一根，正好是第一根 live K 线。
-        // 满足它，cx 就是连续的；不满足就是数据源违约，直接报错，不做任何修剪
         if let Some(last) = kline_list.last() {
             let next = get_time_range(last.time, level)?.1;
 
@@ -904,7 +897,6 @@ async fn check_kline(
                 );
             }
 
-            // Gap detected — fill via get_kline.
             let gap_start = nt;
             let gap_end = kline.time;
 
