@@ -413,96 +413,67 @@ impl LocalExchangeInner {
         self.update();
     }
 
-    /// 是否为「止损单」：只减仓的触发单，且该币种**此刻已有持仓**。
-    ///
-    /// 为什么要求「已有持仓」：`buy_tp_sl` 这类写法会把止损与开仓同批挂出去，
-    /// 那时还没有仓位。若把这种单提到最前面撮合，它一旦命中就会先被 reduce-only 检查
-    /// 取消掉（没有仓位可减），随后开仓成交，仓位反而失去保护。
-    /// 限定「已有持仓」后，这类新仓的止损仍留在普通队列里，行为与改动前一致。
-    fn is_stop_loss(&self, order: &OrderEx) -> bool {
-        order.kind == Kind::Trigger
-            && order.reduce_only
-            && self.position.iter().any(|(v, _)| v == &order.symbol)
-    }
-
     fn update(&mut self) {
-        let mut stop_queue = VecDeque::new();
-        let mut normal_queue = VecDeque::new();
-        let mut liquidation_queue = VecDeque::new();
+        let mut normal_list = VecDeque::new();
 
         for (id, order) in self.pending_order_list.iter() {
-            if !order.kind.is_normal() {
-                liquidation_queue.push_back(id.clone());
-            } else if self.is_stop_loss(order) {
-                stop_queue.push_back(id.clone());
-            } else {
-                normal_queue.push_back(id.clone());
+            if order.kind.is_normal() {
+                normal_list.push_back(id.clone());
             }
         }
 
-        // 阶段一：止损先撮合。
-        // 同一根 K 线内止盈与止损都可能被触及时，OHLC 不提供盘中先后，这里统一按
-        // "先走不利方向"处理：止损先把仓位消耗掉，止盈随后被 reduce-only 取消或裁剪。
-        // 两单总量小于仓位时（分批出场）互不抢占，两根都会成交，顺序不影响结果。
-        while let Some(id) = stop_queue.pop_front() {
-            self.update_order(&id, &mut stop_queue);
+        while let Some(id) = normal_list.pop_front() {
+            if let Some(child_id) = self.update_order(&id) {
+                normal_list.push_back(child_id);
+            }
         }
 
-        // 阶段二：其余挂单（开仓、止盈、普通限价……）按挂单顺序撮合。
-        while let Some(id) = normal_queue.pop_front() {
-            self.update_order(&id, &mut normal_queue);
+        let mut liquidation_list = VecDeque::new();
+
+        for (id, order) in self.pending_order_list.iter() {
+            if !order.kind.is_normal() {
+                liquidation_list.push_back(id.clone());
+            }
         }
 
-        // 阶段三：强平。
-        while let Some(id) = liquidation_queue.pop_front() {
-            self.update_order(&id, &mut normal_queue);
+        while let Some(id) = liquidation_list.pop_front() {
+            _ = self.update_order(&id);
         }
 
         let position_update = self
             .position
             .iter()
-            .map(|(symbol, v)| {
+            .map(|(symbol, position)| {
                 let kline = self.kline(symbol);
                 let metadata = self.metadata(symbol);
-                let profit = if v.side == Side::Buy {
-                    (kline.close - v.open_avg_price) * v.quantity
+                let profit = if position.side == Side::Buy {
+                    (kline.close - position.open_avg_price) * position.quantity
                 } else {
-                    (v.open_avg_price - kline.close) * v.quantity
+                    (position.open_avg_price - kline.close) * position.quantity
                 };
 
                 let liquidation_price = calc_liquidation_price(
-                    v.leverage,
+                    position.leverage,
                     metadata.maintenance,
-                    v.side,
-                    v.open_avg_price,
-                    v.quantity,
-                    v.margin,
+                    position.side,
+                    position.open_avg_price,
+                    position.quantity,
+                    position.margin,
                 );
 
-                (symbol.clone(), profit, liquidation_price)
+                (profit, liquidation_price)
             })
             .collect::<Vec<_>>();
 
-        for (symbol, profit, liquidation_price) in position_update {
-            if let Some(position) = self.position.iter_mut().find(|(v, _)| v == &symbol) {
-                position.1.profit = profit;
-                position.1.liquidation_price = liquidation_price;
-            }
+        for (position, (profit, liquidation_price)) in self.position.iter_mut().zip(position_update)
+        {
+            position.1.profit = profit;
+            position.1.liquidation_price = liquidation_price;
         }
     }
 
-    fn handle_trigger_order(&mut self, order_id: &str, order_queue: &mut VecDeque<String>) {
-        let mut order_ref = match self.pending_order_list.shift_remove(order_id) {
-            Some(v) => v,
-            None => return,
-        };
-
-        // 触发后市价成交的基准价：触发之后第一个真实可成交的价格。
-        //   - 盘中穿越：价格先到触发价，基准价 = 触发价
-        //   - 跳空越过：开盘价已越过触发价，基准价 = 开盘价
-        // 方向由 trigger_direction 决定（向上取 max、向下取 min）。
-        // 注意 Kind::Market 的正常 price 是 0；这里非零是内部约定，表示「以基准价成交」，
-        // 若写回 0 会退化成「以下一根 K 线开盘价成交」，止损会系统性占便宜。
+    fn handle_trigger_order(&mut self, order_id: &str) -> Option<String> {
+        let mut order_ref = self.pending_order_list.shift_remove(order_id)?;
         let kline = *self.kline(&order_ref.symbol);
         let market_base_price = match order_ref.trigger_direction {
             Side::Buy => kline.open.max(order_ref.trigger_price),
@@ -530,15 +501,24 @@ impl LocalExchangeInner {
         );
 
         order_ref.update_time = self.kline(&order_ref.symbol).time;
-        order_ref.status = if let Ok(v) = result {
-            order_queue.push_back(v);
-            Status::Filled
-        } else {
-            Status::Rejected
+
+        let child_id = match result {
+            Ok(child_id) => {
+                order_ref.status = Status::Filled;
+
+                Some(child_id)
+            }
+            Err(_) => {
+                order_ref.status = Status::Rejected;
+
+                None
+            }
         };
 
         self.history_order_list
             .insert(order_ref.id.clone(), order_ref);
+
+        child_id
     }
 
     fn handle_limit_or_liquidation_order(&mut self, order_id: &str) {
@@ -561,8 +541,6 @@ impl LocalExchangeInner {
         let kline = *self.kline(&order.symbol);
 
         if order.kind == Kind::Liquidation {
-            // 强平同样是方向性的「触及或越过」：多单跌破强平价、空单涨破强平价。
-            // 成交价仍取强平价——逐仓下 profit 被固定成 -保证金，与成交价无关。
             let triggered = match order.side {
                 Side::Buy => kline.high >= order.price,
                 Side::Sell => kline.low <= order.price,
@@ -620,37 +598,34 @@ impl LocalExchangeInner {
         self.execute_order(order_id, order_ref, fee_rate);
     }
 
-    fn update_order(&mut self, order_id: &str, order_queue: &mut VecDeque<String>) {
-        let Some(order) = self.pending_order_list.get(order_id) else {
-            return;
-        };
+    fn update_order(&mut self, order_id: &str) -> Option<String> {
+        let order = self.pending_order_list.get(order_id)?;
 
         if order.status != Status::Submitted {
-            return;
+            return None;
         }
 
         let symbol = order.symbol.clone();
         let kline = self.kline(&symbol);
 
         if order.kind == Kind::Trigger {
-            // 触发是方向性的「触及或越过」，不是「触发价正好落在本根 K 线区间内」。
-            // 跳空穿过触发价时，价格已经在阈值之外，必须照样触发。
-            // 方向取挂单时确定的 trigger_direction，与 order.side 无关。
             let triggered = match order.trigger_direction {
                 Side::Buy => kline.high >= order.trigger_price,
                 Side::Sell => kline.low <= order.trigger_price,
             };
 
             if !triggered {
-                return;
+                return None;
             }
 
-            self.handle_trigger_order(order_id, order_queue);
+            return self.handle_trigger_order(order_id);
         } else if order.kind == Kind::Limit || order.kind == Kind::Liquidation {
             self.handle_limit_or_liquidation_order(order_id);
         } else {
             self.handle_market_order(order_id);
         }
+
+        None
     }
 
     fn handle_reduce_only_check(&mut self, order_ref: &mut OrderEx) -> bool {
@@ -1779,19 +1754,20 @@ mod tests {
         ))
     }
 
-    // 验证同一根 K 线内止盈与止损都被触及时，止损优先成交。
+    // 验证开仓当根就会检查强平。
     //
-    // 场景：多单 1.0 @100，止盈限价 110、止损触发 90，第三根 K 线 open=100 / high=120 / low=80
-    // 同时覆盖两个价位。OHLC 不提供盘中先后，约定按「先走不利方向」处理：
-    // 止损先成交在 90，仓位归零后止盈被 reduce-only 检查取消。
+    // 场景：10 倍杠杆、维持保证金率 0.004，开仓价 100 → 强平价 = 100 × (1 - 0.1 + 0.004) = 90.4。
+    // 开仓那根 K 线 open=100 / low=80：成交价是开盘价 100，随后最低到 80，已经穿过 90.4。
+    //
+    // 旧实现的强平队列在撮合前一次性建好，而强平单是 `handle_open_position` 在撮合过程中
+    // 才创建的，所以开仓当根永远不检查强平 —— 这个仓位会活下来。
     #[tokio::test]
-    async fn stop_loss_wins_when_take_profit_and_stop_loss_hit_in_same_kline() {
+    async fn liquidation_is_checked_on_the_same_kline_that_opens_the_position() {
         let exchange = single_exchange_with(
             btc_metadata(),
             vec![
                 gen_kline(1, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
-                gen_kline(2, dec!(100.0), dec!(101.0), dec!(99.0), dec!(100.0)),
-                gen_kline(3, dec!(100.0), dec!(120.0), dec!(80.0), dec!(100.0)),
+                gen_kline(2, dec!(100.0), dec!(101.0), dec!(80.0), dec!(85.0)),
             ],
         );
 
@@ -1799,47 +1775,37 @@ mod tests {
         exchange.buy(BTC, 1.0).await.unwrap();
         exchange.next(BTC, Level::Minute1).await.unwrap();
 
-        // 止盈先挂、止损后挂：若按挂单顺序撮合，止盈会先成交（旧行为）
-        let take_profit_id = exchange
-            .sell_limit_reduce_only(BTC, 110.0, 1.0)
-            .await
-            .unwrap();
-        let stop_loss_id = exchange
-            .sell_trigger_market_reduce_only(BTC, 90.0, 1.0)
-            .await
-            .unwrap();
+        // 开仓成交在 100，margin = 10
+        let liquidation_price = calc_liquidation_price(
+            10,
+            btc_metadata().maintenance,
+            Side::Buy,
+            dec!(100.0),
+            dec!(1.0),
+            dec!(10.0),
+        );
+        assert_eq!(liquidation_price, dec!(90.4));
 
-        exchange.next(BTC, Level::Minute1).await.unwrap();
+        // 当根 low=80 <= 90.4 → 必须已强平，仓位不在了
+        assert!(
+            exchange.get_position(BTC).await.unwrap().is_none(),
+            "position should be liquidated on the opening k-line, liquidation price {liquidation_price}"
+        );
 
-        let take_profit = exchange
-            .get_order(BTC, &take_profit_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let stop_loss = exchange
-            .get_order(BTC, &stop_loss_id)
-            .await
-            .unwrap()
-            .unwrap();
-
-        // 止损先成交，止盈因仓位已归零被取消。
-        // 注意：触发单自身的记录只有状态，成交价与数量记在它转换出的子单上
-        // （handle_trigger_order 把母单标记 Filled 后不再回填 avg_price），所以这里不查 avg_price。
-        assert_eq!(stop_loss.status, Status::Filled);
-        assert_eq!(take_profit.status, Status::Canceled);
-
+        // 逐仓：亏损封顶在那笔保证金
         let history = exchange.get_history_position_list(BTC).await.unwrap();
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].close_avg_price, dec!(90.0));
-        // 100 → 90，亏 10
+        assert!(
+            history[0].is_liquidation(),
+            "should be closed by liquidation"
+        );
         assert_eq!(history[0].profit, dec!(-10.0));
-        assert!(exchange.get_position(BTC).await.unwrap().is_none());
     }
 
-    // 验证分批出场时止损不会「霸占」止盈：两单总量不超过仓位时，同一根 K 线内都能成交。
+    // 验证分批出场：两单总量不超过仓位时，同一根 K 线内都能成交。
     //
     // 场景：多单 0.02 @100，止盈 0.01 @110、止损 0.01 @90。两单总量等于仓位，互不抢占，
-    // 因此结果与盘中先后无关——止损 0.01 在 90、止盈 0.01 在 110，毛盈亏恰好为 0。
+    // 结果与盘中先后无关——止损 0.01 在 90、止盈 0.01 在 110，毛盈亏恰好为 0。
     #[tokio::test]
     async fn partial_stop_loss_still_lets_take_profit_fill_in_same_kline() {
         let exchange = single_exchange_with(

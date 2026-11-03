@@ -75,7 +75,6 @@ It includes key mechanics such as matching, slippage, leverage, margin, and liqu
 - **Timing**: an order placed on a k-line is not matched on that k-line; matching starts on the next one. Only trigger orders can complete "trigger → fill" within the same k-line.
 - **Margin freeze**: market orders freeze at fill; limit orders freeze at placement based on their price (any excess is refunded when the fill is better); trigger orders freeze when triggered; reduce-only orders never freeze.
 - **Priority**: within a k-line, orders are matched in placement order; pending orders run before liquidation.
-    - If a take-profit and a stop-loss for the same position could both fill within the same k-line, the **stop-loss takes priority** (conservative: assumes the adverse move came first).
 - **Fees**: market orders and trigger-to-market use `taker_fee`; limit orders and trigger-to-limit use `maker_fee`; liquidation uses `taker_fee`.
 
 ## 🏗️ Architecture Overview
