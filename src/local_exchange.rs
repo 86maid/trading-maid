@@ -108,6 +108,15 @@ struct PositionEx {
 }
 
 impl PositionEx {
+    fn calc_close_quantity(&self) -> Decimal {
+        self.log
+            .iter()
+            .filter(|v| v.side != self.side)
+            .map(|v| v.quantity)
+            .sum::<Decimal>()
+            .max(Decimal::ZERO)
+    }
+
     fn calc_max_quantity(&self) -> Decimal {
         let mut max_quantity = None;
         let mut sum = Decimal::ZERO;
@@ -788,17 +797,19 @@ impl LocalExchangeInner {
             last.open_avg_price = position.open_avg_price;
             last.close_avg_price = order_ref.avg_price;
             last.max_quantity = max_quantity;
-            last.close_quantity = max_quantity;
+            last.close_quantity = position.calc_close_quantity();
             last.total_profit = profit_sum - fee_sum;
             last.profit = profit_sum;
             last.fee = fee_sum;
             last.close_time = kline_time;
             last.log = position.log;
         } else {
+            let close_quantity = position.calc_close_quantity();
+
             self.push_history_position(
                 &position,
                 order_ref,
-                max_quantity,
+                close_quantity,
                 max_quantity,
                 profit_sum,
                 fee_sum,
@@ -826,13 +837,7 @@ impl LocalExchangeInner {
         let kline_time = self.kline(&order_ref.symbol).time;
         let symbol = position.symbol.clone();
 
-        let partial_close_quantity = position
-            .log
-            .iter()
-            .filter(|v| v.side != position.side)
-            .map(|v| v.quantity)
-            .sum::<Decimal>()
-            .max(Decimal::ZERO);
+        let partial_close_quantity = position.calc_close_quantity();
 
         match self.unfinished_history_index.get(&symbol).copied() {
             Some(index) => {
@@ -910,17 +915,19 @@ impl LocalExchangeInner {
             last.open_avg_price = position.open_avg_price;
             last.close_avg_price = order_ref.avg_price;
             last.max_quantity = max_quantity;
-            last.close_quantity = max_quantity;
+            last.close_quantity = position.calc_close_quantity();
             last.total_profit = profit - fee;
             last.profit = profit;
             last.fee = fee;
             last.close_time = kline_time;
             last.log = position.log.clone();
         } else {
+            let close_quantity = position.calc_close_quantity();
+
             self.push_history_position(
                 &position,
                 order_ref,
-                max_quantity,
+                close_quantity,
                 max_quantity,
                 profit,
                 fee,
@@ -1061,7 +1068,7 @@ impl LocalExchangeInner {
                     kind: order_ref.kind,
                     side: order_ref.side,
                     price: order_ref.avg_price,
-                    quantity: order_ref.quantity,
+                    quantity: close_quantity,
                     profit: close_profit,
                     fee: order_ref.avg_price * close_quantity * fee_rate,
                     time: kline_time,
