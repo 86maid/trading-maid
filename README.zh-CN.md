@@ -303,20 +303,47 @@ async fn my_strategy(
 
 ### 🕳️ 缺口检测：`cx.missed`
 
-实盘的 K 线可能会丢——WebSocket 重连、进程卡顿、交易所跳过几根。引擎会用 `get_kline` 把空洞补回来，所以 `cx.close` 仍然连续，但**策略只会被调用一次**，而不是每根补回来的 K 线调用一次。
-
-`cx.missed` 就是这次被跳过的策略级 K 线根数，正常情况为 `0`：
+K 线可能会丢——WebSocket 重连、进程卡顿，或者历史归档本身就没发布那一天。引擎会跳过空洞并通过 `cx.missed` 告诉策略，正常 bar 上是 `None`，否则说明是**哪一种**：
 
 ```rust
-// 把策略没看到的 bar 按从旧到新喂回去
-for i in (0..=cx.missed).rev() {
-    self.ema_cache.update(cx.close[i]);
+pub enum Missed {
+    /// 这些 bar 有值，只是策略没被调用：`close[1]`、`close[2]`、…、`close[n]` 就是它们，
+    /// 序列保持连续。
+    Backfilled(usize),
+    /// 这些 bar 不存在：`time` 会跳，`close[1..=n]` 取不到。
+    Missing(usize),
 }
 ```
 
-正常 bar 上这个循环等价于只喂 `close[0]`。忽略 `cx.missed` 的策略，只在「永远不出缺口」的前提下才是对的——要么按上面回放，要么用 `EMACache::from_series` 从历史重建。
+两个变体里 `n` 的含义一致：本次调用覆盖了 `n + 1` 个策略周期。
 
-`cx.request(...)` 返回的 `Context` 上也带同一个字段，对应它所代表的 symbol。
+**`Backfilled`**——实盘掉了几根，引擎通过 `get_kline` 补了回来。值就在序列里，有状态的策略可以回放，把指标追平：
+
+```rust
+match cx.missed {
+    Some(Missed::Backfilled(n)) => {
+        for i in (1..=n).rev() {
+            self.ema_cache.update(cx.close[i]);
+        }
+    }
+    _ => {}
+}
+```
+
+**`Missing`**——这些 bar 在数据里根本不存在（历史归档的空洞）。没有东西可以回放：`close[1]` 是空洞之前那根，而越界索引会返回 `Decimal::MAX` 哨兵值，喂进任何指标都是灾难。唯一正确的反应是重置增量状态：
+
+```rust
+if let Some(Missed::Missing(_)) = cx.missed {
+    self.ema_cache = EMACache::new(self.length);
+}
+```
+
+忽略 `cx.missed` 的策略，只在它恒为 `None` 时才是对的——要么把两个变体都处理掉，要么用 `EMACache::from_series` 从完整历史重建。
+
+另外两点：
+
+- 只要一个策略级 K 线的源数据受过空洞影响，它就**整根丢弃**，绝不会带着残缺的 volume/high/low 交付出去——那种 bar 的时间戳看起来完全正常，策略根本发现不了。这也是 `Missing` 一定与 `cx.time` 的跳跃对应的原因。
+- `cx.request(...)` 返回的 `Context` 上也带同一个字段，对应它所代表的 symbol。
 
 ## 📊 Series
 

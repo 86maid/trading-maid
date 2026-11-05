@@ -302,20 +302,47 @@ async fn my_strategy(
 
 ### 🕳️ Gap Detection: `cx.missed`
 
-Live k-lines can be lost — a websocket reconnect, a stalled process, or a venue that skips candles. The engine backfills the hole through `get_kline`, so `cx.close` stays continuous, but **the strategy is called once**, not once per backfilled bar.
-
-`cx.missed` is the number of strategy-level bars that went by without a call. It is `0` on a normal bar:
+K-lines can be lost — a websocket reconnect, a stalled process, or an archive that simply never published a bar. The engine skips the hole and reports it through `cx.missed`, which is `None` on a normal bar and otherwise tells you **which kind** of hole it was:
 
 ```rust
-// Feed every bar the strategy did not see, oldest first.
-for i in (0..=cx.missed).rev() {
-    self.ema_cache.update(cx.close[i]);
+pub enum Missed {
+    /// The bars exist but the strategy was not called: `close[1]`, `close[2]`, ...,
+    /// `close[n]` are them, in order. The series stays continuous.
+    Backfilled(usize),
+    /// The bars do not exist: `time` jumps, and `close[1..=n]` cannot be read.
+    Missing(usize),
 }
 ```
 
-On a normal bar this collapses to `close[0]`. A strategy that ignores `cx.missed` stays correct only as long as no gap ever happens — so either replay the skipped bars as above, or rebuild from history with `EMACache::from_series`.
+In both variants `n` means the same thing: this call covers `n + 1` strategy periods instead of one.
 
-`cx.request(...)` exposes the same field for the symbol it returns.
+**`Backfilled`** — a live exchange dropped bars and the engine recovered them through `get_kline`. The values are in the series, so a stateful strategy can replay them and stay exact:
+
+```rust
+match cx.missed {
+    Some(Missed::Backfilled(n)) => {
+        for i in (1..=n).rev() {
+            self.ema_cache.update(cx.close[i]);
+        }
+    }
+    _ => {}
+}
+```
+
+**`Missing`** — the bars are not in the data at all (a hole in a historical archive). There is nothing to replay: `close[1]` belongs to the bar before the hole, and an out-of-range index returns the `Decimal::MAX` sentinel, which would poison any indicator. The only correct response is to reset the incremental state:
+
+```rust
+if let Some(Missed::Missing(_)) = cx.missed {
+    self.ema_cache = EMACache::new(self.length);
+}
+```
+
+A strategy that ignores `cx.missed` is only correct while it is `None` — either handle both variants, or rebuild from the full history with `EMACache::from_series`.
+
+Two more things worth knowing:
+
+- Any strategy-level bar whose source bars were affected by a hole is **dropped whole**, never delivered with a partial volume/high/low that still looks perfectly contiguous. That is why `Missing` always agrees with a jump in `cx.time`.
+- `cx.request(...)` exposes the same field for the symbol it returns.
 
 ## 📊 Series
 
