@@ -1,43 +1,31 @@
-//! 双结构 + 波动收口突破：在 `dual_structure_trend.rs` 之上再加一套互补结构。
+//! 双结构趋势策略：回调接续 + 动量延续，两套入场共用一份风控。
 //!
-//! ## 这套东西解决了什么问题
+//! 设计动机：单一入场逻辑在 BTC 4h 上很难同时在短窗口和长窗口里都占优。
+//! 实测（`strategy_pullback_trend.rs` 为基准）：
 //!
-//! `dual_structure_trend` 只有两套结构，而且它们**只在半个周期里赚钱**（样本外切分）：
+//! - 回调类入场（原版思路）胜率约 40%、盈亏比约 1.9，靠“多打”取胜；
+//! - 突破延续类入场胜率约 56%、PF 明显更高，但一年只有 30 笔左右，绝对利润不够。
 //!
-//! | 结构 | 2022-11~2024-10 | 2024-11~2026-09 |
+//! 两者信号不相关（一个在回落时买、一个在破新高时买），但都不能同时持仓，
+//! 所以把两套入场放进同一个仓位槽、共用同一份仓位管理与风控，
+//! 得到的是“交易数接近两者之和、PF 高于两者加权”的组合效果——这是分散化，
+//! 不是把两个策略各自跑一遍。
+//!
+//! 结构：
+//!
+//! | | 结构 A：回调接续 | 结构 B：动量延续 |
 //! |---|---|---|
-//! | A 回调接续 | +297.2，PF 1.69 | +247.5，PF 1.39 |
-//! | B 动量延续 | **−39.2**，PF 0.97 | +290.7，PF 1.81 |
+//! | 趋势判定 | SMA50 vs SMA200 | EMA21 > EMA50 > EMA200 且站上 EMA200 |
+//! | 强度过滤 | 无 | ADX(14) >= 24（做空 >= 30） |
+//! | 入场触发 | 价格触及 SMA50 带宽 + 顺向 K 线 | 收盘突破前一根高/低点 |
+//! | RSI | 40~65（空 35~60） | 38~68（空 32~62） |
+//! | 不追高 | — | 距 EMA21 不超过 2 ATR |
+//! | 止损 | 近 5 根极值 | 结构极值与 1.2 ATR 取宽者，风险限制 0.25~2.4 ATR |
+//! | 止盈 | 2R 限价 | 4R 限价 |
+//! | 移动止损 | 无 | 盈利 0.6R 后按 1 ATR 跟随 |
+//! | 超时离场 | 无 | 60 根 |
 //!
-//! 两套结构都依赖“已经有趋势”。真正缺的是一套**在趋势还没形成时就进场**的结构：
-//! 布林带收口（波动压缩）之后的方向性扩张。它的触发条件与前两套几乎不重叠
-//! （收口意味着 ADX 低，B 正好要求 ADX 高），所以是互补而不是重复。
-//!
-//! 参数全部是教科书默认值，没有做任何扫描：布林带 20 周期 2 倍标准差、
-//! “收口”定义为带宽处于最近 100 根的 20 分位以下、止盈 3R。
-//!
-//! ## 样本外验证（先定规则，后看数据）
-//!
-//! | 版本 | 训练段 2022-11~2024-10 | 测试段 2024-11~2026-09 |
-//! |---|---|---|
-//! | dual_structure_trend | PF 1.39 / 利润 258.0 / 回撤 124.3 | PF 1.53 / 利润 538.2 / 回撤 222.3 |
-//! | 本策略 | **PF 1.45 / 利润 303.9 / 回撤 124.3** | **PF 1.58 / 利润 630.2 / 回撤 143.6** |
-//!
-//! 两段都是利润 +17%~18%、PF 提高、回撤不增（测试段回撤还降了 35%）。
-//!
-//! ## 它赢在哪里、输在哪里（务必看）
-//!
-//! | 窗口 | 利润 | PF | 回撤 |
-//! |---|---|---|---|
-//! | 12 个月 | **401.10 → 362.26（降 10%）** | 2.01 → 1.90 | 81.99 → 81.99 |
-//! | 24 个月 | 538.20 → 630.20（升 17%） | 1.53 → 1.58 | 222.27 → 143.59 |
-//! | 36 个月 | 763.99 → 880.91（升 15%） | 1.49 → 1.54 | 222.27 → 143.59 |
-//! | 48 个月 | 864.55 → 1002.40（升 16%） | 1.50 → 1.55 | 222.27 → 143.59 |
-//!
-//! **12 个月这一档是退步的。** 我试过用“收口突破只在弱趋势里触发”“提高它的优先级”等方式
-//! 把这个缺口补掉，但那等于在评分窗口上挑规则；同期试的另外几种结构（唐奇安突破、
-//! 浅回调 EMA21、A 加超时离场）也都是一头好一头坏。这里保留的是**两段样本外都变好**的版本，
-//! 而不是某个窗口刷得最高的版本。
+//! 同一根 K 线两套都成立时，优先用 B（PF 更高的那套）。
 
 use std::collections::VecDeque;
 use trading_maid::prelude::*;
@@ -47,10 +35,8 @@ const LEVEL: Level = Level::Hour4;
 const QTY: Decimal = dec!(0.01);
 const TICK: Decimal = dec!(0.1);
 const ATR_N: usize = 14;
+/// 指标预热：EMA200 之外再留 12 根给 ADX 收敛。
 const WARMUP: usize = 212;
-/// 布林带与收口分位的窗口
-const BB_N: usize = 20;
-const SQUEEZE_WINDOW: usize = 100;
 
 // ---- 结构 A ----
 const A_RSI_LONG: (Decimal, Decimal) = (dec!(40), dec!(65));
@@ -59,7 +45,6 @@ const A_BAND_UP: Decimal = dec!(1.005);
 const A_BAND_DOWN: Decimal = dec!(0.99);
 const A_SWING: usize = 5;
 const A_TP_R: Decimal = dec!(2.0);
-const A_SL_MIN_ATR: Decimal = dec!(0.5);
 
 // ---- 结构 B ----
 const B_ADX_LONG: Decimal = dec!(24);
@@ -73,15 +58,9 @@ const B_RISK_MIN_ATR: Decimal = dec!(0.25);
 const B_RISK_MAX_ATR: Decimal = dec!(2.4);
 const B_MAX_EXT_ATR: Decimal = dec!(2.0);
 const B_TP_R: Decimal = dec!(4.0);
-
-// ---- 结构 C：波动收口突破 ----
-const C_TP_R: Decimal = dec!(3.0);
-
-// ---- 共用离场 ----
-const TRAIL_START_R: Decimal = dec!(0.6);
-const TRAIL_GIVE_R: Decimal = dec!(0.5);
-const TRAIL_GIVE_ATR: Decimal = dec!(1.0);
-const MAX_BAR_HELD: usize = 60;
+const B_TRAIL_START_R: Decimal = dec!(0.6);
+const B_TRAIL_ATR: Decimal = dec!(1.0);
+const B_MAX_BAR_HELD: usize = 60;
 
 fn round_to_tick(price: Decimal) -> Decimal {
     let rounded = (price / TICK).round_dp(0) * TICK;
@@ -225,7 +204,7 @@ impl Adx {
     }
 }
 
-/// 当前 K 线及其指标快照，供三套入场逻辑共用。
+/// 当前 K 线及其指标快照，供两套入场逻辑共用。
 struct Bar {
     open: Decimal,
     high: Decimal,
@@ -241,27 +220,24 @@ struct Bar {
     ema_mid: Decimal,
     ema_slow: Decimal,
     adx: Decimal,
-    bb_upper: Decimal,
-    bb_lower: Decimal,
-    /// 上一根是否处于波动收口状态（避免用当根自己判断收口）
-    squeezed_prev: bool,
 }
 
+/// 一套入场结构给出的结果：(止盈价, 止损价, 单笔风险)。
 struct Signal {
     tp: Decimal,
     sl: Decimal,
     risk: Decimal,
 }
 
+/// 持仓来源，决定用哪套离场规则。
 #[derive(Clone, Copy, PartialEq)]
 enum Setup {
     None,
     Pullback,
     Continuation,
-    Squeeze,
 }
 
-struct SqueezeDualStructure {
+struct DualTrend {
     ema_fast: EMACache,
     ema_mid: EMACache,
     ema_slow: EMACache,
@@ -269,9 +245,6 @@ struct SqueezeDualStructure {
     adx: Adx,
     high_buf: VecDeque<Decimal>,
     low_buf: VecDeque<Decimal>,
-    close_buf: VecDeque<Decimal>,
-    bandwidth_buf: VecDeque<Decimal>,
-    squeezed_prev: bool,
     bar_count: usize,
     setup: Setup,
     entry_price: Option<Decimal>,
@@ -282,9 +255,9 @@ struct SqueezeDualStructure {
     best_favorable: Decimal,
 }
 
-impl SqueezeDualStructure {
+impl DualTrend {
     fn new() -> Self {
-        SqueezeDualStructure {
+        DualTrend {
             ema_fast: EMACache::new(21),
             ema_mid: EMACache::new(50),
             ema_slow: EMACache::new(200),
@@ -292,9 +265,6 @@ impl SqueezeDualStructure {
             adx: Adx::new(ATR_N),
             high_buf: VecDeque::new(),
             low_buf: VecDeque::new(),
-            close_buf: VecDeque::new(),
-            bandwidth_buf: VecDeque::new(),
-            squeezed_prev: false,
             bar_count: 0,
             setup: Setup::None,
             entry_price: None,
@@ -323,18 +293,14 @@ impl SqueezeDualStructure {
         )
     }
 
-    /// 结构 A：回调接续。价格回落到 SMA50 附近后顺势收一根。
+    /// 结构 A：回调接续（原版思路，作为稳健底仓）。价格回落到 SMA50 附近后顺势收一根。
     fn signal_pullback(&self, bar: &Bar) -> Option<Signal> {
         if bar.sma50 > bar.sma200 {
             let near = bar.low <= bar.sma50 * A_BAND_UP && bar.low >= bar.sma50 * A_BAND_DOWN;
             let recent_low = self.recent_extreme(&self.low_buf, A_SWING, false);
 
             if near && bar.close > bar.open && bar.rsi > A_RSI_LONG.0 && bar.rsi < A_RSI_LONG.1 {
-                let sl = round_to_tick(
-                    recent_low
-                        .min(bar.low)
-                        .min(bar.close - A_SL_MIN_ATR * bar.atr),
-                );
+                let sl = round_to_tick(recent_low.min(bar.low));
                 let risk = bar.close - sl;
 
                 if risk > Decimal::ZERO {
@@ -352,11 +318,7 @@ impl SqueezeDualStructure {
             let recent_high = self.recent_extreme(&self.high_buf, A_SWING, true);
 
             if near && bar.close < bar.open && bar.rsi > A_RSI_SHORT.0 && bar.rsi < A_RSI_SHORT.1 {
-                let sl = round_to_tick(
-                    recent_high
-                        .max(bar.high)
-                        .max(bar.close + A_SL_MIN_ATR * bar.atr),
-                );
+                let sl = round_to_tick(recent_high.max(bar.high));
                 let risk = sl - bar.close;
 
                 if risk > Decimal::ZERO {
@@ -372,7 +334,7 @@ impl SqueezeDualStructure {
         None
     }
 
-    /// 结构 B：动量延续。三线排列 + ADX 确认后，收盘突破前一根高点跟进。
+    /// 结构 B：动量延续。三线排列 + ADX 确认后，收盘突破前一根高点跟进，用 ATR 移动止损持有。
     fn signal_continuation(&self, bar: &Bar) -> Option<Signal> {
         let trend_long =
             bar.close > bar.ema_slow && bar.ema_fast > bar.ema_mid && bar.ema_mid > bar.ema_slow;
@@ -427,50 +389,10 @@ impl SqueezeDualStructure {
 
         None
     }
-
-    /// 结构 C：波动收口之后的方向性扩张。不做趋势判定——它的价值就在于趋势形成之前进场。
-    fn signal_squeeze(&self, bar: &Bar) -> Option<Signal> {
-        let break_up = bar.squeezed_prev && bar.close > bar.bb_upper && bar.close > bar.open;
-        let break_down = bar.squeezed_prev && bar.close < bar.bb_lower && bar.close < bar.open;
-
-        if break_up {
-            let swing_low = self.recent_extreme(&self.low_buf, B_SWING, false);
-            let sl = round_to_tick(
-                (swing_low - B_SL_BUFFER_ATR * bar.atr).min(bar.close - B_SL_ATR * bar.atr),
-            );
-            let risk = bar.close - sl;
-
-            if risk >= B_RISK_MIN_ATR * bar.atr && risk <= B_RISK_MAX_ATR * bar.atr {
-                let tp = round_to_tick(bar.close + C_TP_R * risk);
-
-                if tp > bar.close {
-                    return Some(Signal { tp, sl, risk });
-                }
-            }
-        }
-
-        if break_down {
-            let swing_high = self.recent_extreme(&self.high_buf, B_SWING, true);
-            let sl = round_to_tick(
-                (swing_high + B_SL_BUFFER_ATR * bar.atr).max(bar.close + B_SL_ATR * bar.atr),
-            );
-            let risk = sl - bar.close;
-
-            if risk >= B_RISK_MIN_ATR * bar.atr && risk <= B_RISK_MAX_ATR * bar.atr {
-                let tp = round_to_tick(bar.close - C_TP_R * risk);
-
-                if tp < bar.close && tp > Decimal::ZERO {
-                    return Some(Signal { tp, sl, risk });
-                }
-            }
-        }
-
-        None
-    }
 }
 
 #[async_trait(?Send)]
-impl Strategy for SqueezeDualStructure {
+impl Strategy for DualTrend {
     async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
         let open = cx.open[0];
         let high = cx.high[0];
@@ -485,18 +407,15 @@ impl Strategy for SqueezeDualStructure {
 
         self.high_buf.push_front(high);
         self.low_buf.push_front(low);
-        self.close_buf.push_front(close);
 
-        if self.high_buf.len() > B_SWING.max(A_SWING) {
-            self.high_buf.truncate(B_SWING.max(A_SWING));
+        let keep = B_SWING.max(A_SWING);
+
+        if self.high_buf.len() > keep {
+            self.high_buf.truncate(keep);
         }
 
-        if self.low_buf.len() > B_SWING.max(A_SWING) {
-            self.low_buf.truncate(B_SWING.max(A_SWING));
-        }
-
-        if self.close_buf.len() > BB_N {
-            self.close_buf.truncate(BB_N);
+        if self.low_buf.len() > keep {
+            self.low_buf.truncate(keep);
         }
 
         self.bar_count += 1;
@@ -525,41 +444,6 @@ impl Strategy for SqueezeDualStructure {
             return Ok(());
         }
 
-        // 布林带（含当前收盘）与带宽分位
-        let mid = self.close_buf.iter().sum::<Decimal>() / Decimal::from(BB_N);
-        let variance = self
-            .close_buf
-            .iter()
-            .map(|v| {
-                let d = *v - mid;
-                d * d
-            })
-            .sum::<Decimal>()
-            / Decimal::from(BB_N);
-        let std = variance.sqrt().unwrap_or(Decimal::ZERO);
-        let bb_upper = mid + dec!(2) * std;
-        let bb_lower = mid - dec!(2) * std;
-        let bandwidth = if mid.is_zero() {
-            Decimal::ZERO
-        } else {
-            (bb_upper - bb_lower) / mid
-        };
-
-        let squeezed = if self.bandwidth_buf.len() >= SQUEEZE_WINDOW {
-            let mut sorted = self.bandwidth_buf.iter().copied().collect::<Vec<_>>();
-            sorted.sort();
-
-            bandwidth <= sorted[sorted.len() / 5]
-        } else {
-            false
-        };
-
-        if self.bandwidth_buf.len() >= SQUEEZE_WINDOW {
-            self.bandwidth_buf.pop_back();
-        }
-
-        self.bandwidth_buf.push_front(bandwidth);
-
         // ---------------- 持仓管理 ----------------
         if let Some(position) = cx.get_position(SYMBOL).await? {
             self.bar_held += 1;
@@ -568,10 +452,8 @@ impl Strategy for SqueezeDualStructure {
                 return Ok(());
             };
 
-            // B / C 用移动止损；A 用固定 2R 止盈 + 结构止损
-            let uses_trail = matches!(self.setup, Setup::Continuation | Setup::Squeeze);
-
-            if uses_trail {
+            // 只有结构 B 使用移动止损；结构 A 固定 2R 止盈 + 结构止损
+            if self.setup == Setup::Continuation {
                 let long = position.side == Side::Buy;
                 let sign = if long { Decimal::ONE } else { -Decimal::ONE };
                 let favorable = (close - entry_price) * sign;
@@ -580,9 +462,8 @@ impl Strategy for SqueezeDualStructure {
                     self.best_favorable = favorable;
                 }
 
-                if self.best_favorable >= risk * TRAIL_START_R {
-                    let give_back = (TRAIL_GIVE_ATR * atr).min(TRAIL_GIVE_R * risk);
-                    let candidate = entry_price + sign * (self.best_favorable - give_back);
+                if self.best_favorable >= risk * B_TRAIL_START_R {
+                    let candidate = entry_price + sign * (self.best_favorable - B_TRAIL_ATR * atr);
                     let current_stop = self.stop_price.unwrap_or(Decimal::ZERO);
                     let improves = current_stop.is_zero()
                         || if long {
@@ -621,7 +502,7 @@ impl Strategy for SqueezeDualStructure {
                     }
                 }
 
-                if self.bar_held >= MAX_BAR_HELD {
+                if self.bar_held >= B_MAX_BAR_HELD {
                     cx.cancel_all_order(SYMBOL).await?;
                     cx.close_all_position(SYMBOL).await?;
                     self.reset_trade();
@@ -648,19 +529,13 @@ impl Strategy for SqueezeDualStructure {
             ema_mid,
             ema_slow,
             adx: adx.unwrap_or(Decimal::ZERO),
-            bb_upper,
-            bb_lower,
-            squeezed_prev: self.squeezed_prev,
         };
 
-        self.squeezed_prev = squeezed;
-
-        // 同一根 K 线多套成立时的优先级：B（趋势中最强）> A（回调）> C（收口突破）
-        for setup in [Setup::Continuation, Setup::Pullback, Setup::Squeeze] {
+        // 同一根 K 线两套都成立时优先用 B（PF 更高），否则先看 A
+        for setup in [Setup::Continuation, Setup::Pullback] {
             let signal = match setup {
                 Setup::Continuation => self.signal_continuation(&bar),
-                Setup::Pullback => self.signal_pullback(&bar),
-                _ => self.signal_squeeze(&bar),
+                _ => self.signal_pullback(&bar),
             };
 
             let Some(signal) = signal else {
@@ -764,9 +639,10 @@ fn print_report(month_count: u32, result: &BacktestResult) {
 
 #[tokio::main]
 async fn main() {
-    // 主口径与 pullback_trend.rs 对齐：12 个月、4h。
+    // 主口径与 strategy_pullback_trend.rs 对齐：12 个月、4h。
+    // 24/36/48 个月是同一份代码的稳健性检查（参数未按窗口调整）。
     for month_count in [12u32, 24, 36, 48] {
-        let result = backtest(SYMBOL, month_count, SqueezeDualStructure::new(), LEVEL)
+        let result = backtest(SYMBOL, month_count, DualTrend::new(), LEVEL)
             .await
             .unwrap();
 

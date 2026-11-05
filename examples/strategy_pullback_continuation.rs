@@ -1,8 +1,8 @@
 //! 趋势回调续势策略：EMA 排列定方向、ADX 定强度、突破前高定入场、ATR 移动止损定离场。
 //!
-//! 相对 `pullback_trend.rs` 的改进点：
+//! 相对 `strategy_pullback_trend.rs` 的改进点：
 //!
-//! | 维度 | pullback_trend.rs | 本策略 |
+//! | 维度 | strategy_pullback_trend.rs | 本策略 |
 //! |------|-------------------|--------|
 //! | 趋势判定 | SMA50 vs SMA200 两条线 | EMA21 > EMA50 > EMA200 三线排列 + 收盘在 EMA200 之上 |
 //! | 趋势强度 | 无 | Wilder ADX(14)：做多 >= 24，做空 >= 30 |
@@ -509,7 +509,7 @@ fn print_report(month_count: u32, result: &BacktestResult) {
 
 #[tokio::main]
 async fn main() {
-    // 主口径与 pullback_trend.rs 对齐：12 个月、4h。
+    // 主口径与 strategy_pullback_trend.rs 对齐：12 个月、4h。
     // 24/36/48 个月是同一份代码的稳健性检查（参数未按窗口调整）。
     for month_count in [12u32, 24, 36, 48] {
         let result = backtest(SYMBOL, month_count, PullbackContinuation::new(), LEVEL)

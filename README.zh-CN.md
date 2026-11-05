@@ -345,6 +345,11 @@ if let Some(Missed::Missing(_)) = cx.missed {
 - 只要一个策略级 K 线的源数据受过空洞影响，它就**整根丢弃**，绝不会带着残缺的 volume/high/low 交付出去——那种 bar 的时间戳看起来完全正常，策略根本发现不了。这也是 `Missing` 一定与 `cx.time` 的跳跃对应的原因。
 - `cx.request(...)` 返回的 `Context` 上也带同一个字段，对应它所代表的 symbol。
 
+真实归档里就有这种洞。例如 **Binance 合约 2026-10-28 一整天缺失**：月档 `BTCUSDT-1m-2026-10.zip`
+只有 43200 行（31 天应为 44640 行），1h 周期同样少 24 根，日档 `2026-10-28.zip` 直接 404；
+同一天**现货归档是完整的**。框架不做任何补齐——跑 12/24/36/48 个月的合约回测时，这一天会被
+跳过，那天对应的策略级 K 线整根丢弃，下一次调用收到 `Missed::Missing(n)`。
+
 ## 📊 Series
 
 `Series` 是 `Context` 中贯穿始终的核心数值类型。它封装了一个倒序切片——`series[0]` 是当前 K 线，`series[1]` 是上一根，以此类推。越界索引返回 `Decimal::MAX`。
@@ -764,7 +769,28 @@ summarize(&history_position_list);
 
 ## 📐 策略示例
 
-`examples/` 目录中包含可直接运行的策略，展示了不同的实现思路。其中一些基于内置指标，另一些则完全从零自实现。
+`examples/` 目录下的 `strategy_*` 是完整策略：进场/出场规则、仓位管理、完整回测，彼此之间可以直接对比。它们中有基于内置指标的，也有完全从零自实现的。
+
+| 文件 | 周期 | 回测窗口 | 思路 |
+|---|---|:--:|---|
+| `strategy_pullback_trend` | 4h | 12/24/36/48 | SMA50/SMA200 定趋势 + RSI 回调进场（**基准**，其它策略都拿它对标） |
+| `strategy_rsi_ema` | 4h | 12/24/36/48 | 连续 K 线突破 + RSI/EMA 过滤 |
+| `strategy_price_action` | 4h | 12/24/36/48 | 动量突破，指标从零自实现 |
+| `strategy_shadow_reversal` | 4h | 12/24/36/48 | 长影线反转，ATR 定止盈止损 |
+| `strategy_volume_breakout` | 4h | 12/24/36/48 | Donchian 通道突破 + 成交量放大确认 |
+| `strategy_horizon_long` | 1h | 12/24/36/48 | 时序动量做多（TSMOM），只做多 |
+| `strategy_fast` | 1h | 12/24/36/48 | 长上影线开空，规则最简单的一个 |
+| `strategy_vegas_martingale` | 4h | 12/24/36/48 | Vegas 隧道 + RSI/MACD + 马丁格尔加仓 |
+| `strategy_pullback_continuation` | 4h | 12/24/36/48 | EMA 三线排列 + ADX 强度 + 突破前高入场 + ATR 移动止损 |
+| `strategy_pullback_plus_breakout` | 4h | 12/24/36/48 | 双结构：回调接续 + 动量延续，两套入场共用一份风控 |
+| `strategy_dual_structure_trend` | 4h | 12/24/36/48 | 上者的风控归一版：结构 A 止损最小 0.5 ATR，结构 B 移动止损 `min(1 ATR, 0.5R)` |
+| `strategy_squeeze_dual_structure` | 4h | 12/24/36/48 | 再加一套布林收口突破，负责“趋势还没形成时”的入场 |
+| `strategy_fib_martingale` | 4h | 12/24/36/48 | 斐波那契回撤 + 拐点流动性 + 真空区 + 解套加仓 |
+| `strategy_fib_martingale_050` | 4h | 12/24/36/48 | 同上，改成 0.5 回撤入场 |
+| `strategy_fib_martingale_1h` | 1h | 12/24/36/48 | 同上，周期换成 1h |
+| `strategy_fib_martingale_1h_050` | 1h | 12/24/36/48 | 同上，1h + 0.5 回撤 |
+
+下面对其中一部分展开讲实现细节；完整代码看 `examples/`。
 
 ### 🧪 EMA 策略例子
 
@@ -1792,10 +1818,116 @@ async fn main() {
 
 运行示例：
 ```bash
-cargo run --release --example shadow_reversal
-cargo run --release --example volume_breakout
-cargo run --release --example price_action
-cargo run --release --example rsi_ema
-cargo run --release --example vegas_martingale
-cargo run --release --example horizon_long
+cargo run --release --example strategy_shadow_reversal
+cargo run --release --example strategy_volume_breakout
+cargo run --release --example strategy_price_action
+cargo run --release --example strategy_rsi_ema
+cargo run --release --example strategy_vegas_martingale
+cargo run --release --example strategy_horizon_long
 ```
+
+`examples/` 下的文件名直接标明类型：
+
+| 前缀 | 含义 |
+|---|---|
+| `strategy_*` | 完整策略：进场/出场规则、仓位管理、完整回测。上面的收益排名就是它们。 |
+| `demo_*` | 最小示例：`demo_minimal` 只下一笔单；`demo_indicator` 演示内置指标 + hook；`demo_funding_rate` 演示资金费率序列。 |
+
+## 🏆 策略收益排行
+
+口径统一：BTCUSDT 合约 1m 源数据，初始资金 1,000,000，仓位由各策略自行设定（多数是 0.01 BTC），
+所以绝对数字很小，**看相对排名、PF 和回撤，不要看收益率百分比**。2026-10-28 那个归档空洞被跳过。
+
+每个窗口都是**同一份代码、参数未按窗口调整**，所以多窗口同时为正才算稳健。
+
+### 12 个月（2025-11 ~ 2026-10）
+
+| # | 策略 | 交易 | 胜率 | PF | 净利润 | 最大回撤 | 利润/回撤 |
+|--:|---|--:|--:|--:|--:|--:|--:|
+| 1 | `strategy_dual_structure_trend` | 72 | 44.4% | 1.50 | **+290.98** | 139.42 | 2.09 |
+| 2 | `strategy_pullback_plus_breakout` | 72 | 43.1% | 1.48 | +269.81 | 139.42 | 1.94 |
+| 3 | `strategy_pullback_continuation` | 34 | 55.9% | **2.35** | +264.37 | **54.08** | **4.89** |
+| 4 | `strategy_squeeze_dual_structure` | 70 | 45.7% | 1.43 | +252.15 | 139.42 | 1.81 |
+| 5 | `strategy_shadow_reversal` | 48 | 35.4% | 1.43 | +237.75 | 192.31 | 1.24 |
+| 6 | `strategy_volume_breakout` | 43 | 44.2% | 1.26 | +175.88 | 203.38 | 0.86 |
+| 7 | `strategy_rsi_ema` | 83 | 36.1% | 1.13 | +138.43 | 282.45 | 0.49 |
+| 8 | `strategy_fib_martingale_050` | 59 | 59.3% | 1.16 | +93.95 | 227.59 | 0.41 |
+| 9 | `strategy_pullback_trend`（基准） | 51 | 35.3% | 1.13 | +57.93 | 137.87 | 0.42 |
+| 10 | `strategy_horizon_long` | 65 | 30.8% | 1.03 | +56.64 | 527.07 | 0.11 |
+| 11 | `strategy_price_action` | 62 | 32.3% | 1.06 | +48.83 | 227.77 | 0.21 |
+| 12 | `strategy_vegas_martingale` | 16 | 37.5% | 1.16 | +18.82 | 39.80 | 0.47 |
+| 13 | `strategy_fib_martingale` | 51 | 49.0% | 1.02 | +8.57 | 174.35 | 0.05 |
+| 14 | `strategy_fast` | 45 | 28.9% | 0.86 | −30.56 | 81.68 | −0.37 |
+| 15 | `strategy_fib_martingale_1h_050` | 228 | 50.9% | 0.92 | −120.90 | 384.13 | −0.31 |
+| 16 | `strategy_fib_martingale_1h` | 205 | 41.5% | 0.80 | −281.74 | 420.85 | −0.67 |
+
+### 24 个月（2024-11 ~ 2026-10）
+
+| # | 策略 | 交易 | 胜率 | PF | 净利润 | 最大回撤 | 利润/回撤 |
+|--:|---|--:|--:|--:|--:|--:|--:|
+| 1 | `strategy_horizon_long` | 137 | 32.1% | 1.14 | **+694.60** | 1443.24 | 0.48 |
+| 2 | `strategy_squeeze_dual_structure` | 151 | 49.7% | 1.35 | +520.11 | **143.62** | **3.62** |
+| 3 | `strategy_rsi_ema` | 133 | 41.4% | 1.20 | +446.97 | 552.36 | 0.81 |
+| 4 | `strategy_dual_structure_trend` | 145 | 47.6% | 1.31 | +428.09 | 222.27 | 1.93 |
+| 5 | `strategy_volume_breakout` | 107 | 46.7% | 1.20 | +427.26 | 469.23 | 0.91 |
+| 6 | `strategy_pullback_plus_breakout` | 140 | 46.4% | 1.27 | +368.90 | 226.36 | 1.63 |
+| 7 | `strategy_pullback_continuation` | 70 | 57.1% | **1.64** | +333.83 | **72.11** | **4.63** |
+| 8 | `strategy_price_action` | 128 | 37.5% | 1.17 | +324.21 | 311.34 | 1.04 |
+| 9 | `strategy_shadow_reversal` | 110 | 31.8% | 1.19 | +288.99 | 291.36 | 0.99 |
+| 10 | `strategy_pullback_trend`（基准） | 100 | 40.0% | 1.24 | +259.44 | 242.99 | 1.07 |
+| 11 | `strategy_fib_martingale` | 101 | 49.5% | 1.15 | +200.89 | 298.88 | 0.67 |
+| 12 | `strategy_fib_martingale_1h_050` | 437 | 51.5% | 1.01 | +43.09 | 442.83 | 0.10 |
+| 13 | `strategy_vegas_martingale` | 32 | 34.4% | 1.00 | −0.84 | 98.47 | −0.01 |
+| 14 | `strategy_fast` | 156 | 27.6% | 0.84 | −128.71 | 181.64 | −0.71 |
+| 15 | `strategy_fib_martingale_050` | 115 | 52.2% | 0.92 | −148.81 | 456.00 | −0.33 |
+| 16 | `strategy_fib_martingale_1h` | 398 | 43.5% | 0.88 | −370.32 | 462.94 | −0.80 |
+
+### 36 个月（2023-11 ~ 2026-10）
+
+| # | 策略 | 交易 | 胜率 | PF | 净利润 | 最大回撤 | 利润/回撤 |
+|--:|---|--:|--:|--:|--:|--:|--:|
+| 1 | `strategy_horizon_long` | 190 | 33.7% | 1.21 | **+1426.04** | 1284.60 | 1.11 |
+| 2 | `strategy_squeeze_dual_structure` | 245 | 49.4% | 1.35 | +770.79 | **143.62** | **5.37** |
+| 3 | `strategy_dual_structure_trend` | 239 | 47.7% | 1.31 | +653.87 | 222.27 | 2.94 |
+| 4 | `strategy_volume_breakout` | 168 | 48.2% | 1.20 | +622.18 | 469.23 | 1.33 |
+| 5 | `strategy_pullback_plus_breakout` | 233 | 45.5% | 1.27 | +559.84 | 226.36 | 2.47 |
+| 6 | `strategy_pullback_trend`（基准） | 147 | 40.8% | 1.23 | +342.25 | 242.99 | 1.41 |
+| 7 | `strategy_pullback_continuation` | 119 | 52.9% | 1.31 | +278.20 | 150.89 | 1.84 |
+| 8 | `strategy_fib_martingale` | 143 | 51.0% | 1.15 | +272.65 | 298.88 | 0.91 |
+| 9 | `strategy_price_action` | 195 | 37.4% | 1.10 | +264.46 | 311.34 | 0.85 |
+| 10 | `strategy_rsi_ema` | 106 | 41.5% | 1.10 | +184.43 | 348.64 | 0.53 |
+| 11 | `strategy_vegas_martingale` | 37 | 37.8% | **1.51** | +127.36 | **82.87** | 1.54 |
+| 12 | `strategy_shadow_reversal` | 150 | 30.0% | 1.05 | +104.73 | 291.36 | 0.36 |
+| 13 | `strategy_fib_martingale_050` | 166 | 53.6% | 0.92 | −205.49 | 488.56 | −0.42 |
+| 14 | `strategy_fast` | 192 | 26.0% | 0.78 | −215.16 | 239.02 | −0.90 |
+| 15 | `strategy_fib_martingale_1h_050` | 637 | 51.6% | 0.93 | −347.93 | 610.32 | −0.57 |
+| 16 | `strategy_fib_martingale_1h` | 623 | 45.3% | 0.87 | −552.29 | 702.10 | −0.79 |
+
+### 48 个月（2022-11 ~ 2026-10）
+
+| # | 策略 | 交易 | 胜率 | PF | 净利润 | 最大回撤 | 利润/回撤 |
+|--:|---|--:|--:|--:|--:|--:|--:|
+| 1 | `strategy_horizon_long` | 263 | 31.9% | 1.22 | **+1724.22** | 1284.60 | 1.34 |
+| 2 | `strategy_squeeze_dual_structure` | 327 | 47.7% | 1.37 | +892.28 | **143.62** | **6.21** |
+| 3 | `strategy_dual_structure_trend` | 318 | 46.2% | 1.32 | +754.43 | 222.27 | 3.39 |
+| 4 | `strategy_pullback_plus_breakout` | 312 | 44.2% | 1.28 | +656.30 | 226.36 | 2.90 |
+| 5 | `strategy_volume_breakout` | 199 | 48.2% | 1.18 | +609.75 | 469.23 | 1.30 |
+| 6 | `strategy_pullback_trend`（基准） | 210 | 40.0% | 1.25 | +419.08 | 242.99 | 1.72 |
+| 7 | `strategy_price_action` | 242 | 38.8% | 1.13 | +375.82 | 311.34 | 1.21 |
+| 8 | `strategy_pullback_continuation` | 144 | 53.5% | 1.33 | +322.38 | 150.89 | 2.14 |
+| 9 | `strategy_fib_martingale` | 193 | 48.2% | 1.11 | +240.38 | 298.88 | 0.80 |
+| 10 | `strategy_vegas_martingale` | 51 | 41.2% | **1.56** | +154.67 | **82.87** | 1.87 |
+| 11 | `strategy_rsi_ema` | 158 | 39.2% | 1.05 | +107.92 | 348.64 | 0.31 |
+| 12 | `strategy_shadow_reversal` | 151 | 29.8% | 1.05 | +94.93 | 291.36 | 0.33 |
+| 13 | `strategy_fast` | 194 | 25.8% | 0.76 | −248.63 | 272.49 | −0.91 |
+| 14 | `strategy_fib_martingale_050` | 209 | 51.2% | 0.90 | −286.13 | 553.67 | −0.52 |
+| 15 | `strategy_fib_martingale_1h_050` | 832 | 51.7% | 0.93 | −381.15 | 610.32 | −0.62 |
+| 16 | `strategy_fib_martingale_1h` | 805 | 45.1% | 0.87 | −617.50 | 702.10 | −0.88 |
+
+### 观察
+
+1. **12 个月冠军是 `dual_structure_trend`，24/36/48 个月冠军变成 `horizon_long`**（+694 / +1426 / +1724）。但它的回撤是所有策略里最大的（1284～1443），利润/回撤只有 0.48～1.34——绝对收益高，风险也高。
+2. **风险调整后 `squeeze_dual_structure` 最稳**：利润/回撤 1.81 / 3.62 / 5.37 / 6.21，四个窗口都在前二，回撤始终压在 143 附近不随窗口放大。
+3. **`pullback_continuation` 12/24 个月最好**（利润/回撤 4.89 / 4.63），36/48 个月掉到 1.84 / 2.14——它的优势集中在近两年。
+4. **`fib_martingale` 只有 4h 版本能用**，1h 版本四个窗口全负（PF 0.80～0.93）；`fib_martingale_050` 在 24/36/48 个月也转负，说明 0.5 回撤入场在长窗口上站不住。
+5. **老策略（1h 的 `fast`、以及 12 个月写死的那批）在长窗口上明显衰减**：`shadow_reversal` 48 个月只剩 +94.93，`rsi_ema` +107.92，`fast` 一路走负（−30 → −249）。这说明它们在 12 个月上的表现有相当一部分是区间红利。

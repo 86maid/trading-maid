@@ -344,6 +344,13 @@ Two more things worth knowing:
 - Any strategy-level bar whose source bars were affected by a hole is **dropped whole**, never delivered with a partial volume/high/low that still looks perfectly contiguous. That is why `Missing` always agrees with a jump in `cx.time`.
 - `cx.request(...)` exposes the same field for the symbol it returns.
 
+Real archives do have such holes. **Binance's futures archive is missing 2026-10-28 entirely**:
+the monthly `BTCUSDT-1m-2026-10.zip` holds 43200 rows instead of the 44640 a 31-day month should
+have, the 1h file is short by 24 bars, and the daily `2026-10-28.zip` returns 404 — while the
+**spot archive for that day is complete**. Nothing is ever filled in: a 12/24/36/48-month futures
+backtest simply skips that day, the strategy-level bars it covers are dropped whole, and the next
+call reports `Missed::Missing(n)`.
+
 ## 📊 Series
 
 `Series` is the core numeric type used throughout `Context`. It wraps a reversed slice — `series[0]` is the current bar, `series[1]` the previous, and so on. Out-of-bounds indices return `Decimal::MAX`.
@@ -762,7 +769,28 @@ summarize(&history_position_list);
 
 ## 📐 Strategy Examples
 
-The `examples/` directory contains runnable strategies that demonstrate different approaches. Some build on built-in indicators, while others implement their own from scratch.
+Every `strategy_*` file under `examples/` is a complete strategy — entry/exit rules, position sizing, a full backtest — so they can be compared against each other directly. Some build on built-in indicators, others implement everything from scratch.
+
+| File | Level | Windows | Idea |
+|---|---|:--:|---|
+| `strategy_pullback_trend` | 4h | 12/24/36/48 | SMA50/SMA200 trend + RSI pullback entry (**baseline**, everything else is measured against it) |
+| `strategy_rsi_ema` | 4h | 12/24/36/48 | Consecutive-candle breakout filtered by RSI/EMA |
+| `strategy_price_action` | 4h | 12/24/36/48 | Momentum breakout, indicators written from scratch |
+| `strategy_shadow_reversal` | 4h | 12/24/36/48 | Long-wick reversal with ATR-based take-profit/stop |
+| `strategy_volume_breakout` | 4h | 12/24/36/48 | Donchian channel breakout confirmed by a volume spike |
+| `strategy_horizon_long` | 1h | 12/24/36/48 | Time-series momentum, long only |
+| `strategy_fast` | 1h | 12/24/36/48 | Short on a long upper wick — the simplest rule set here |
+| `strategy_vegas_martingale` | 4h | 12/24/36/48 | Vegas tunnel + RSI/MACD with martingale adding |
+| `strategy_pullback_continuation` | 4h | 12/24/36/48 | EMA stack + ADX strength + break-of-prior-high entry + ATR trailing stop |
+| `strategy_pullback_plus_breakout` | 4h | 12/24/36/48 | Two structures — pullback continuation and momentum continuation — sharing one risk budget |
+| `strategy_dual_structure_trend` | 4h | 12/24/36/48 | Risk-normalised version of the above: structure A stop at least 0.5 ATR, structure B trailing `min(1 ATR, 0.5R)` |
+| `strategy_squeeze_dual_structure` | 4h | 12/24/36/48 | Adds a Bollinger-squeeze breakout for the phase where no trend exists yet |
+| `strategy_fib_martingale` | 4h | 12/24/36/48 | Fibonacci retracement + liquidity sweep + vacuum zone + add-on entries |
+| `strategy_fib_martingale_050` | 4h | 12/24/36/48 | Same, entering at the 0.5 retracement |
+| `strategy_fib_martingale_1h` | 1h | 12/24/36/48 | Same, moved to 1h |
+| `strategy_fib_martingale_1h_050` | 1h | 12/24/36/48 | Same, 1h + 0.5 retracement |
+
+A few of them are walked through in detail below; the complete code lives in `examples/`.
 
 ### 🧪 EMA Strategy Example
 
@@ -1792,10 +1820,118 @@ async fn main() {
 Run any example with:
 
 ```bash
-cargo run --release --example shadow_reversal
-cargo run --release --example volume_breakout
-cargo run --release --example price_action
-cargo run --release --example rsi_ema
-cargo run --release --example vegas_martingale
-cargo run --release --example horizon_long
+cargo run --release --example strategy_shadow_reversal
+cargo run --release --example strategy_volume_breakout
+cargo run --release --example strategy_price_action
+cargo run --release --example strategy_rsi_ema
+cargo run --release --example strategy_vegas_martingale
+cargo run --release --example strategy_horizon_long
 ```
+
+Files under `examples/` are named by kind:
+
+| Prefix | Meaning |
+|---|---|
+| `strategy_*` | A complete strategy with entry/exit rules, position sizing and a full backtest. Ranked against each other in the results above. |
+| `demo_*` | A minimal hello-world: `demo_minimal` places one order, `demo_indicator` shows the built-in indicators plus a hook, `demo_funding_rate` shows the funding-rate series. |
+
+## 🏆 Strategy Leaderboard
+
+Same setup for every row: BTCUSDT futures, 1m source data, starting cash 1,000,000, position size
+set by each strategy (mostly 0.01 BTC). The absolute numbers are therefore tiny — **read the
+ordering, PF and drawdown, not a percentage return**. The 2026-10-28 archive hole is skipped.
+
+Every window runs **the same code with parameters untouched**, so only a strategy that stays
+positive across windows is actually robust.
+
+### 12 months (2025-11 to 2026-10)
+
+| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+|--:|---|--:|--:|--:|--:|--:|--:|
+| 1 | `strategy_dual_structure_trend` | 72 | 44.4% | 1.50 | **+290.98** | 139.42 | 2.09 |
+| 2 | `strategy_pullback_plus_breakout` | 72 | 43.1% | 1.48 | +269.81 | 139.42 | 1.94 |
+| 3 | `strategy_pullback_continuation` | 34 | 55.9% | **2.35** | +264.37 | **54.08** | **4.89** |
+| 4 | `strategy_squeeze_dual_structure` | 70 | 45.7% | 1.43 | +252.15 | 139.42 | 1.81 |
+| 5 | `strategy_shadow_reversal` | 48 | 35.4% | 1.43 | +237.75 | 192.31 | 1.24 |
+| 6 | `strategy_volume_breakout` | 43 | 44.2% | 1.26 | +175.88 | 203.38 | 0.86 |
+| 7 | `strategy_rsi_ema` | 83 | 36.1% | 1.13 | +138.43 | 282.45 | 0.49 |
+| 8 | `strategy_fib_martingale_050` | 59 | 59.3% | 1.16 | +93.95 | 227.59 | 0.41 |
+| 9 | `strategy_pullback_trend` (baseline) | 51 | 35.3% | 1.13 | +57.93 | 137.87 | 0.42 |
+| 10 | `strategy_horizon_long` | 65 | 30.8% | 1.03 | +56.64 | 527.07 | 0.11 |
+| 11 | `strategy_price_action` | 62 | 32.3% | 1.06 | +48.83 | 227.77 | 0.21 |
+| 12 | `strategy_vegas_martingale` | 16 | 37.5% | 1.16 | +18.82 | 39.80 | 0.47 |
+| 13 | `strategy_fib_martingale` | 51 | 49.0% | 1.02 | +8.57 | 174.35 | 0.05 |
+| 14 | `strategy_fast` | 45 | 28.9% | 0.86 | −30.56 | 81.68 | −0.37 |
+| 15 | `strategy_fib_martingale_1h_050` | 228 | 50.9% | 0.92 | −120.90 | 384.13 | −0.31 |
+| 16 | `strategy_fib_martingale_1h` | 205 | 41.5% | 0.80 | −281.74 | 420.85 | −0.67 |
+
+### 24 months (2024-11 to 2026-10)
+
+| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+|--:|---|--:|--:|--:|--:|--:|--:|
+| 1 | `strategy_horizon_long` | 137 | 32.1% | 1.14 | **+694.60** | 1443.24 | 0.48 |
+| 2 | `strategy_squeeze_dual_structure` | 151 | 49.7% | 1.35 | +520.11 | **143.62** | **3.62** |
+| 3 | `strategy_rsi_ema` | 133 | 41.4% | 1.20 | +446.97 | 552.36 | 0.81 |
+| 4 | `strategy_dual_structure_trend` | 145 | 47.6% | 1.31 | +428.09 | 222.27 | 1.93 |
+| 5 | `strategy_volume_breakout` | 107 | 46.7% | 1.20 | +427.26 | 469.23 | 0.91 |
+| 6 | `strategy_pullback_plus_breakout` | 140 | 46.4% | 1.27 | +368.90 | 226.36 | 1.63 |
+| 7 | `strategy_pullback_continuation` | 70 | 57.1% | **1.64** | +333.83 | **72.11** | **4.63** |
+| 8 | `strategy_price_action` | 128 | 37.5% | 1.17 | +324.21 | 311.34 | 1.04 |
+| 9 | `strategy_shadow_reversal` | 110 | 31.8% | 1.19 | +288.99 | 291.36 | 0.99 |
+| 10 | `strategy_pullback_trend` (baseline) | 100 | 40.0% | 1.24 | +259.44 | 242.99 | 1.07 |
+| 11 | `strategy_fib_martingale` | 101 | 49.5% | 1.15 | +200.89 | 298.88 | 0.67 |
+| 12 | `strategy_fib_martingale_1h_050` | 437 | 51.5% | 1.01 | +43.09 | 442.83 | 0.10 |
+| 13 | `strategy_vegas_martingale` | 32 | 34.4% | 1.00 | −0.84 | 98.47 | −0.01 |
+| 14 | `strategy_fast` | 156 | 27.6% | 0.84 | −128.71 | 181.64 | −0.71 |
+| 15 | `strategy_fib_martingale_050` | 115 | 52.2% | 0.92 | −148.81 | 456.00 | −0.33 |
+| 16 | `strategy_fib_martingale_1h` | 398 | 43.5% | 0.88 | −370.32 | 462.94 | −0.80 |
+
+### 36 months (2023-11 to 2026-10)
+
+| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+|--:|---|--:|--:|--:|--:|--:|--:|
+| 1 | `strategy_horizon_long` | 190 | 33.7% | 1.21 | **+1426.04** | 1284.60 | 1.11 |
+| 2 | `strategy_squeeze_dual_structure` | 245 | 49.4% | 1.35 | +770.79 | **143.62** | **5.37** |
+| 3 | `strategy_dual_structure_trend` | 239 | 47.7% | 1.31 | +653.87 | 222.27 | 2.94 |
+| 4 | `strategy_volume_breakout` | 168 | 48.2% | 1.20 | +622.18 | 469.23 | 1.33 |
+| 5 | `strategy_pullback_plus_breakout` | 233 | 45.5% | 1.27 | +559.84 | 226.36 | 2.47 |
+| 6 | `strategy_pullback_trend` (baseline) | 147 | 40.8% | 1.23 | +342.25 | 242.99 | 1.41 |
+| 7 | `strategy_pullback_continuation` | 119 | 52.9% | 1.31 | +278.20 | 150.89 | 1.84 |
+| 8 | `strategy_fib_martingale` | 143 | 51.0% | 1.15 | +272.65 | 298.88 | 0.91 |
+| 9 | `strategy_price_action` | 195 | 37.4% | 1.10 | +264.46 | 311.34 | 0.85 |
+| 10 | `strategy_rsi_ema` | 106 | 41.5% | 1.10 | +184.43 | 348.64 | 0.53 |
+| 11 | `strategy_vegas_martingale` | 37 | 37.8% | **1.51** | +127.36 | **82.87** | 1.54 |
+| 12 | `strategy_shadow_reversal` | 150 | 30.0% | 1.05 | +104.73 | 291.36 | 0.36 |
+| 13 | `strategy_fib_martingale_050` | 166 | 53.6% | 0.92 | −205.49 | 488.56 | −0.42 |
+| 14 | `strategy_fast` | 192 | 26.0% | 0.78 | −215.16 | 239.02 | −0.90 |
+| 15 | `strategy_fib_martingale_1h_050` | 637 | 51.6% | 0.93 | −347.93 | 610.32 | −0.57 |
+| 16 | `strategy_fib_martingale_1h` | 623 | 45.3% | 0.87 | −552.29 | 702.10 | −0.79 |
+
+### 48 months (2022-11 to 2026-10)
+
+| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+|--:|---|--:|--:|--:|--:|--:|--:|
+| 1 | `strategy_horizon_long` | 263 | 31.9% | 1.22 | **+1724.22** | 1284.60 | 1.34 |
+| 2 | `strategy_squeeze_dual_structure` | 327 | 47.7% | 1.37 | +892.28 | **143.62** | **6.21** |
+| 3 | `strategy_dual_structure_trend` | 318 | 46.2% | 1.32 | +754.43 | 222.27 | 3.39 |
+| 4 | `strategy_pullback_plus_breakout` | 312 | 44.2% | 1.28 | +656.30 | 226.36 | 2.90 |
+| 5 | `strategy_volume_breakout` | 199 | 48.2% | 1.18 | +609.75 | 469.23 | 1.30 |
+| 6 | `strategy_pullback_trend` (baseline) | 210 | 40.0% | 1.25 | +419.08 | 242.99 | 1.72 |
+| 7 | `strategy_price_action` | 242 | 38.8% | 1.13 | +375.82 | 311.34 | 1.21 |
+| 8 | `strategy_pullback_continuation` | 144 | 53.5% | 1.33 | +322.38 | 150.89 | 2.14 |
+| 9 | `strategy_fib_martingale` | 193 | 48.2% | 1.11 | +240.38 | 298.88 | 0.80 |
+| 10 | `strategy_vegas_martingale` | 51 | 41.2% | **1.56** | +154.67 | **82.87** | 1.87 |
+| 11 | `strategy_rsi_ema` | 158 | 39.2% | 1.05 | +107.92 | 348.64 | 0.31 |
+| 12 | `strategy_shadow_reversal` | 151 | 29.8% | 1.05 | +94.93 | 291.36 | 0.33 |
+| 13 | `strategy_fast` | 194 | 25.8% | 0.76 | −248.63 | 272.49 | −0.91 |
+| 14 | `strategy_fib_martingale_050` | 209 | 51.2% | 0.90 | −286.13 | 553.67 | −0.52 |
+| 15 | `strategy_fib_martingale_1h_050` | 832 | 51.7% | 0.93 | −381.15 | 610.32 | −0.62 |
+| 16 | `strategy_fib_martingale_1h` | 805 | 45.1% | 0.87 | −617.50 | 702.10 | −0.88 |
+
+### Observations
+
+1. **`dual_structure_trend` wins at 12 months, but `horizon_long` wins at 24/36/48** (+694 / +1426 / +1724). Its drawdown is the largest of all strategies (1284–1443), so profit/DD is only 0.48–1.34 — high return, high risk.
+2. **`squeeze_dual_structure` is the steadiest on a risk-adjusted basis**: profit/DD 1.81 / 3.62 / 5.37 / 6.21, top two in every window, with a drawdown pinned near 143 that does not grow with the window.
+3. **`pullback_continuation` is the best at 12/24 months** (profit/DD 4.89 / 4.63) but drops to 1.84 / 2.14 at 36/48 — its edge is concentrated in the recent two years.
+4. **`fib_martingale` only works on 4h.** The 1h variants lose in all four windows (PF 0.80–0.93); `fib_martingale_050` turns negative at 24/36/48, so the 0.5 retracement entry does not hold up over longer windows.
+5. **The older batch decays at longer windows**: `shadow_reversal` falls to +94.93 and `rsi_ema` to +107.92 at 48 months, while `fast` goes −30 → −249. A large part of their 12-month result was regime luck.

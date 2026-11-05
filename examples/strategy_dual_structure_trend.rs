@@ -1,11 +1,11 @@
 //! 双结构趋势策略（风控归一版）：两套互补入场 + 以 R 度量的离场规则。
 //!
-//! 与 `pullback_plus_breakout.rs` 的区别只有两处，都是**风控口径**的修正，不是参数调优：
+//! 与 `strategy_pullback_plus_breakout.rs` 的区别只有两处，都是**风控口径**的修正，不是参数调优：
 //!
 //! 1. **结构 A 的止损设最小距离 0.5 ATR。**
 //!    原版直接用最近 5 根极值，止损常常只有 0.1~0.3 ATR——那已经在噪音带里面，
 //!    任何一次正常抖动都会触发；同时 2R 止盈只有 0.6 ATR 远，手续费占比也被抬得很高。
-//!    0.5 ATR 是本仓库其它策略已经在用的止损距离（见 `volume_breakout.rs`）。
+//!    0.5 ATR 是本仓库其它策略已经在用的止损距离（见 `strategy_volume_breakout.rs`）。
 //!
 //! 2. **结构 B 的移动止损回撤改成 `min(1 ATR, 0.5R)`。**
 //!    原版固定回撤 1 ATR：止损窄的单子（R≈0.5 ATR）等于让出 2R，盈利单经常回吐成亏损；
@@ -662,7 +662,7 @@ fn print_report(month_count: u32, result: &BacktestResult) {
 
 #[tokio::main]
 async fn main() {
-    // 主口径与 pullback_trend.rs 对齐：12 个月、4h。
+    // 主口径与 strategy_pullback_trend.rs 对齐：12 个月、4h。
     // 24/36/48 个月是同一份代码的稳健性检查（参数未按窗口调整）。
     for month_count in [12u32, 24, 36, 48] {
         let result = backtest(SYMBOL, month_count, DualStructureTrend::new(), LEVEL)

@@ -540,7 +540,7 @@ fn print_report(month_count: u32, result: &BacktestResult) {
 
 #[tokio::main]
 async fn main() {
-    // 主口径与 pullback_trend.rs 对齐：12 个月、4h。
+    // 主口径与 strategy_pullback_trend.rs 对齐：12 个月、4h。
     for month_count in [12u32, 24, 36, 48] {
         let result = backtest(SYMBOL, month_count, FibMartingale::new(), LEVEL)
             .await
