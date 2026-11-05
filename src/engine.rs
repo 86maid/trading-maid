@@ -30,9 +30,15 @@ pub trait HookFn {
     ///
     /// - `kline`: the k-line that was just processed (at the **source** level, e.g. 1m).
     /// - `missed_kline_list`: source-level k-lines that had to be backfilled from the exchange
-    ///   because a network interruption dropped them, in ascending time order. Empty on a normal
-    ///   k-line. When it is not empty the hook's own state must be replayed over it before
-    ///   `kline`; every entry is older than `kline`.
+    ///   because a network interruption dropped them, in ascending time order. When it is not
+    ///   empty the hook's own state must be replayed over it before `kline`; every entry is older
+    ///   than `kline`.
+    ///
+    ///   **An empty list does not mean the previous call was the previous bar.** A hole in the
+    ///   data source is skipped rather than backfilled — those bars do not exist, so there is
+    ///   nothing to hand over. A hole shows up only as `kline.time` jumping by more than one
+    ///   source interval; that is the only way a hook can notice it, and it has to compare
+    ///   against the source level from `exchange.get_metadata(symbol)` to get the missing count.
     /// - `exchange`: the exchange handle for querying state.
     ///
     /// Return `Ok(())` to continue, or `Err(...)` to stop the engine.
@@ -307,6 +313,8 @@ where
             let mut next_time = None;
             let mut prev_time = 0;
             let mut preloaded = false;
+            let mut pending_missing = 0usize;
+            let mut contaminated: Option<(u64, u64)> = None;
 
             loop {
                 match self.exchange.next(symbol, source_level).await? {
@@ -319,7 +327,7 @@ where
                             );
                         }
 
-                        let (filled, new_next_time) = check_kline(
+                        let (filled, new_next_time, gap) = check_kline(
                             self.exchange.clone(),
                             symbol,
                             source_level,
@@ -338,54 +346,104 @@ where
                             source_level_kline_buffer.extend(filled);
                         }
 
+                        // Hole in the source data: remember which strategy-level buckets it
+                        // touches, and how many strategy-level bars they amount to.
+                        if let Some((gap_start, gap_end)) = gap {
+                            let (first_start, _) = get_time_range(gap_start, strategy_level)?;
+                            let (last_start, last_end) = get_time_range(gap_end - 1, strategy_level)?;
+
+                            // Walk bucket by bucket instead of dividing by the interval: a
+                            // calendar month has no fixed millisecond length.
+                            let mut count = 1usize;
+                            let mut cursor = first_start;
+
+                            while cursor < last_start {
+                                cursor = get_time_range(cursor, strategy_level)?.1;
+
+                                count += 1;
+                            }
+
+                            pending_missing += count;
+
+                            contaminated = Some(match contaminated {
+                                Some((start, end)) => (start.min(first_start), end.max(last_end)),
+                                None => (first_start, last_end),
+                            });
+                        }
+
                         source_level_kline_buffer.push(kline);
 
                         if kline.time == get_last_time(kline.time, source_level, strategy_level)? {
+                            // Drop the source bars of every contaminated bucket before resampling:
+                            // a bucket missing any of its source bars has a wrong high/low/volume,
+                            // and it would still look perfectly contiguous to the strategy.
+                            if let Some((start, end)) = contaminated {
+                                source_level_kline_buffer
+                                    .retain(|v| v.time < start || v.time >= end);
+                            }
+
                             let new_bar_list =
                                 resample(&source_level_kline_buffer, strategy_level)?;
 
-                            let missed = new_bar_list.len().saturating_sub(1);
-
-                            strategy_level_kline_buffer.extend(new_bar_list);
-
                             source_level_kline_buffer.clear();
 
-                            // 自定义系列必须与 OHLCV 数据在时间上有交集才能在策略中访问到，否则返回空切片 []
-                            let window = strategy_level_kline_buffer.window();
+                            // The bucket that just closed is past the contaminated span.
+                            if let Some((_, end)) = contaminated
+                                && get_time_range(kline.time, strategy_level)?.1 >= end
+                            {
+                                contaminated = None;
+                            }
 
-                            let context = Context {
-                                time: TimeSeries::new(window.time),
-                                open: Series::new(window.open),
-                                high: Series::new(window.high),
-                                low: Series::new(window.low),
-                                close: Series::new(window.close),
-                                volume: Series::new(window.volume),
-                                missed,
-                                exchange: &exchange,
-                                series: SeriesTable(
-                                    self.series
-                                        .iter()
-                                        .filter(|((s, l, _), _)| {
-                                            s == symbol && *l == strategy_level
-                                        })
-                                        .map(|((_, _, name), aligned)| {
-                                            clip_series(
-                                                aligned,
-                                                window.time,
-                                                name.as_str(),
-                                                strategy_level,
-                                            )
-                                        })
-                                        .collect(),
-                                ),
-                                request_context: None,
-                            };
-
-                            if let Err(v) = self.strategy.next(&context).await {
-                                if let Some(on_error) = &self.on_error {
-                                    on_error(v)?;
+                            // Every bucket of this close was contaminated: no new bar, so the
+                            // strategy is not called and `pending_missing` waits for the next one.
+                            if !new_bar_list.is_empty() {
+                                let missed = if pending_missing > 0 {
+                                    Some(Missed::Missing(std::mem::take(&mut pending_missing)))
+                                } else if new_bar_list.len() > 1 {
+                                    Some(Missed::Backfilled(new_bar_list.len() - 1))
                                 } else {
-                                    bail!(v);
+                                    None
+                                };
+
+                                strategy_level_kline_buffer.extend(new_bar_list);
+
+                                // 自定义系列必须与 OHLCV 数据在时间上有交集才能在策略中访问到，否则返回空切片 []
+                                let window = strategy_level_kline_buffer.window();
+
+                                let context = Context {
+                                    time: TimeSeries::new(window.time),
+                                    open: Series::new(window.open),
+                                    high: Series::new(window.high),
+                                    low: Series::new(window.low),
+                                    close: Series::new(window.close),
+                                    volume: Series::new(window.volume),
+                                    missed,
+                                    exchange: &exchange,
+                                    series: SeriesTable(
+                                        self.series
+                                            .iter()
+                                            .filter(|((s, l, _), _)| {
+                                                s == symbol && *l == strategy_level
+                                            })
+                                            .map(|((_, _, name), aligned)| {
+                                                clip_series(
+                                                    aligned,
+                                                    window.time,
+                                                    name.as_str(),
+                                                    strategy_level,
+                                                )
+                                            })
+                                            .collect(),
+                                    ),
+                                    request_context: None,
+                                };
+
+                                if let Err(v) = self.strategy.next(&context).await {
+                                    if let Some(on_error) = &self.on_error {
+                                        on_error(v)?;
+                                    } else {
+                                        bail!(v);
+                                    }
                                 }
                             }
                         }
@@ -464,15 +522,15 @@ where
             source_level: Level,
             next_time: Option<u64>,
             prev_time: u64,
-        ) -> anyhow::Result<Option<(KLine, Option<Vec<KLine>>, u64)>> {
+        ) -> anyhow::Result<Option<(KLine, Option<Vec<KLine>>, u64, Option<(u64, u64)>)>> {
             let Some(kline) = exchange.next(&symbol, source_level).await? else {
                 return Ok(None);
             };
 
-            let (filled, new_next_time) =
+            let (filled, new_next_time, gap) =
                 check_kline(exchange, &symbol, source_level, kline, next_time, prev_time).await?;
 
-            Ok(Some((kline, filled, new_next_time)))
+            Ok(Some((kline, filled, new_next_time, gap)))
         }
 
         loop {
@@ -529,7 +587,7 @@ where
 
             for (symbol_index, result) in task_output_list {
                 match result? {
-                    Some((current, filled, new_next_time)) => {
+                    Some((current, filled, new_next_time, gap)) => {
                         all_eof = false;
 
                         if !states[symbol_index].preloaded {
@@ -554,7 +612,7 @@ where
 
                         state.next_time = Some(new_next_time);
                         state.prev_time = current.time;
-                        buffer.missed = 0;
+                        buffer.missed = None;
 
                         let missed_kline_list = filled.clone().unwrap_or_default();
 
@@ -566,6 +624,31 @@ where
                             buffer.source_level_kline_buffer.extend(filled);
                         }
 
+                        // Hole in the source data: remember which strategy-level buckets it
+                        // touches, and how many strategy-level bars they amount to.
+                        if let Some((gap_start, gap_end)) = gap {
+                            let (first_start, _) = get_time_range(gap_start, strategy_level)?;
+                            let (last_start, last_end) = get_time_range(gap_end - 1, strategy_level)?;
+
+                            // Walk bucket by bucket instead of dividing by the interval: a
+                            // calendar month has no fixed millisecond length.
+                            let mut count = 1usize;
+                            let mut cursor = first_start;
+
+                            while cursor < last_start {
+                                cursor = get_time_range(cursor, strategy_level)?.1;
+
+                                count += 1;
+                            }
+
+                            buffer.pending_missing += count;
+
+                            buffer.contaminated = Some(match buffer.contaminated {
+                                Some((start, end)) => (start.min(first_start), end.max(last_end)),
+                                None => (first_start, last_end),
+                            });
+                        }
+
                         buffer.source_kline_resample_buffer.push(current);
                         buffer.source_kline_buffer.push(current);
                         buffer.source_level_kline_buffer.push(current);
@@ -573,15 +656,45 @@ where
                         if current.time
                             == get_last_time(current.time, source_level, strategy_level)?
                         {
+                            // Drop the source bars of every contaminated bucket before resampling:
+                            // a bucket missing any of its source bars has a wrong high/low/volume,
+                            // and it would still look perfectly contiguous to the strategy.
+                            if let Some((start, end)) = buffer.contaminated {
+                                buffer
+                                    .source_kline_resample_buffer
+                                    .retain(|v| v.time < start || v.time >= end);
+                            }
+
                             let new_bar_list =
                                 resample(&buffer.source_kline_resample_buffer, strategy_level)?;
 
-                            buffer.missed = new_bar_list.len().saturating_sub(1);
-                            buffer.strategy_level_kline_buffer.extend(new_bar_list);
                             buffer.source_kline_resample_buffer.clear();
 
-                            if symbol_list[symbol_index] == *primary {
-                                ready = true;
+                            // The bucket that just closed is past the contaminated span.
+                            if let Some((_, end)) = buffer.contaminated
+                                && get_time_range(current.time, strategy_level)?.1 >= end
+                            {
+                                buffer.contaminated = None;
+                            }
+
+                            // Every bucket of this close was contaminated: no new bar, so the
+                            // strategy is not called and `pending_missing` waits for the next one.
+                            if !new_bar_list.is_empty() {
+                                buffer.missed = if buffer.pending_missing > 0 {
+                                    Some(Missed::Missing(std::mem::take(
+                                        &mut buffer.pending_missing,
+                                    )))
+                                } else if new_bar_list.len() > 1 {
+                                    Some(Missed::Backfilled(new_bar_list.len() - 1))
+                                } else {
+                                    None
+                                };
+
+                                buffer.strategy_level_kline_buffer.extend(new_bar_list);
+
+                                if symbol_list[symbol_index] == *primary {
+                                    ready = true;
+                                }
                             }
                         }
 
@@ -824,7 +937,13 @@ struct SymbolBuffer {
     source_level_kline_buffer: KLineBuffer,
     strategy_level_kline_buffer: KLineBuffer,
     level_kline_table: RefCell<Vec<LevelKLine>>,
-    missed: usize,
+    missed: Option<Missed>,
+    /// Missing steps already detected but not delivered yet: the hole swallowed every bucket of
+    /// the last close, so no new bar triggered a strategy call. Delivered on the next one.
+    pending_missing: usize,
+    /// Strategy-level bucket span `[start, end)` touched by a data hole. Source bars inside it
+    /// are dropped before resampling. Cleared once a close is past the span.
+    contaminated: Option<(u64, u64)>,
     eof: bool,
 }
 
@@ -836,7 +955,9 @@ impl SymbolBuffer {
             source_level_kline_buffer: KLineBuffer::new(max_len),
             strategy_level_kline_buffer: KLineBuffer::new(max_len),
             level_kline_table: RefCell::new(Vec::new()),
-            missed: 0,
+            missed: None,
+            pending_missing: 0,
+            contaminated: None,
             eof: false,
         }
     }
@@ -869,6 +990,12 @@ impl SymbolBuffer {
     }
 }
 
+/// Validate that the k-line returned by `next()` is contiguous with the previous one, and
+/// handle the fill when it is not.
+///
+/// The third return value is the hole that could not be filled: only a local exchange produces
+/// it — its data is a read-only snapshot, so nothing can be filled in and the caller must skip
+/// the hole. A live exchange that fails to fill a hole is still an error.
 async fn check_kline(
     exchange: Arc<dyn Exchange + 'static>,
     symbol: &str,
@@ -876,7 +1003,9 @@ async fn check_kline(
     kline: KLine,
     next_time: Option<u64>,
     prev_time: u64,
-) -> anyhow::Result<(Option<Vec<KLine>>, u64)> {
+) -> anyhow::Result<(Option<Vec<KLine>>, u64, Option<(u64, u64)>)> {
+    let mut gap = None;
+
     let filled = if let Some(nt) = next_time {
         if kline.time != nt {
             if kline.time == prev_time {
@@ -921,7 +1050,8 @@ async fn check_kline(
                         t2s(first.time),
                     );
                 }
-                None => {
+                // live: the bars should exist but could not be backfilled — that is a failure.
+                None if exchange.is_live() => {
                     bail!(
                         "time discontinuity: get_kline() returned empty k-line: range [start, end): start {} ({}), end {} ({})",
                         gap_start,
@@ -930,10 +1060,16 @@ async fn check_kline(
                         t2s(gap_end),
                     );
                 }
+                // local: the bars genuinely do not exist. Report the hole and let the caller skip it.
+                None => {
+                    gap = Some((gap_start, gap_end));
+                }
                 _ => {}
             }
 
-            if let Some(last) = filled_klines.last() {
+            if gap.is_none()
+                && let Some(last) = filled_klines.last()
+            {
                 let last_end = get_time_range(last.time, source_level)
                     .context(format!(
                         "time discontinuity: get_kline() returned k-line with unexpected time: {}",
@@ -967,5 +1103,5 @@ async fn check_kline(
         ))?
         .1;
 
-    Ok((filled, new_next_time))
+    Ok((filled, new_next_time, gap))
 }

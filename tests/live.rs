@@ -171,7 +171,7 @@ impl Exchange for FakeLive {
 
 #[derive(Default, Clone)]
 struct Recorder {
-    missed: Rc<RefCell<Vec<usize>>>,
+    missed: Rc<RefCell<Vec<Option<Missed>>>>,
     close: Rc<RefCell<Vec<Decimal>>>,
     requested_5m: Rc<RefCell<Vec<Option<Decimal>>>>,
     time0: Rc<RefCell<Vec<u64>>>,
@@ -193,7 +193,7 @@ impl Recorder {
 }
 
 struct RecordingStrategy {
-    missed: Rc<RefCell<Vec<usize>>>,
+    missed: Rc<RefCell<Vec<Option<Missed>>>>,
     close: Rc<RefCell<Vec<Decimal>>>,
     requested_5m: Rc<RefCell<Vec<Option<Decimal>>>>,
     time0: Rc<RefCell<Vec<u64>>>,
@@ -256,7 +256,10 @@ async fn gap_is_reported_as_missed() {
     engine.run("BTCUSDT", Level::Minute1).await.unwrap();
 
     // 第一根没有缺口；第二根一次跳了 2 根
-    assert_eq!(recorder.missed.borrow().as_slice(), &[0, 2]);
+    assert_eq!(
+        recorder.missed.borrow().as_slice(),
+        &[None, Some(Missed::Backfilled(2))]
+    );
 
     // 补回来的 bar 就在序列里，所以策略看到的收盘价是连续的
     assert_eq!(recorder.close.borrow().as_slice(), &[dec!(100), dec!(103)]);

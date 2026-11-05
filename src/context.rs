@@ -26,6 +26,23 @@ impl<'a> Index<&str> for SeriesTable<'a> {
     }
 }
 
+/// Strategy-level bars skipped between the previous call and this one.
+///
+/// Both variants carry the same meaning for `n`: this call covers `n + 1` strategy periods
+/// instead of the usual one. They differ only in whether the values of those bars are present
+/// in the series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Missed {
+    /// The bars exist but the strategy was not called: `close[1]`, `close[2]`, ...,
+    /// `close[n]` are them, in that order, so the series stays continuous. A stateful strategy
+    /// can replay those values to catch its incremental state up.
+    Backfilled(usize),
+    /// The bars do not exist (the data source has a hole): `time` jumps, and `close[1..=n]`
+    /// cannot be read — an out-of-range index yields the `Decimal::MAX` sentinel. The
+    /// incremental state cannot be caught up, only reset.
+    Missing(usize),
+}
+
 pub struct Context<'a> {
     pub time: &'a TimeSeries,
     pub open: &'a Series,
@@ -33,20 +50,15 @@ pub struct Context<'a> {
     pub low: &'a Series,
     pub close: &'a Series,
     pub volume: &'a Series,
-    /// How many strategy-level bars went by without a call because the incoming bars were lost
-    /// to a network interruption and had to be backfilled from the exchange.
-    ///
-    /// The backfilled bars are already inside `close`, so the series stays continuous and this
-    /// counter is the only way to notice the jump. A stateful strategy can catch up by feeding
-    /// `close[missed]`, `close[missed - 1]`, ..., `close[0]` in that order. `0` on a normal bar.
+    /// Bars skipped between the previous call and this one. `None` on a normal bar.
     ///
     /// This is the safety net for a gap in [`Exchange::next`]. A live exchange is expected to
     /// retry transient failures internally and to deliver skipped bars one by one, so that
-    /// `missed` stays `0` in normal operation — see the gap guidance on [`Exchange::next`]. A
-    /// strategy that keeps its own incremental state (EMA/RSI caches, rolling windows, bar
-    /// counters) is only correct while `missed == 0`, so it must either check this field and
-    /// rebuild that state, or accept that a stalled feed skews its indicators.
-    pub missed: usize,
+    /// `missed` stays `None` in normal operation — see the gap guidance on [`Exchange::next`].
+    /// A strategy that keeps its own incremental state (EMA/RSI caches, rolling windows, bar
+    /// counters) is only correct while `missed` is `None`, so it must either check this field
+    /// and rebuild that state, or accept that a stalled feed skews its indicators.
+    pub missed: Option<Missed>,
     pub exchange: &'a ExchangeWrapper,
     pub series: SeriesTable<'a>,
     pub(crate) request_context: Option<&'a RequestContext<'a>>,
@@ -176,7 +188,7 @@ pub(crate) struct SymbolContext<'a> {
     pub source_level_kline_context: KLineContext<'a>,
     pub source_kline_buffer: &'a [KLine],
     pub level_kline_table: &'a RefCell<Vec<LevelKLine>>,
-    pub missed: usize,
+    pub missed: Option<Missed>,
 }
 
 pub(crate) struct LevelKLine {
