@@ -176,3 +176,60 @@ async fn sample_start_partial_bucket_is_delivered_as_is() {
         vec![Decimal::from_parts(120, 0, 0, false, 0), FULL_BUCKET]
     );
 }
+
+/// Runs a two-symbol backtest where **both** symbols share the same hole.
+///
+/// A hole in only one symbol cannot reach this path: `Timeline` requires every source to be
+/// aligned bar by bar and rejects the run at construction time. So the multi-symbol skip path is
+/// only reachable when all symbols miss the same span, which is what this builds.
+async fn run_multi_shared_hole(kline_list: Vec<KLine>) -> (Vec<Option<Missed>>, Vec<u64>) {
+    let missed = Rc::new(RefCell::new(Vec::new()));
+    let time = Rc::new(RefCell::new(Vec::new()));
+
+    let mut eth_metadata = metadata();
+    eth_metadata.symbol = "ETHUSDT".to_string();
+
+    let exchange = LocalExchange::new(vec![
+        DataSource::new(metadata(), kline_list.clone()),
+        DataSource::new(eth_metadata, kline_list),
+    ])
+    .unwrap()
+    .cash(1_000_000)
+    .leverage(1);
+
+    let mut engine = Engine::new(
+        exchange,
+        RecordingStrategy {
+            missed: missed.clone(),
+            time: time.clone(),
+            volume: Rc::new(RefCell::new(Vec::new())),
+        },
+    );
+
+    engine
+        .run(["BTCUSDT", "ETHUSDT"], Level::Hour4)
+        .await
+        .unwrap();
+
+    let missed = missed.borrow().clone();
+    let time = time.borrow().clone();
+
+    (missed, time)
+}
+
+// 多币种：所有币种缺同一段时，跳过逻辑同样生效，主币种的 missed 报缺失根数。
+#[tokio::test]
+async fn multi_symbol_shared_hole_is_skipped_and_reported() {
+    // 第二个 4h 桶缺 40m-120m 共 80 分钟，两个币种缺的完全一样
+    let kline_list = bars(
+        T0,
+        T0 + 3 * HOUR4,
+        Some((T0 + HOUR4 + 40 * MIN, T0 + HOUR4 + 120 * MIN)),
+    );
+
+    let (missed, time) = run_multi_shared_hole(kline_list).await;
+
+    // 三个桶里中间那个被丢；主币种在第三根桶收尾时报告缺 1 根
+    assert_eq!(missed, vec![None, Some(Missed::Missing(1))]);
+    assert_eq!(time, vec![T0, T0 + 2 * HOUR4]);
+}

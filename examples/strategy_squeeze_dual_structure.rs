@@ -765,7 +765,7 @@ fn print_report(month_count: u32, result: &BacktestResult) {
 #[tokio::main]
 async fn main() {
     // 主口径与 strategy_pullback_trend.rs 对齐：12 个月、4h。
-    for month_count in [12u32, 24, 36, 48] {
+    for month_count in [3u32, 6, 12, 24, 36, 48, 60, 72] {
         let result = backtest(SYMBOL, month_count, SqueezeDualStructure::new(), LEVEL)
             .await
             .unwrap();

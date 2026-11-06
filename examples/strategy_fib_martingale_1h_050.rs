@@ -543,7 +543,7 @@ fn print_report(month_count: u32, result: &BacktestResult) {
 #[tokio::main]
 async fn main() {
     // 主口径：12 个月；24/36/48 个月做稳健性检查（参数未按窗口调整）。
-    for month_count in [12u32, 24, 36, 48] {
+    for month_count in [3u32, 6, 12, 24, 36, 48, 60, 72] {
         let result = backtest(SYMBOL, month_count, FibMartingale::new(), LEVEL)
             .await
             .unwrap();

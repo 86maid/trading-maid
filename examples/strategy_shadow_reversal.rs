@@ -113,8 +113,8 @@ fn print_report(month_count: u32, symbol: &str, level: Level, result: &BacktestR
 }
 #[tokio::main]
 async fn main() {
-    // 主口径 12 个月；24/36/48 个月是同一份代码的稳健性检查（参数未按窗口调整）。
-    for month_count in [12u32, 24, 36, 48] {
+    // 同一份代码跑 8 个窗口（参数未按窗口调整），用于观察稳健性。
+    for month_count in [3u32, 6, 12, 24, 36, 48, 60, 72] {
         let result = backtest("BTCUSDT", month_count, my_strategy, Level::Hour4)
             .await
             .unwrap();
