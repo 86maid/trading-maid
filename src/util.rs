@@ -2,8 +2,8 @@
 //! and the backtest result / HTML report helpers.
 
 use crate::data::{AlignedSeries, DataSource, FundingRate, KLine, Level, Metadata};
-use crate::engine::Engine;
-use crate::exchange::Exchange;
+use crate::engine::{Engine, HookFn};
+use crate::exchange::{Exchange, ExchangeWrapper};
 use crate::local_exchange::LocalExchange;
 use crate::order::{HistoryPosition, HistoryPositionSummary, OrderMessage, Side};
 use crate::strategy::Strategy;
@@ -16,8 +16,10 @@ use chrono::{
 use reqwest::Client;
 use reqwest::StatusCode;
 use rust_decimal::prelude::*;
+use std::cell::Cell;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -1657,6 +1659,79 @@ impl BacktestResult {
         data_source.insert(0, self.data_source);
 
         open_in_server(data_source, self.history_position, self.history_order).await
+    }
+}
+
+/// Tracks the maximum drawdown of the account equity over a backtest.
+///
+/// Attach one to the engine before running, then read it afterwards:
+///
+/// ```ignore
+/// let drawdown = DrawdownHook::new(dec!(1000000));
+///
+/// let mut engine = Engine::new(exchange, strategy);
+/// engine.hook(drawdown.clone());
+/// engine.run(symbol, level).await?;
+///
+/// println!("max drawdown = {}", drawdown.get());
+/// ```
+///
+/// The hook samples [`Exchange::get_equity`] on **every source-level k-line**, so unrealized
+/// profit is included. Drawing the curve from closed positions alone misses every floating loss
+/// between an entry and its exit, which understates the drawdown — often by a lot on strategies
+/// that hold positions for days.
+///
+/// Equity is `cash + margin + unrealized profit`, so the curve starts at the amount passed to
+/// [`DrawdownHook::new`]; that value must match the cash handed to
+/// [`LocalExchange::cash`](crate::local_exchange::LocalExchange::cash), otherwise the first
+/// drawdown is measured against the wrong baseline.
+#[derive(Clone)]
+pub struct DrawdownHook {
+    peak: Decimal,
+    max_drawdown: Rc<Cell<Decimal>>,
+}
+
+impl DrawdownHook {
+    /// Creates a tracker whose equity curve starts at `initial_cash`.
+    ///
+    /// Pass the same amount used when constructing the exchange, otherwise the baseline of the
+    /// drawdown is wrong and the very first dip gets swallowed.
+    pub fn new(initial_cash: impl Into<Decimal>) -> Self {
+        Self {
+            peak: initial_cash.into(),
+            max_drawdown: Rc::new(Cell::new(Decimal::ZERO)),
+        }
+    }
+
+    /// Returns the largest drop from a running peak, in quote currency.
+    ///
+    /// `0` when the equity never fell below its running peak.
+    pub fn get(&self) -> Decimal {
+        self.max_drawdown.get()
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl HookFn for DrawdownHook {
+    async fn next(
+        &mut self,
+        _kline: KLine,
+        _missed_kline_list: &[KLine],
+        exchange: ExchangeWrapper,
+    ) -> anyhow::Result<()> {
+        let equity = exchange.get_equity().await?;
+
+        if equity > self.peak {
+            self.peak = equity;
+        }
+
+        let drawdown = self.peak - equity;
+
+        if drawdown > self.max_drawdown.get() {
+            self.max_drawdown.set(drawdown);
+        }
+
+        Ok(())
     }
 }
 

@@ -1082,188 +1082,188 @@ async fn main() {
 
 Every `strategy_*` file under `examples/` is a complete strategy — entry/exit rules, position sizing, a full backtest. The complete source lives in the file of the same name; the leaderboard below is what that code produces.
 
-Same setup for every row: BTCUSDT futures, 1m source data, starting cash 1,000,000, position size
-set by each strategy (mostly 0.01 BTC). The absolute numbers are therefore tiny — **read the
-ordering, PF and drawdown, not a percentage return**. The 2026-10-28 archive hole is skipped.
+Same setup for every row: BTCUSDT futures, 1m source data, starting cash 1,000,000, position size set by each strategy (mostly 0.01 BTC). The absolute numbers are therefore tiny — **read the ordering, profit/loss ratio and drawdown, not a percentage return**. The 2026-10-28 archive hole is skipped.
 
-Every window runs **the same code with parameters untouched**. 3 and 6 months are far too small to
-mean anything; judge robustness from 12 months upwards.
+Max drawdown is sampled from the account equity on every source-level k-line by `DrawdownHook`, so it **includes floating losses**; summing closed positions understates it.
+
+Every window runs **the same code with parameters untouched**. 3 and 6 months are far too small to mean anything; judge robustness from 12 months upwards.
 
 ### 3 months (2026-08 to 2026-10)
 
-| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+| # | Strategy | Trades | Win rate | Profit/loss ratio | Average profit | Total profit | Max drawdown |
 |--:|---|--:|--:|--:|--:|--:|--:|
-| 1 | `strategy_horizon_long` | 15 | 20% | 1.79 | **+405.78** | 233.51 | 1.74 |
-| 2 | `strategy_volume_breakout` | 8 | 62.5% | 2.37 | +108.46 | 57.20 | 1.90 |
-| 3 | `strategy_rsi_ema` | 16 | 43.8% | 1.49 | +74.27 | 138.88 | 0.53 |
-| 4 | `strategy_fast` | 4 | 50% | 2.31 | +13.52 | 10.35 | 1.31 |
-| 5 | `strategy_pullback_continuation` | 5 | 40% | 1.29 | +11.84 | 29.30 | 0.40 |
-| 6 | `strategy_vegas_martingale` | 0 | 0% | — | 0.00 | 0.00 | — |
-| 7 | `strategy_price_action` | 8 | 25% | 0.76 | -25.51 | 86.04 | -0.30 |
-| 8 | `strategy_shadow_reversal` | 8 | 12.5% | 0.22 | -89.76 | 89.76 | -1.00 |
-| 9 | `strategy_squeeze_dual_structure` | 14 | 14.3% | 0.41 | -108.57 | 139.42 | -0.78 |
-| 10 | `strategy_dual_structure_trend` | 14 | 14.3% | 0.41 | -108.57 | 139.42 | -0.78 |
-| 11 | `strategy_pullback_plus_breakout` | 14 | 14.3% | 0.41 | -108.57 | 139.42 | -0.78 |
-| 12 | `strategy_pullback_trend` (baseline) | 11 | 9.1% | 0.24 | -114.93 | 114.93 | -1.00 |
-| 13 | `strategy_fib_martingale` | 10 | 30% | 0.29 | -117.38 | 129.05 | -0.91 |
-| 14 | `strategy_fib_martingale_050` | 14 | 42.9% | 0.32 | -136.26 | 162.67 | -0.84 |
-| 15 | `strategy_fib_martingale_1h_050` | 63 | 44.4% | 0.65 | -141.22 | 155.79 | -0.91 |
-| 16 | `strategy_fib_martingale_1h` | 61 | 31.1% | 0.55 | -175.26 | 175.26 | -1.00 |
+| 1 | `strategy_horizon_long` | 15 | 20.00% | 7.15 | 27.05 | **405.78** | 456.97 |
+| 2 | `strategy_volume_breakout` | 8 | 62.50% | 1.42 | 13.56 | 108.46 | 102.90 |
+| 3 | `strategy_rsi_ema` | 16 | 43.75% | 1.92 | 4.64 | 74.27 | 176.67 |
+| 4 | `strategy_fast` | 4 | 50.00% | 2.31 | 3.38 | 13.52 | 13.60 |
+| 5 | `strategy_pullback_continuation` | 5 | 40.00% | 1.94 | 2.37 | 11.84 | 31.59 |
+| 6 | `strategy_vegas_martingale` | 0 | 0.00% | 0.00 | 0.00 | 0.00 | 0.00 |
+| 7 | `strategy_price_action` | 8 | 25.00% | 2.28 | -3.19 | -25.51 | 118.23 |
+| 8 | `strategy_shadow_reversal` | 8 | 12.50% | 1.52 | -11.22 | -89.76 | 109.78 |
+| 9 | `strategy_squeeze_dual_structure` | 14 | 14.29% | 2.46 | -7.75 | -108.57 | 139.50 |
+| 10 | `strategy_dual_structure_trend` | 14 | 14.29% | 2.46 | -7.75 | -108.57 | 139.50 |
+| 11 | `strategy_pullback_plus_breakout` | 14 | 14.29% | 2.46 | -7.75 | -108.57 | 139.50 |
+| 12 | `strategy_pullback_trend` | 11 | 9.09% | 2.36 | -10.45 | -114.93 | 125.69 |
+| 13 | `strategy_fib_martingale` | 10 | 30.00% | 0.67 | -11.74 | -117.38 | 141.75 |
+| 14 | `strategy_fib_martingale_050` | 14 | 42.86% | 0.42 | -9.73 | -136.26 | 171.23 |
+| 15 | `strategy_fib_martingale_1h_050` | 63 | 44.44% | 0.81 | -2.24 | -141.22 | 160.13 |
+| 16 | `strategy_fib_martingale_1h` | 61 | 31.15% | 1.23 | -2.87 | -175.26 | 179.91 |
 
 ### 6 months (2026-05 to 2026-10)
 
-| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+| # | Strategy | Trades | Win rate | Profit/loss ratio | Average profit | Total profit | Max drawdown |
 |--:|---|--:|--:|--:|--:|--:|--:|
-| 1 | `strategy_horizon_long` | 30 | 30% | 1.36 | **+309.43** | 233.51 | 1.33 |
-| 2 | `strategy_volume_breakout` | 26 | 42.3% | 1.26 | +83.66 | 200.44 | 0.42 |
-| 3 | `strategy_rsi_ema` | 37 | 35.1% | 1.09 | +34.27 | 195.81 | 0.18 |
-| 4 | `strategy_fast` | 6 | 33.3% | 0.79 | -6.41 | 30.28 | -0.21 |
-| 5 | `strategy_pullback_continuation` | 13 | 46.2% | 0.92 | -8.38 | 54.08 | -0.15 |
-| 6 | `strategy_pullback_plus_breakout` | 24 | 33.3% | 0.9 | -26.45 | 139.42 | -0.19 |
-| 7 | `strategy_dual_structure_trend` | 24 | 33.3% | 0.87 | -34.14 | 139.42 | -0.24 |
-| 8 | `strategy_pullback_trend` (baseline) | 17 | 17.6% | 0.75 | -47.48 | 137.87 | -0.34 |
-| 9 | `strategy_vegas_martingale` | 12 | 25% | 0.45 | -48.34 | 48.34 | -1.00 |
-| 10 | `strategy_squeeze_dual_structure` | 24 | 33.3% | 0.77 | -63.74 | 139.42 | -0.46 |
-| 11 | `strategy_fib_martingale` | 23 | 47.8% | 0.72 | -64.76 | 174.35 | -0.37 |
-| 12 | `strategy_price_action` | 24 | 25% | 0.73 | -77.26 | 117.60 | -0.66 |
-| 13 | `strategy_fib_martingale_050` | 27 | 51.9% | 0.52 | -148.03 | 227.59 | -0.65 |
-| 14 | `strategy_shadow_reversal` | 18 | 11.1% | 0.31 | -180.00 | 180.00 | -1.00 |
-| 15 | `strategy_fib_martingale_1h` | 105 | 38.1% | 0.65 | -227.78 | 316.21 | -0.72 |
-| 16 | `strategy_fib_martingale_1h_050` | 113 | 46% | 0.61 | -290.49 | 369.26 | -0.79 |
+| 1 | `strategy_horizon_long` | 30 | 30.00% | 3.18 | 10.31 | **309.43** | 456.97 |
+| 2 | `strategy_volume_breakout` | 26 | 42.31% | 1.72 | 3.22 | 83.66 | 224.29 |
+| 3 | `strategy_rsi_ema` | 37 | 35.14% | 2.01 | 0.93 | 34.27 | 212.93 |
+| 4 | `strategy_fast` | 6 | 33.33% | 1.58 | -1.07 | -6.41 | 48.50 |
+| 5 | `strategy_pullback_continuation` | 13 | 46.15% | 1.07 | -0.64 | -8.38 | 77.59 |
+| 6 | `strategy_pullback_plus_breakout` | 24 | 33.33% | 1.79 | -1.10 | -26.45 | 139.50 |
+| 7 | `strategy_dual_structure_trend` | 24 | 33.33% | 1.74 | -1.42 | -34.14 | 139.50 |
+| 8 | `strategy_pullback_trend` | 17 | 17.65% | 3.49 | -2.79 | -47.48 | 149.00 |
+| 9 | `strategy_vegas_martingale` | 12 | 25.00% | 1.36 | -4.03 | -48.34 | 55.29 |
+| 10 | `strategy_squeeze_dual_structure` | 24 | 33.33% | 1.54 | -2.66 | -63.74 | 139.50 |
+| 11 | `strategy_fib_martingale` | 23 | 47.83% | 0.78 | -2.82 | -64.76 | 203.23 |
+| 12 | `strategy_price_action` | 24 | 25.00% | 2.19 | -3.22 | -77.26 | 128.33 |
+| 13 | `strategy_fib_martingale_050` | 27 | 51.85% | 0.48 | -5.48 | -148.03 | 251.70 |
+| 14 | `strategy_shadow_reversal` | 18 | 11.11% | 2.51 | -10.00 | -180.00 | 205.85 |
+| 15 | `strategy_fib_martingale_1h` | 105 | 38.10% | 1.06 | -2.17 | -227.78 | 336.95 |
+| 16 | `strategy_fib_martingale_1h_050` | 113 | 46.02% | 0.71 | -2.57 | -290.49 | 389.16 |
 
 ### 12 months (2025-11 to 2026-10)
 
-| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+| # | Strategy | Trades | Win rate | Profit/loss ratio | Average profit | Total profit | Max drawdown |
 |--:|---|--:|--:|--:|--:|--:|--:|
-| 1 | `strategy_dual_structure_trend` | 72 | 44.4% | 1.5 | **+290.98** | 139.42 | 2.09 |
-| 2 | `strategy_pullback_plus_breakout` | 72 | 43.1% | 1.48 | +269.81 | 139.42 | 1.94 |
-| 3 | `strategy_pullback_continuation` | 34 | 55.9% | 2.35 | +264.37 | 54.08 | 4.89 |
-| 4 | `strategy_squeeze_dual_structure` | 70 | 45.7% | 1.43 | +252.15 | 139.42 | 1.81 |
-| 5 | `strategy_shadow_reversal` | 48 | 35.4% | 1.43 | +237.75 | 192.31 | 1.24 |
-| 6 | `strategy_volume_breakout` | 43 | 44.2% | 1.26 | +175.88 | 203.38 | 0.86 |
-| 7 | `strategy_rsi_ema` | 83 | 36.1% | 1.13 | +138.43 | 282.45 | 0.49 |
-| 8 | `strategy_fib_martingale_050` | 59 | 59.3% | 1.16 | +93.95 | 227.59 | 0.41 |
-| 9 | `strategy_pullback_trend` (baseline) | 51 | 35.3% | 1.13 | +57.93 | 137.87 | 0.42 |
-| 10 | `strategy_horizon_long` | 65 | 30.8% | 1.03 | +56.64 | 527.07 | 0.11 |
-| 11 | `strategy_price_action` | 62 | 32.3% | 1.06 | +48.83 | 227.77 | 0.21 |
-| 12 | `strategy_vegas_martingale` | 16 | 37.5% | 1.16 | +18.82 | 39.80 | 0.47 |
-| 13 | `strategy_fib_martingale` | 51 | 49% | 1.02 | +8.57 | 174.35 | 0.05 |
-| 14 | `strategy_fast` | 45 | 28.9% | 0.86 | -30.56 | 81.68 | -0.37 |
-| 15 | `strategy_fib_martingale_1h_050` | 228 | 50.9% | 0.92 | -120.90 | 384.13 | -0.31 |
-| 16 | `strategy_fib_martingale_1h` | 205 | 41.5% | 0.8 | -281.74 | 420.85 | -0.67 |
+| 1 | `strategy_dual_structure_trend` | 72 | 44.44% | 1.88 | 4.04 | **290.98** | 139.50 |
+| 2 | `strategy_pullback_plus_breakout` | 72 | 43.06% | 1.95 | 3.75 | 269.81 | 139.50 |
+| 3 | `strategy_pullback_continuation` | 34 | 55.88% | 1.86 | 7.78 | 264.37 | 79.31 |
+| 4 | `strategy_squeeze_dual_structure` | 70 | 45.71% | 1.70 | 3.60 | 252.15 | 139.50 |
+| 5 | `strategy_shadow_reversal` | 48 | 35.42% | 2.61 | 4.95 | 237.75 | 213.95 |
+| 6 | `strategy_volume_breakout` | 43 | 44.19% | 1.59 | 4.09 | 175.88 | 284.74 |
+| 7 | `strategy_rsi_ema` | 83 | 36.14% | 2.00 | 1.67 | 138.43 | 350.60 |
+| 8 | `strategy_fib_martingale_050` | 59 | 59.32% | 0.79 | 1.59 | 93.95 | 251.70 |
+| 9 | `strategy_pullback_trend` | 51 | 35.29% | 2.07 | 1.14 | 57.93 | 149.00 |
+| 10 | `strategy_horizon_long` | 65 | 30.77% | 2.31 | 0.87 | 56.64 | 617.70 |
+| 11 | `strategy_price_action` | 62 | 32.26% | 2.23 | 0.79 | 48.83 | 247.41 |
+| 12 | `strategy_vegas_martingale` | 16 | 37.50% | 1.93 | 1.18 | 18.82 | 61.49 |
+| 13 | `strategy_fib_martingale` | 51 | 49.02% | 1.06 | 0.17 | 8.57 | 203.23 |
+| 14 | `strategy_fast` | 45 | 28.89% | 2.11 | -0.68 | -30.56 | 92.36 |
+| 15 | `strategy_fib_martingale_1h_050` | 228 | 50.88% | 0.89 | -0.53 | -120.90 | 391.35 |
+| 16 | `strategy_fib_martingale_1h` | 205 | 41.46% | 1.13 | -1.37 | -281.74 | 426.83 |
 
 ### 24 months (2024-11 to 2026-10)
 
-| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+| # | Strategy | Trades | Win rate | Profit/loss ratio | Average profit | Total profit | Max drawdown |
 |--:|---|--:|--:|--:|--:|--:|--:|
-| 1 | `strategy_horizon_long` | 137 | 32.1% | 1.14 | **+694.60** | 1443.24 | 0.48 |
-| 2 | `strategy_squeeze_dual_structure` | 151 | 49.7% | 1.35 | +520.11 | 143.62 | 3.62 |
-| 3 | `strategy_rsi_ema` | 133 | 41.4% | 1.2 | +446.97 | 552.36 | 0.81 |
-| 4 | `strategy_dual_structure_trend` | 145 | 47.6% | 1.31 | +428.09 | 222.27 | 1.93 |
-| 5 | `strategy_volume_breakout` | 107 | 46.7% | 1.2 | +427.26 | 469.23 | 0.91 |
-| 6 | `strategy_pullback_plus_breakout` | 140 | 46.4% | 1.27 | +368.90 | 226.36 | 1.63 |
-| 7 | `strategy_pullback_continuation` | 70 | 57.1% | 1.64 | +333.83 | 72.11 | 4.63 |
-| 8 | `strategy_price_action` | 128 | 37.5% | 1.17 | +324.21 | 311.34 | 1.04 |
-| 9 | `strategy_shadow_reversal` | 110 | 31.8% | 1.19 | +288.99 | 291.36 | 0.99 |
-| 10 | `strategy_pullback_trend` (baseline) | 100 | 40% | 1.24 | +259.44 | 242.99 | 1.07 |
-| 11 | `strategy_fib_martingale` | 101 | 49.5% | 1.15 | +200.89 | 298.88 | 0.67 |
-| 12 | `strategy_fib_martingale_1h_050` | 437 | 51.5% | 1.01 | +43.09 | 442.83 | 0.10 |
-| 13 | `strategy_vegas_martingale` | 32 | 34.4% | 1 | -0.84 | 98.47 | -0.01 |
-| 14 | `strategy_fast` | 156 | 27.6% | 0.84 | -128.71 | 181.64 | -0.71 |
-| 15 | `strategy_fib_martingale_050` | 115 | 52.2% | 0.92 | -148.81 | 456.00 | -0.33 |
-| 16 | `strategy_fib_martingale_1h` | 398 | 43.5% | 0.88 | -370.32 | 462.94 | -0.80 |
+| 1 | `strategy_horizon_long` | 137 | 32.12% | 2.41 | 5.07 | **694.60** | 1540.62 |
+| 2 | `strategy_squeeze_dual_structure` | 151 | 49.67% | 1.37 | 3.44 | 520.11 | 234.58 |
+| 3 | `strategy_rsi_ema` | 133 | 41.35% | 1.70 | 3.36 | 446.97 | 614.92 |
+| 4 | `strategy_dual_structure_trend` | 145 | 47.59% | 1.44 | 2.95 | 428.09 | 254.06 |
+| 5 | `strategy_volume_breakout` | 107 | 46.73% | 1.37 | 3.99 | 427.26 | 492.80 |
+| 6 | `strategy_pullback_plus_breakout` | 140 | 46.43% | 1.46 | 2.64 | 368.90 | 260.69 |
+| 7 | `strategy_pullback_continuation` | 70 | 57.14% | 1.23 | 4.77 | 333.83 | 105.61 |
+| 8 | `strategy_price_action` | 128 | 37.50% | 1.95 | 2.53 | 324.21 | 331.48 |
+| 9 | `strategy_shadow_reversal` | 110 | 31.82% | 2.54 | 2.63 | 288.99 | 314.55 |
+| 10 | `strategy_pullback_trend` | 100 | 40.00% | 1.87 | 2.59 | 259.44 | 274.36 |
+| 11 | `strategy_fib_martingale` | 101 | 49.50% | 1.17 | 1.99 | 200.89 | 313.10 |
+| 12 | `strategy_fib_martingale_1h_050` | 437 | 51.49% | 0.95 | 0.10 | 43.09 | 481.33 |
+| 13 | `strategy_vegas_martingale` | 32 | 34.38% | 1.90 | -0.03 | -0.84 | 145.65 |
+| 14 | `strategy_fast` | 156 | 27.56% | 2.21 | -0.83 | -128.71 | 193.11 |
+| 15 | `strategy_fib_martingale_050` | 115 | 52.17% | 0.84 | -1.29 | -148.81 | 498.74 |
+| 16 | `strategy_fib_martingale_1h` | 398 | 43.47% | 1.14 | -0.93 | -370.32 | 494.51 |
 
 ### 36 months (2023-11 to 2026-10)
 
-| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+| # | Strategy | Trades | Win rate | Profit/loss ratio | Average profit | Total profit | Max drawdown |
 |--:|---|--:|--:|--:|--:|--:|--:|
-| 1 | `strategy_horizon_long` | 190 | 33.7% | 1.21 | **+1426.04** | 1284.60 | 1.11 |
-| 2 | `strategy_squeeze_dual_structure` | 245 | 49.4% | 1.35 | +770.79 | 143.62 | 5.37 |
-| 3 | `strategy_dual_structure_trend` | 239 | 47.7% | 1.31 | +653.87 | 222.27 | 2.94 |
-| 4 | `strategy_volume_breakout` | 168 | 48.2% | 1.2 | +622.18 | 469.23 | 1.33 |
-| 5 | `strategy_pullback_plus_breakout` | 233 | 45.5% | 1.27 | +559.84 | 226.36 | 2.47 |
-| 6 | `strategy_pullback_trend` (baseline) | 147 | 40.8% | 1.23 | +342.25 | 242.99 | 1.41 |
-| 7 | `strategy_pullback_continuation` | 119 | 52.9% | 1.31 | +278.20 | 150.89 | 1.84 |
-| 8 | `strategy_fib_martingale` | 143 | 51% | 1.15 | +272.65 | 298.88 | 0.91 |
-| 9 | `strategy_price_action` | 195 | 37.4% | 1.1 | +264.46 | 311.34 | 0.85 |
-| 10 | `strategy_rsi_ema` | 106 | 41.5% | 1.1 | +184.43 | 348.64 | 0.53 |
-| 11 | `strategy_vegas_martingale` | 37 | 37.8% | 1.51 | +127.36 | 82.87 | 1.54 |
-| 12 | `strategy_shadow_reversal` | 150 | 30% | 1.05 | +104.73 | 291.36 | 0.36 |
-| 13 | `strategy_fib_martingale_050` | 166 | 53.6% | 0.92 | -205.49 | 488.56 | -0.42 |
-| 14 | `strategy_fast` | 192 | 26% | 0.78 | -215.16 | 239.02 | -0.90 |
-| 15 | `strategy_fib_martingale_1h_050` | 637 | 51.6% | 0.93 | -347.93 | 610.32 | -0.57 |
-| 16 | `strategy_fib_martingale_1h` | 623 | 45.3% | 0.87 | -552.29 | 702.10 | -0.79 |
+| 1 | `strategy_horizon_long` | 190 | 33.68% | 2.38 | 7.51 | **1426.04** | 1544.23 |
+| 2 | `strategy_squeeze_dual_structure` | 245 | 49.39% | 1.39 | 3.15 | 770.79 | 234.58 |
+| 3 | `strategy_dual_structure_trend` | 239 | 47.70% | 1.43 | 2.74 | 653.87 | 254.06 |
+| 4 | `strategy_volume_breakout` | 168 | 48.21% | 1.29 | 3.70 | 622.18 | 492.79 |
+| 5 | `strategy_pullback_plus_breakout` | 233 | 45.49% | 1.52 | 2.40 | 559.84 | 260.69 |
+| 6 | `strategy_pullback_trend` | 147 | 40.82% | 1.78 | 2.33 | 342.25 | 274.36 |
+| 7 | `strategy_pullback_continuation` | 119 | 52.94% | 1.16 | 2.34 | 278.20 | 205.67 |
+| 8 | `strategy_fib_martingale` | 143 | 51.05% | 1.10 | 1.91 | 272.65 | 313.10 |
+| 9 | `strategy_price_action` | 195 | 37.44% | 1.84 | 1.36 | 264.46 | 331.48 |
+| 10 | `strategy_rsi_ema` | 106 | 41.51% | 1.55 | 1.74 | 184.43 | 400.79 |
+| 11 | `strategy_vegas_martingale` | 37 | 37.84% | 2.47 | 3.44 | 127.36 | 94.95 |
+| 12 | `strategy_shadow_reversal` | 150 | 30.00% | 2.45 | 0.70 | 104.73 | 314.55 |
+| 13 | `strategy_fib_martingale_050` | 166 | 53.61% | 0.79 | -1.24 | -205.49 | 524.93 |
+| 14 | `strategy_fast` | 192 | 26.04% | 2.22 | -1.12 | -215.16 | 243.22 |
+| 15 | `strategy_fib_martingale_1h_050` | 637 | 51.65% | 0.87 | -0.55 | -347.93 | 629.73 |
+| 16 | `strategy_fib_martingale_1h` | 623 | 45.26% | 1.05 | -0.89 | -552.29 | 704.13 |
 
 ### 48 months (2022-11 to 2026-10)
 
-| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+| # | Strategy | Trades | Win rate | Profit/loss ratio | Average profit | Total profit | Max drawdown |
 |--:|---|--:|--:|--:|--:|--:|--:|
-| 1 | `strategy_horizon_long` | 263 | 31.9% | 1.22 | **+1724.22** | 1284.60 | 1.34 |
-| 2 | `strategy_squeeze_dual_structure` | 327 | 47.7% | 1.37 | +892.28 | 143.62 | 6.21 |
-| 3 | `strategy_dual_structure_trend` | 318 | 46.2% | 1.32 | +754.43 | 222.27 | 3.39 |
-| 4 | `strategy_pullback_plus_breakout` | 312 | 44.2% | 1.28 | +656.30 | 226.36 | 2.90 |
-| 5 | `strategy_volume_breakout` | 199 | 48.2% | 1.18 | +609.75 | 469.23 | 1.30 |
-| 6 | `strategy_pullback_trend` (baseline) | 210 | 40% | 1.25 | +419.08 | 242.99 | 1.72 |
-| 7 | `strategy_price_action` | 242 | 38.8% | 1.13 | +375.82 | 311.34 | 1.21 |
-| 8 | `strategy_pullback_continuation` | 144 | 53.5% | 1.33 | +322.38 | 150.89 | 2.14 |
-| 9 | `strategy_fib_martingale` | 193 | 48.2% | 1.11 | +240.38 | 298.88 | 0.80 |
-| 10 | `strategy_vegas_martingale` | 51 | 41.2% | 1.56 | +154.67 | 82.87 | 1.87 |
-| 11 | `strategy_rsi_ema` | 158 | 39.2% | 1.05 | +107.92 | 348.64 | 0.31 |
-| 12 | `strategy_shadow_reversal` | 151 | 29.8% | 1.05 | +94.93 | 291.36 | 0.33 |
-| 13 | `strategy_fast` | 194 | 25.8% | 0.76 | -248.63 | 272.49 | -0.91 |
-| 14 | `strategy_fib_martingale_050` | 209 | 51.2% | 0.9 | -286.13 | 553.67 | -0.52 |
-| 15 | `strategy_fib_martingale_1h_050` | 832 | 51.7% | 0.93 | -381.15 | 610.32 | -0.62 |
-| 16 | `strategy_fib_martingale_1h` | 805 | 45.1% | 0.87 | -617.50 | 702.10 | -0.88 |
+| 1 | `strategy_horizon_long` | 263 | 31.94% | 2.61 | 6.56 | **1724.22** | 1544.23 |
+| 2 | `strategy_squeeze_dual_structure` | 327 | 47.71% | 1.50 | 2.73 | 892.28 | 234.58 |
+| 3 | `strategy_dual_structure_trend` | 318 | 46.23% | 1.54 | 2.37 | 754.43 | 254.06 |
+| 4 | `strategy_pullback_plus_breakout` | 312 | 44.23% | 1.62 | 2.10 | 656.30 | 260.69 |
+| 5 | `strategy_volume_breakout` | 199 | 48.24% | 1.26 | 3.06 | 609.75 | 492.79 |
+| 6 | `strategy_pullback_trend` | 210 | 40.00% | 1.87 | 2.00 | 419.08 | 274.36 |
+| 7 | `strategy_price_action` | 242 | 38.84% | 1.78 | 1.55 | 375.82 | 331.48 |
+| 8 | `strategy_pullback_continuation` | 144 | 53.47% | 1.16 | 2.24 | 322.38 | 205.67 |
+| 9 | `strategy_fib_martingale` | 193 | 48.19% | 1.20 | 1.25 | 240.38 | 313.10 |
+| 10 | `strategy_vegas_martingale` | 51 | 41.18% | 2.23 | 3.03 | 154.67 | 94.95 |
+| 11 | `strategy_rsi_ema` | 158 | 39.24% | 1.63 | 0.68 | 107.92 | 400.79 |
+| 12 | `strategy_shadow_reversal` | 151 | 29.80% | 2.46 | 0.63 | 94.93 | 314.55 |
+| 13 | `strategy_fast` | 194 | 25.77% | 2.18 | -1.28 | -248.63 | 280.73 |
+| 14 | `strategy_fib_martingale_050` | 209 | 51.20% | 0.86 | -1.37 | -286.13 | 597.83 |
+| 15 | `strategy_fib_martingale_1h_050` | 832 | 51.68% | 0.87 | -0.46 | -381.15 | 629.73 |
+| 16 | `strategy_fib_martingale_1h` | 805 | 45.09% | 1.06 | -0.77 | -617.50 | 704.13 |
 
 ### 60 months (2021-11 to 2026-10)
 
-| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+| # | Strategy | Trades | Win rate | Profit/loss ratio | Average profit | Total profit | Max drawdown |
 |--:|---|--:|--:|--:|--:|--:|--:|
-| 1 | `strategy_horizon_long` | 330 | 31.2% | 1.1 | **+982.43** | 1284.60 | 0.76 |
-| 2 | `strategy_volume_breakout` | 239 | 49% | 1.23 | +898.28 | 469.23 | 1.91 |
-| 3 | `strategy_squeeze_dual_structure` | 406 | 47.3% | 1.28 | +810.78 | 199.98 | 4.05 |
-| 4 | `strategy_dual_structure_trend` | 397 | 45.1% | 1.24 | +660.77 | 222.27 | 2.97 |
-| 5 | `strategy_price_action` | 313 | 38.7% | 1.17 | +565.66 | 311.34 | 1.82 |
-| 6 | `strategy_pullback_plus_breakout` | 391 | 42.7% | 1.2 | +541.44 | 226.36 | 2.39 |
-| 7 | `strategy_rsi_ema` | 363 | 37.5% | 1.12 | +501.29 | 536.13 | 0.94 |
-| 8 | `strategy_fib_martingale` | 235 | 48.9% | 1.13 | +328.98 | 298.88 | 1.10 |
-| 9 | `strategy_pullback_trend` (baseline) | 261 | 37.5% | 1.15 | +300.54 | 242.99 | 1.24 |
-| 10 | `strategy_pullback_continuation` | 184 | 52.2% | 1.22 | +256.47 | 150.89 | 1.70 |
-| 11 | `strategy_vegas_martingale` | 69 | 34.8% | 1.28 | +101.73 | 84.83 | 1.20 |
-| 12 | `strategy_shadow_reversal` | 174 | 30.5% | 1.03 | +79.01 | 291.36 | 0.27 |
-| 13 | `strategy_fast` | 182 | 26.9% | 0.82 | -168.41 | 194.32 | -0.87 |
-| 14 | `strategy_fib_martingale_050` | 259 | 52.1% | 0.94 | -176.81 | 670.84 | -0.26 |
-| 15 | `strategy_fib_martingale_1h_050` | 1039 | 52.6% | 0.97 | -203.10 | 717.52 | -0.28 |
-| 16 | `strategy_fib_martingale_1h` | 1039 | 46.1% | 0.89 | -594.61 | 702.10 | -0.85 |
+| 1 | `strategy_horizon_long` | 330 | 31.21% | 2.43 | 2.98 | **982.43** | 1544.23 |
+| 2 | `strategy_volume_breakout` | 239 | 48.95% | 1.28 | 3.76 | 898.28 | 492.79 |
+| 3 | `strategy_squeeze_dual_structure` | 406 | 47.29% | 1.43 | 2.00 | 810.78 | 234.58 |
+| 4 | `strategy_dual_structure_trend` | 397 | 45.09% | 1.51 | 1.66 | 660.77 | 254.06 |
+| 5 | `strategy_price_action` | 313 | 38.66% | 1.85 | 1.81 | 565.66 | 331.48 |
+| 6 | `strategy_pullback_plus_breakout` | 391 | 42.71% | 1.60 | 1.38 | 541.44 | 260.69 |
+| 7 | `strategy_rsi_ema` | 363 | 37.47% | 1.86 | 1.38 | 501.29 | 598.69 |
+| 8 | `strategy_fib_martingale` | 235 | 48.94% | 1.18 | 1.40 | 328.98 | 313.10 |
+| 9 | `strategy_pullback_trend` | 261 | 37.55% | 1.91 | 1.15 | 300.54 | 274.36 |
+| 10 | `strategy_pullback_continuation` | 184 | 52.17% | 1.12 | 1.39 | 256.47 | 205.67 |
+| 11 | `strategy_vegas_martingale` | 69 | 34.78% | 2.39 | 1.47 | 101.73 | 94.95 |
+| 12 | `strategy_shadow_reversal` | 174 | 30.46% | 2.36 | 0.45 | 79.01 | 320.41 |
+| 13 | `strategy_fast` | 182 | 26.92% | 2.22 | -0.93 | -168.41 | 724.92 |
+| 14 | `strategy_fib_martingale_050` | 259 | 52.12% | 0.87 | -0.68 | -176.81 | 705.03 |
+| 15 | `strategy_fib_martingale_1h_050` | 1039 | 52.55% | 0.87 | -0.20 | -203.10 | 735.23 |
+| 16 | `strategy_fib_martingale_1h` | 1039 | 46.10% | 1.05 | -0.57 | -594.61 | 704.13 |
 
 ### 72 months (2020-11 to 2026-10)
 
-| # | Strategy | Trades | Win | PF | Net profit | Max DD | Profit/DD |
+| # | Strategy | Trades | Win rate | Profit/loss ratio | Average profit | Total profit | Max drawdown |
 |--:|---|--:|--:|--:|--:|--:|--:|
-| 1 | `strategy_horizon_long` | 398 | 31.2% | 1.26 | **+3017.09** | 1284.60 | 2.35 |
-| 2 | `strategy_squeeze_dual_structure` | 488 | 48.2% | 1.34 | +1223.25 | 199.98 | 6.12 |
-| 3 | `strategy_dual_structure_trend` | 474 | 46.2% | 1.29 | +1029.30 | 222.27 | 4.63 |
-| 4 | `strategy_volume_breakout` | 294 | 49% | 1.19 | +959.34 | 469.23 | 2.04 |
-| 5 | `strategy_pullback_plus_breakout` | 467 | 44.1% | 1.27 | +931.40 | 226.36 | 4.11 |
-| 6 | `strategy_rsi_ema` | 420 | 38.3% | 1.18 | +903.11 | 514.77 | 1.75 |
-| 7 | `strategy_price_action` | 379 | 38.8% | 1.16 | +680.64 | 311.34 | 2.19 |
-| 8 | `strategy_pullback_continuation` | 230 | 53.9% | 1.35 | +546.27 | 205.99 | 2.65 |
-| 9 | `strategy_fib_martingale` | 279 | 48.4% | 1.15 | +440.55 | 298.88 | 1.47 |
-| 10 | `strategy_pullback_trend` (baseline) | 305 | 37% | 1.12 | +307.47 | 242.99 | 1.27 |
-| 11 | `strategy_vegas_martingale` | 76 | 34.2% | 1.29 | +127.03 | 104.85 | 1.21 |
-| 12 | `strategy_fib_martingale_050` | 303 | 52.5% | 0.95 | -183.62 | 670.84 | -0.27 |
-| 13 | `strategy_shadow_reversal` | 228 | 28.9% | 0.9 | -311.41 | 637.37 | -0.49 |
-| 14 | `strategy_fib_martingale_1h_050` | 1244 | 52.6% | 0.94 | -425.04 | 730.11 | -0.58 |
-| 15 | `strategy_fib_martingale_1h` | 1203 | 46.6% | 0.93 | -453.10 | 781.00 | -0.58 |
-| 16 | `strategy_fast` | 159 | 27% | 0.57 | -506.33 | 544.00 | -0.93 |
+| 1 | `strategy_horizon_long` | 398 | 31.16% | 2.77 | 7.58 | **3017.09** | 1544.23 |
+| 2 | `strategy_squeeze_dual_structure` | 488 | 48.16% | 1.44 | 2.51 | 1223.25 | 234.58 |
+| 3 | `strategy_dual_structure_trend` | 474 | 46.20% | 1.51 | 2.17 | 1029.30 | 254.06 |
+| 4 | `strategy_volume_breakout` | 294 | 48.98% | 1.24 | 3.26 | 959.34 | 492.79 |
+| 5 | `strategy_pullback_plus_breakout` | 467 | 44.11% | 1.61 | 1.99 | 931.40 | 260.69 |
+| 6 | `strategy_rsi_ema` | 420 | 38.33% | 1.90 | 2.15 | 903.11 | 577.33 |
+| 7 | `strategy_price_action` | 379 | 38.79% | 1.84 | 1.80 | 680.64 | 331.48 |
+| 8 | `strategy_pullback_continuation` | 230 | 53.91% | 1.15 | 2.38 | 546.27 | 257.12 |
+| 9 | `strategy_fib_martingale` | 279 | 48.39% | 1.23 | 1.58 | 440.55 | 313.10 |
+| 10 | `strategy_pullback_trend` | 305 | 37.05% | 1.91 | 1.01 | 307.47 | 274.36 |
+| 11 | `strategy_vegas_martingale` | 76 | 34.21% | 2.49 | 1.67 | 127.03 | 116.34 |
+| 12 | `strategy_fib_martingale_050` | 303 | 52.48% | 0.86 | -0.61 | -183.62 | 705.03 |
+| 13 | `strategy_shadow_reversal` | 228 | 28.95% | 2.22 | -1.37 | -311.41 | 654.36 |
+| 14 | `strategy_fib_martingale_1h_050` | 1244 | 52.57% | 0.85 | -0.34 | -425.04 | 776.82 |
+| 15 | `strategy_fib_martingale_1h` | 1203 | 46.63% | 1.07 | -0.38 | -453.10 | 784.14 |
+| 16 | `strategy_fast` | 159 | 27.04% | 1.55 | -3.18 | -506.33 | 766.27 |
 
 
 
 ### Observations
 
-1. **Short windows (3/6 months) carry almost no information**: at 3 months only 4 of 16 strategies are positive, at 6 months only 3. Yet `horizon_long` tops both (+405 / +309) — its profit is highly concentrated in the recent stretch, which is not the same as being reliable.
-2. **`squeeze_dual_structure` is the steadiest over time**: positive in all six windows from 12 months up, profit/DD 1.81 / 3.62 / 5.37 / 6.21 / 4.05 / 6.12, with drawdown pinned between 143 and 200 — the only strategy whose risk does not grow as the window lengthens.
-3. **`horizon_long` earns the most but is wildly unstable**: +3017.09 over 72 months (first place), yet only +982.43 over 60 months — less than the +1724.22 it makes over 48. The extra twelve months were a net loss, so it lives off a few trending stretches. Its 1284 drawdown is the largest in the table.
-4. **`pullback_continuation` owns the short windows**: +264.37 at 12 months with a profit/DD of 4.89 (best in the table), dropping to 1.70 / 2.65 at 60/72 months — its edge is concentrated in the last two years.
-5. **`fib_martingale` barely works even on 4h**: the 4h version makes +440.55 over 72 months; the 1h variants lose in every long window (PF 0.89–0.97) and the `_050` variant turns negative after 24 months. The more often they add, the more they lose.
-6. **`fast` and `shadow_reversal` fall apart on long windows**: `fast` slides from −30 to −506 (PF 0.57), and `shadow_reversal` goes negative (−311.41) at 72 months. Their 12-month showing was regime luck.
+1. **`dual_structure_trend` wins at 12 months (+290.98), while `horizon_long` wins at 24/36/48/60/72** (+694.60 / +1426.04 / +1724.22 / +982.43 / +3017.09). Its 1544.23 drawdown is the largest in the table though — the 72-month profit is only about twice the drawdown.
+2. **`squeeze_dual_structure` has the flattest risk profile**: its drawdown stays at 234.58 for every window from 24 months up, while profit keeps growing to +1223.25 over 72 months — longer windows raise the return without raising the risk.
+3. **`horizon_long` makes only +982.43 over 60 months, less than the +1724.22 it makes over 48**: those extra twelve months were a net loss, so it lives off a few trending stretches rather than steady income.
+4. **`pullback_continuation` trades the least and draws down the least**: 34 trades and a 79.31 drawdown at 12 months (+264.37); even at 72 months it is only 230 trades with a 257.12 drawdown.
+5. **Short windows carry almost no information**: only 4 strategies are positive at 3 months and 3 at 6 months. `horizon_long` tops both, which is exactly why its profit is clearly concentrated in the recent stretch.
+6. **`fib_martingale` barely works even on 4h** (+440.55 over 72 months); the 1h variants lose in all eight windows and the `_050` variant turns negative after 24 months.
+7. **`fast` and `shadow_reversal` fall apart on long windows**: `fast` slides from −30.56 to −506.33, and `shadow_reversal` ends at −311.41 over 72 months.

@@ -469,83 +469,86 @@ impl Strategy for FibMartingale {
 }
 
 /// 逐笔累计的权益回撤（按平仓时间排序）。
-fn max_drawdown(history: &[HistoryPosition]) -> Decimal {
-    let mut position_list = history.iter().collect::<Vec<_>>();
 
-    position_list.sort_by_key(|v| v.close_time);
 
-    let mut equity = Decimal::ZERO;
-    let mut peak = Decimal::ZERO;
-    let mut drawdown = Decimal::ZERO;
+const INITIAL_CASH: Decimal = dec!(1000000);
 
-    for v in position_list {
-        equity += v.total_profit;
 
-        if equity > peak {
-            peak = equity;
-        }
-
-        if peak - equity > drawdown {
-            drawdown = peak - equity;
-        }
-    }
-
-    drawdown
-}
-
-fn print_report(month_count: u32, result: &BacktestResult) {
+fn print_report(
+    month_count: u32,
+    symbol: &str,
+    level: Level,
+    result: &BacktestResult,
+    drawdown: Decimal,
+) {
     let summary = result.summarize();
-    let drawdown = max_drawdown(&result.history_position);
-    let profit_factor = if summary.gross_loss_abs.is_zero() {
-        Decimal::ZERO
-    } else {
-        summary.gross_profit / summary.gross_loss_abs
-    };
-    let long_count = result
-        .history_position
-        .iter()
-        .filter(|v| v.side == Side::Buy)
-        .count();
-    let max_quantity = result
-        .history_position
-        .iter()
-        .map(|v| v.max_quantity)
-        .fold(Decimal::ZERO, Decimal::max);
 
-    println!("== {} 个月 · {} · {} ==", month_count, SYMBOL, LEVEL);
+    println!("== {} 个月 · {} · {} ==", month_count, symbol, level);
     println!("summary: {:#?}", summary);
     println!(
-        "trades={}  win_rate={}%  profit_loss_ratio={}  profit_factor_gross={}",
+        "total_trades={}  win_rate={}%  profit_loss_ratio={}  avg_profit={}  total_profit={}  max_drawdown={}",
         summary.total_trades,
         summary.win_rate.round_dp(2),
         summary.profit_loss_ratio.round_dp(2),
-        profit_factor.round_dp(2),
-    );
-    println!(
-        "total_profit={}  total_fee={}  max_drawdown={}  profit/mdd={}  max_ladder_qty={}  long/short={}/{}",
+        summary.avg_profit.round_dp(2),
         summary.total_profit.round_dp(2),
-        summary.total_fee.round_dp(2),
         drawdown.round_dp(2),
-        if drawdown.is_zero() {
-            Decimal::ZERO
-        } else {
-            (summary.total_profit / drawdown).round_dp(2)
-        },
-        max_quantity,
-        long_count,
-        summary.total_trades - long_count,
     );
     println!();
 }
 
+// backtest() 内部不给挂 hook，所以这里手工搭一遍同样的流程。
 #[tokio::main]
 async fn main() {
-    // 主口径与 strategy_pullback_trend.rs 对齐：12 个月、4h。
-    for month_count in [3u32, 6, 12, 24, 36, 48, 60, 72] {
-        let result = backtest(SYMBOL, month_count, FibMartingale::new(), LEVEL)
-            .await
-            .unwrap();
+    let mut last = None;
 
-        print_report(month_count, &result);
+    // 同一份代码跑 8 个窗口（参数未按窗口调整），用于观察稳健性。
+    for month_count in [3u32, 6, 12, 24, 36, 48, 60, 72] {
+        let data_source = DataSource::from_file_metadata(
+            get_or_download(format!("{}/1m", SYMBOL), month_count)
+                .await
+                .unwrap(),
+            Metadata {
+                symbol: SYMBOL.to_string(),
+                level: Level::Minute1,
+                min_size: "0.01".parse().unwrap(),
+                min_notional: "0".parse().unwrap(),
+                tick_size: "0.1".parse().unwrap(),
+                maker_fee: "0.0002".parse().unwrap(),
+                taker_fee: "0.0005".parse().unwrap(),
+                maintenance: "0.004".parse().unwrap(),
+            },
+        )
+        .unwrap();
+
+        let exchange = LocalExchange::new(data_source.clone())
+            .unwrap()
+            .cash(INITIAL_CASH);
+
+        let drawdown = DrawdownHook::new(INITIAL_CASH);
+
+        let mut engine = Engine::new(exchange.clone(), 
+FibMartingale::new()
+);
+        engine.hook(drawdown.clone());
+        engine.run(SYMBOL, LEVEL).await.unwrap();
+
+        let history_position = exchange.get_history_position_list(SYMBOL).await.unwrap();
+        let history_order = exchange.get_history_order_list(SYMBOL).await.unwrap();
+
+        let result = BacktestResult {
+            data_source,
+            history_position,
+            history_order,
+        };
+
+        print_report(month_count, SYMBOL, LEVEL, &result, drawdown.get());
+
+        last = Some(result);
     }
+    // 数据重采样到所有级别后可视化，只对最后一个窗口开一次
+    if let Some(result) = last {
+        result.resample_all_open_in_server().await.unwrap();
+    }
+
 }
