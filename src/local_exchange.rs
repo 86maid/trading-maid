@@ -446,7 +446,7 @@ impl LocalExchangeInner {
         }
 
         while let Some(id) = liquidation_list.pop_front() {
-            _ = self.update_order(&id);
+            self.update_order(&id);
         }
 
         let position_update = self
@@ -482,8 +482,19 @@ impl LocalExchangeInner {
     }
 
     fn handle_trigger_order(&mut self, order_id: &str) -> Option<String> {
+        let order = self.pending_order_list.get(order_id)?;
+        let kline = *self.kline(&order.symbol);
+
+        let triggered = match order.trigger_direction {
+            Side::Buy => kline.high >= order.trigger_price,
+            Side::Sell => kline.low <= order.trigger_price,
+        };
+
+        if !triggered {
+            return None;
+        }
+
         let mut order_ref = self.pending_order_list.shift_remove(order_id)?;
-        let kline = *self.kline(&order_ref.symbol);
         let market_base_price = match order_ref.trigger_direction {
             Side::Buy => kline.open.max(order_ref.trigger_price),
             Side::Sell => kline.open.min(order_ref.trigger_price),
@@ -608,33 +619,27 @@ impl LocalExchangeInner {
     }
 
     fn update_order(&mut self, order_id: &str) -> Option<String> {
-        let order = self.pending_order_list.get(order_id)?;
+        let (kind, status) = {
+            let order = self.pending_order_list.get(order_id)?;
 
-        if order.status != Status::Submitted {
+            (order.kind, order.status)
+        };
+
+        if status != Status::Submitted {
             return None;
         }
 
-        let symbol = order.symbol.clone();
-        let kline = self.kline(&symbol);
-
-        if order.kind == Kind::Trigger {
-            let triggered = match order.trigger_direction {
-                Side::Buy => kline.high >= order.trigger_price,
-                Side::Sell => kline.low <= order.trigger_price,
-            };
-
-            if !triggered {
-                return None;
-            }
-
-            return self.handle_trigger_order(order_id);
-        } else if order.kind == Kind::Limit || order.kind == Kind::Liquidation {
+        if kind == Kind::Trigger {
+            self.handle_trigger_order(order_id)
+        } else if kind == Kind::Limit || kind == Kind::Liquidation {
             self.handle_limit_or_liquidation_order(order_id);
+
+            None
         } else {
             self.handle_market_order(order_id);
-        }
 
-        None
+            None
+        }
     }
 
     fn handle_reduce_only_check(&mut self, order_ref: &mut OrderEx) -> bool {
