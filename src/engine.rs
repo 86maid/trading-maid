@@ -350,7 +350,8 @@ where
                         // touches, and how many strategy-level bars they amount to.
                         if let Some((gap_start, gap_end)) = gap {
                             let (first_start, _) = get_time_range(gap_start, strategy_level)?;
-                            let (last_start, last_end) = get_time_range(gap_end - 1, strategy_level)?;
+                            let (last_start, last_end) =
+                                get_time_range(gap_end - 1, strategy_level)?;
 
                             // Walk bucket by bucket instead of dividing by the interval: a
                             // calendar month has no fixed millisecond length.
@@ -628,7 +629,8 @@ where
                         // touches, and how many strategy-level bars they amount to.
                         if let Some((gap_start, gap_end)) = gap {
                             let (first_start, _) = get_time_range(gap_start, strategy_level)?;
-                            let (last_start, last_end) = get_time_range(gap_end - 1, strategy_level)?;
+                            let (last_start, last_end) =
+                                get_time_range(gap_end - 1, strategy_level)?;
 
                             // Walk bucket by bucket instead of dividing by the interval: a
                             // calendar month has no fixed millisecond length.

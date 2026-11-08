@@ -185,8 +185,6 @@ impl Strategy for TsmomLong {
     }
 }
 
-
-
 fn print_report(
     month_count: u32,
     symbol: &str,

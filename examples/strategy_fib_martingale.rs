@@ -468,11 +468,7 @@ impl Strategy for FibMartingale {
     }
 }
 
-/// 逐笔累计的权益回撤（按平仓时间排序）。
-
-
 const INITIAL_CASH: Decimal = dec!(1000000);
-
 
 fn print_report(
     month_count: u32,
@@ -527,9 +523,7 @@ async fn main() {
 
         let drawdown = DrawdownHook::new(INITIAL_CASH);
 
-        let mut engine = Engine::new(exchange.clone(), 
-FibMartingale::new()
-);
+        let mut engine = Engine::new(exchange.clone(), FibMartingale::new());
         engine.hook(drawdown.clone());
         engine.run(SYMBOL, LEVEL).await.unwrap();
 
@@ -550,5 +544,4 @@ FibMartingale::new()
     if let Some(result) = last {
         result.resample_all_open_in_server().await.unwrap();
     }
-
 }

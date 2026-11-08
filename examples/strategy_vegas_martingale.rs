@@ -109,13 +109,9 @@ impl Strategy for VegasMartingale {
     }
 }
 
-
-
-
 const INITIAL_CASH: Decimal = dec!(1000000);
 const SYMBOL: &str = "BTCUSDT";
 const LEVEL: Level = Level::Hour4;
-
 
 fn print_report(
     month_count: u32,
@@ -170,9 +166,7 @@ async fn main() {
 
         let drawdown = DrawdownHook::new(INITIAL_CASH);
 
-        let mut engine = Engine::new(exchange.clone(), 
-VegasMartingale::new()
-);
+        let mut engine = Engine::new(exchange.clone(), VegasMartingale::new());
         engine.hook(drawdown.clone());
         engine.run(SYMBOL, LEVEL).await.unwrap();
 
@@ -193,5 +187,4 @@ VegasMartingale::new()
     if let Some(result) = last {
         result.resample_all_open_in_server().await.unwrap();
     }
-
 }
