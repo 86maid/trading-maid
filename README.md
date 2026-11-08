@@ -785,9 +785,10 @@ struct MyStrategy {
 
 impl MyStrategy {
     pub fn new() -> Self {
-        // 80871 / 78705 是从某个日期那根 5m K 线算出来的 EMA 值，写死只是为了让示例从第一根
-        // bar 就能算出指标。换数据区间、换起始日期，这两个数就失效了；实盘或换区间时应该改用
-        // EMACache::from_series(cx.close, 144) 从历史重建。
+        // 80871 / 78705 are EMA values computed from a 5m candle back on some date. They are
+        // hard-coded only so the example can produce an indicator from its very first bar;
+        // change the data range or the start date and they go stale. Rebuild from history
+        // with EMACache::from_series(cx.close, 144) instead.
         MyStrategy {
             ema_cache144: EMACache::with_ema(144, 80871),
             ema_cache169: EMACache::with_ema(169, 78705),
@@ -798,7 +799,7 @@ impl MyStrategy {
 
 #[async_trait(?Send)]
 impl Strategy for MyStrategy {
-    // 如果连续 50 根 K 线收盘价都在 EMA 之下，且当前 K 线收盘价突破 EMA，则开空单
+    // Go short when the last 50 bars all closed below the EMA and the current bar closes above it
     async fn next(&mut self, cx: &Context) -> anyhow::Result<()> {
         let Some(ema144) = self.ema_cache144.update(cx.close) else {
             return Ok(());
@@ -907,7 +908,7 @@ Go short on a long upper wick and attach take-profit/stop — the least code tha
 ```rust
 use trading_maid::prelude::*;
 
-// 出现长上影线时开空单
+// Go short on a long upper wick
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     let body_size = (cx.open - cx.close).abs();
     let upper_shadow_size = (cx.high - cx.open).abs();
@@ -957,7 +958,7 @@ async fn main() {
 
     let mut engine = Engine::new(exchange.clone(), my_strategy);
 
-    // 使用 1 分钟级别数据进行回测，但在每个 1 小时级别的 K 线生成时都会调用策略函数
+    // The backtest runs on 1m data, but the strategy is called once per completed 1h candle
     if let Err(v) = engine.run("BTCUSDT", Level::Hour1).await {
         println!("error: {:#?}", v);
     }
@@ -968,7 +969,7 @@ async fn main() {
 
     println!("history summary: {:#?}", summary);
 
-    // 从 1 分钟级别数据重采样得到 1 小时级别数据
+    // Resample the 1m data into 1h candles
     let data_source_1h = data_source_1m.resample(Level::Hour1).unwrap();
 
     open_in_server(
@@ -988,7 +989,7 @@ Download the funding rate as a custom series and go long when five consecutive p
 ```rust
 use trading_maid::prelude::*;
 
-// 资金费率为负的时候做多
+// Go long while the funding rate is negative
 async fn my_strategy(cx: &Context<'_>) -> anyhow::Result<()> {
     let funding_rate = &cx["funding_rate"];
 
